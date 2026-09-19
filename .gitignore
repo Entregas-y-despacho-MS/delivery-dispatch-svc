@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build output (nest-cli.json: outDir "./dist", deleteOutDir: true)
+dist/
+
+# TypeScript incremental build cache (tsconfig.json: "incremental": true)
+*.tsbuildinfo
+
+# Environment secrets (.env.example is the tracked template) — any variant, not just the literal .env
+.env*
+!.env.example
+
+# Local file storage (STORAGE_PROVIDER=local, plugins/storage/local) — user-uploaded files, never source
+uploads/
+
+# Test coverage (vitest --coverage / test:cov default output dir)
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Claude Code — se queda en el proyecto (no se mueve), pero no se sube al repo del equipo
+.claude/
