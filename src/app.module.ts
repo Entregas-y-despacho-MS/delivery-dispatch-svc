@@ -5,6 +5,7 @@ import { DatabaseModule } from './database/database.module.js';
 import { SettingsModule } from './modules/settings/settings.module.js';
 import { UsersModule } from './modules/auth/users/users.module.js';
 import { RolesModule } from './modules/auth/roles/roles.module.js';
+import { DeliveryZonesModule } from './modules/catalog/delivery-zones/delivery-zones.module.js';
 import { AuthModule } from './app/auth/auth.module.js';
 import { MailerModule } from './plugins/mailer/mailer.module.js';
 import { SocketModule } from './plugins/socket/socket.module.js';
@@ -21,6 +22,7 @@ import { OsrmModule } from './plugins/osrm/osrm.module.js';
         SettingsModule,
         UsersModule,
         RolesModule,
+        DeliveryZonesModule,
         AuthModule,
         MailerModule.register(),
         SocketModule,

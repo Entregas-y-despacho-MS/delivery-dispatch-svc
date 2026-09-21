@@ -6,6 +6,9 @@ export class DeliveryZone extends BaseEntitySoftDelete {
     @PrimaryGeneratedColumn({ name: 'delivery_zone_id' })
     id: number;
 
+    @Column({ name: 'code', type: 'varchar', length: 20 })
+    code: string;
+
     @Column({ name: 'name', type: 'varchar', length: 100 })
     name: string;
 
