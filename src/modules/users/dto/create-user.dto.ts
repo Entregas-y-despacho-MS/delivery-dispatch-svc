@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEmail, IsInt, IsNotEmpty, IsOptional, IsPositive, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsEmail, IsInt, IsNotEmpty, IsOptional, IsPositive, IsString, IsStrongPassword, MaxLength } from 'class-validator';
+import { STRONG_PASSWORD_OPTIONS, STRONG_PASSWORD_MESSAGE } from '../../../shared/validators/password.validator.js';
 
 export class CreateUserDto {
     @ApiProperty({ example: 'Ana Torrez', maxLength: 150 })
@@ -20,10 +21,10 @@ export class CreateUserDto {
     @MaxLength(150)
     email?: string;
 
-    @ApiProperty({ example: 'password123', minLength: 6, maxLength: 255 })
+    @ApiProperty({ example: 'Passw0rd!', minLength: 8, maxLength: 255 })
     @IsString()
     @IsNotEmpty({ message: 'Password is required.' })
-    @MinLength(6, { message: 'Password must be at least 6 characters.' })
+    @IsStrongPassword(STRONG_PASSWORD_OPTIONS, { message: STRONG_PASSWORD_MESSAGE })
     @MaxLength(255)
     password: string;
 

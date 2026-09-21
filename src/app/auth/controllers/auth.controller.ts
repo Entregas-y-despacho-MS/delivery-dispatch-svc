@@ -15,7 +15,7 @@ import { AuthResponseDto } from '../dto/auth-response.dto.js';
 import { Public, AdminOnly } from '../decorators/index.js';
 import { CurrentUser } from '../../../shared/decorators/current-user.decorator.js';
 import type { AuthUser } from '../strategies/jwt.strategy.js';
-import { ApiValidationError, ApiUnauthorized, ApiConflict } from '../../../shared/utils/swagger/index.js';
+import { ApiValidationError, ApiUnauthorized, ApiConflict, ApiBadRequest } from '../../../shared/utils/swagger/index.js';
 
 /**
  * Error dictionary for this module:
@@ -27,6 +27,8 @@ import { ApiValidationError, ApiUnauthorized, ApiConflict } from '../../../share
  *   INVALID_TOTP_CODE        401 — The 6-digit code does not match.
  *   INVALID_RESET_TOKEN      401 — Password reset token is invalid, expired, or already used.
  *   SESSION_EXPIRED          401 — Refresh attempted after too long without activity (RF-A24, does not apply to the driver mobile app).
+ *   PASSWORD_TOO_SHORT       400 — New password is shorter than settings.password_min_length.
+ *   PASSWORD_RECENTLY_USED   400 — New password matches the current one or one of the last 3 (RF-A25).
  *   USER_ALREADY_EXISTS      409 — A user with the given username or email already exists.
  *   INSUFFICIENT_PERMISSIONS 403 — Authenticated but role does not meet the endpoint requirement.
  *
@@ -65,6 +67,7 @@ export class AuthController {
     })
     @ApiCreatedResponse({ type: UserDto })
     @ApiValidationError()
+    @ApiBadRequest({ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' })
     @ApiConflict({ code: 'USER_ALREADY_EXISTS', message: 'A user with this username or email already exists.' })
     async register(@Body() dto: CreateUserDto): Promise<UserDto> {
         return await this.authService.register(dto);
@@ -110,6 +113,10 @@ export class AuthController {
     })
     @ApiNoContentResponse({ description: 'Password changed.' })
     @ApiValidationError()
+    @ApiBadRequest(
+        { code: 'PASSWORD_TOO_SHORT',     message: 'Password must be at least 8 characters.' },
+        { code: 'PASSWORD_RECENTLY_USED', message: 'You cannot reuse your current password or any of your last 3 passwords.' },
+    )
     @ApiUnauthorized(
         { code: 'INVALID_CREDENTIALS', message: 'Invalid credentials.' },
         { code: 'INVALID_TOKEN',       message: 'Invalid or expired token.' },
@@ -140,6 +147,10 @@ export class AuthController {
     })
     @ApiNoContentResponse({ description: 'Password reset.' })
     @ApiValidationError()
+    @ApiBadRequest(
+        { code: 'PASSWORD_TOO_SHORT',     message: 'Password must be at least 8 characters.' },
+        { code: 'PASSWORD_RECENTLY_USED', message: 'You cannot reuse your current password or any of your last 3 passwords.' },
+    )
     @ApiUnauthorized({ code: 'INVALID_RESET_TOKEN', message: 'Invalid or expired password reset token.' })
     async resetPassword(@Body() dto: ResetPasswordDto): Promise<void> {
         return await this.authService.resetPassword(dto);

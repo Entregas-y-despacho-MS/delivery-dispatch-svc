@@ -16,4 +16,11 @@ export class AuthResponseDto {
 
     @ApiProperty({ type: UserDto })
     user: UserDto;
+
+    @ApiProperty({
+        example:     false,
+        description: 'true if the client must redirect to a forced password-change screen before continuing — ' +
+                      'either an admin flagged the account, or the password is past password_expiration_days (RF-A25).',
+    })
+    mustChangePassword: boolean;
 }

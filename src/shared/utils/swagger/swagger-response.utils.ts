@@ -112,6 +112,15 @@ export const ApiValidationError = () =>
     applyDecorators(ApiBadRequestResponse({ description: 'Validation failed.', type: ValidationExceptionDto }));
 
 /**
+ * 400 — Request is structurally valid but rejected by a business rule (not ValidationPipe).
+ * Pass the specific code(s) this endpoint can return.
+ */
+export const ApiBadRequest = (...errors: ErrorExample[]) => {
+    const list = errors.length ? errors : [{ code: 'BAD_REQUEST', message: 'The request could not be processed.' }];
+    return applyDecorators(ApiBadRequestResponse({ description: 'Bad request.', ...buildErrorResponse(400, list) }));
+};
+
+/**
  * 422 — Data is structurally valid but cannot be processed in the current state.
  */
 export const ApiUnprocessableEntity = (...errors: ErrorExample[]) => {

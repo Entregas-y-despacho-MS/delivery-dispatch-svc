@@ -41,4 +41,12 @@ export class UserForAuthDto {
     @ApiHideProperty()
     @DtoField()
     passwordResetExpiresAt!: Date | null;
+
+    @ApiHideProperty()
+    @DtoField()
+    requiresPwdChange!: boolean;
+
+    @ApiHideProperty()
+    @DtoField()
+    passwordChangedAt!: Date;
 }

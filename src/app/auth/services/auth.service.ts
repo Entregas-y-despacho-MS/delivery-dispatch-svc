@@ -67,7 +67,7 @@ export class AuthService {
         const { accessToken, refreshToken } = await this.buildTokens(payload);
 
         const userDto = await this.usersService.findOneById(UserDto, user.id);
-        return { accessToken, refreshToken, user: userDto };
+        return { accessToken, refreshToken, user: userDto, mustChangePassword: this.computeMustChangePassword(user) };
     }
 
     // Admin-only (see AuthController) — creates an internal account. No tokens are returned:
@@ -120,7 +120,7 @@ export class AuthService {
         const { accessToken, refreshToken } = await this.buildTokens(newPayload);
 
         const userDto = await this.usersService.findOneById(UserDto, user.id);
-        return { accessToken, refreshToken, user: userDto };
+        return { accessToken, refreshToken, user: userDto, mustChangePassword: this.computeMustChangePassword(user) };
     }
 
     async logout(userId: number): Promise<void> {
@@ -168,6 +168,17 @@ export class AuthService {
 
         await this.usersService.updatePassword(user.id, dto.newPassword);
         await this.usersService.setRefreshToken(user.id, null);
+    }
+
+    // RF-A25, Escenario 2 — true if an admin flagged the account (requiresPwdChange) OR the
+    // password is older than settings.password_expiration_days. Doesn't block the login itself,
+    // just signals the client to redirect to a forced change screen.
+    private computeMustChangePassword(user: UserForAuthDto): boolean {
+        if (user.requiresPwdChange) return true;
+
+        const expirationDays = this.settings.getNumber('password_expiration_days', 90);
+        const ageMs = Date.now() - user.passwordChangedAt.getTime();
+        return ageMs > expirationDays * 24 * 60 * 60 * 1000;
     }
 
     private async registerFailedAttempt(user: UserForAuthDto): Promise<void> {

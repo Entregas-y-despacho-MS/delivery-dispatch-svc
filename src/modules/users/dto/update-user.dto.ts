@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsEmail, IsInt, IsOptional, IsPositive, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsBoolean, IsEmail, IsInt, IsOptional, IsPositive, IsString, IsStrongPassword, MaxLength } from 'class-validator';
+import { STRONG_PASSWORD_OPTIONS, STRONG_PASSWORD_MESSAGE } from '../../../shared/validators/password.validator.js';
 
 export class UpdateUserDto {
     @ApiPropertyOptional({ example: 'Ana Torrez', maxLength: 150 })
@@ -20,10 +21,10 @@ export class UpdateUserDto {
     @MaxLength(150)
     email?: string;
 
-    @ApiPropertyOptional({ example: 'newpassword123', minLength: 6 })
+    @ApiPropertyOptional({ example: 'NewPassw0rd!', minLength: 8 })
     @IsOptional()
     @IsString()
-    @MinLength(6, { message: 'Password must be at least 6 characters.' })
+    @IsStrongPassword(STRONG_PASSWORD_OPTIONS, { message: STRONG_PASSWORD_MESSAGE })
     @MaxLength(255)
     password?: string;
 

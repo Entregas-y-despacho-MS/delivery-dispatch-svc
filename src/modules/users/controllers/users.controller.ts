@@ -12,7 +12,7 @@ import { CreateUserDto } from '../dto/create-user.dto.js';
 import { UpdateUserDto } from '../dto/update-user.dto.js';
 import { FindAllUsersParamsDto } from '../dto/find-all-users-params.dto.js';
 import { PaginationResponseDto } from '../../../shared/dto/index.js';
-import { ApiNotFound, ApiUnauthorized, ApiValidationError, ApiConflict } from '../../../shared/utils/swagger/index.js';
+import { ApiNotFound, ApiUnauthorized, ApiValidationError, ApiConflict, ApiBadRequest } from '../../../shared/utils/swagger/index.js';
 import { FindAllUsersResponseDto } from '../dto/find-all-users-response.dto.js';
 import { AdminOnly } from '../../../app/auth/decorators/index.js';
 
@@ -20,6 +20,7 @@ import { AdminOnly } from '../../../app/auth/decorators/index.js';
  * Error dictionary for this module:
  *   USER_NOT_FOUND        404 — No user with the given ID exists or it was soft-deleted.
  *   USER_ALREADY_EXISTS   409 — A user with the given username or email already exists.
+ *   PASSWORD_TOO_SHORT    400 — Password is shorter than settings.password_min_length.
  *   INVALID_TOKEN         401 — JWT is missing, malformed, or expired.
  *   INSUFFICIENT_PERMISSIONS 403 — Authenticated but role does not meet the endpoint requirement.
  *
@@ -68,6 +69,7 @@ export class UsersController {
     })
     @ApiCreatedResponse({ type: UserDto })
     @ApiValidationError()
+    @ApiBadRequest({ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' })
     @ApiConflict({ code: 'USER_ALREADY_EXISTS', message: 'A user with this username or email already exists.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async create(@Body() dto: CreateUserDto): Promise<UserDto> {
@@ -82,6 +84,7 @@ export class UsersController {
     })
     @ApiOkResponse({ type: UserDto })
     @ApiValidationError()
+    @ApiBadRequest({ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' })
     @ApiNotFound({ code: 'USER_NOT_FOUND', message: 'User not found.' })
     @ApiConflict({ code: 'USER_ALREADY_EXISTS', message: 'A user with this username or email already exists.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
