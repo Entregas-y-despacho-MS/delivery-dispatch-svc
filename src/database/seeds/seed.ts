@@ -62,6 +62,7 @@ async function seedRootUser(): Promise<void> {
         fullName,
         email,
         passwordHash:      hashed,
+        passwordChangedAt: new Date(),
         roleId:            rootRole.id,
         requiresPwdChange: false,
     });

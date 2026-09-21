@@ -22,7 +22,7 @@ export class User extends BaseEntitySoftDelete {
     @Column({ name: 'password_hash', type: 'varchar', length: 255 })
     passwordHash: string;
 
-    @Column({ name: 'password_changed_at', type: 'timestamptz' })
+    @Column({ name: 'password_changed_at', type: 'timestamptz', default: () => 'NOW()' })
     passwordChangedAt: Date;
 
     @Column({ name: 'failed_attempts', type: 'smallint', default: 0 })
