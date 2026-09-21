@@ -1,11 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { UsersService } from '../../../modules/users/services/users.service.js';
-import { UserDto } from '../../../modules/users/dto/user.dto.js';
-import { UserForAuthDto } from '../../../modules/users/dto/user-for-auth.dto.js';
+import { UsersService } from '../../../modules/auth/users/services/users.service.js';
+import { UserDto } from '../../../modules/auth/users/dto/user.dto.js';
+import { UserForAuthDto } from '../../../modules/auth/users/dto/user-for-auth.dto.js';
 import { JwtConfig } from '../config/jwt.config.js';
-import { CreateUserDto } from '../../../modules/users/dto/create-user.dto.js';
+import { CreateUserDto } from '../../../modules/auth/users/dto/create-user.dto.js';
 import { LoginDto } from '../dto/login.dto.js';
 import { RefreshDto } from '../dto/refresh.dto.js';
 import { ChangePasswordDto } from '../dto/change-password.dto.js';

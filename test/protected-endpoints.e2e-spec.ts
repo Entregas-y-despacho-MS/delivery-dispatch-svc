@@ -13,8 +13,8 @@ import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module.js';
 import { AppConfig } from '../src/config/services/app.config.js';
 import { HttpExceptionFilter } from '../src/shared/filters/index.js';
-import { User } from '../src/modules/users/entities/user.entity.js';
-import { Role } from '../src/modules/roles/entities/role.entity.js';
+import { User } from '../src/modules/auth/users/entities/user.entity.js';
+import { Role } from '../src/modules/auth/roles/entities/role.entity.js';
 import { hashPassword } from '../src/shared/utils/crypto.util.js';
 
 describe('Endpoints protegidos — 401/403 (e2e)', () => {

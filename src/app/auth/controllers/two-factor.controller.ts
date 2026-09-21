@@ -1,7 +1,7 @@
 import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiNoContentResponse, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { UsersService } from '../../../modules/users/services/users.service.js';
-import { UserForAuthDto } from '../../../modules/users/dto/user-for-auth.dto.js';
+import { UsersService } from '../../../modules/auth/users/services/users.service.js';
+import { UserForAuthDto } from '../../../modules/auth/users/dto/user-for-auth.dto.js';
 import { TwoFactorService } from '../services/two-factor.service.js';
 import { TwoFactorSecretDto } from '../dto/two-factor-secret.dto.js';
 import { ConfirmTwoFactorDto } from '../dto/confirm-two-factor.dto.js';

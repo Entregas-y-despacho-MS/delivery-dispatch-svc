@@ -5,7 +5,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { JwtConfig } from './config/jwt.config.js';
-import { UsersModule } from '../../modules/users/users.module.js';
+import { UsersModule } from '../../modules/auth/users/users.module.js';
 import { AuthService } from './services/auth.service.js';
 import { TwoFactorService } from './services/two-factor.service.js';
 import { AuthController } from './controllers/auth.controller.js';

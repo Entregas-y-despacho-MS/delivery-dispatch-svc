@@ -2,8 +2,8 @@
 import 'dotenv/config';
 
 import { AppDataSource } from '../config/data-source.js';
-import { User } from '../../modules/users/entities/user.entity.js';
-import { Role } from '../../modules/roles/entities/role.entity.js';
+import { User } from '../../modules/auth/users/entities/user.entity.js';
+import { Role } from '../../modules/auth/roles/entities/role.entity.js';
 import { hashPassword } from '../../shared/utils/crypto.util.js';
 
 const GREEN  = '\x1b[32m';
