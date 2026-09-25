@@ -7,31 +7,31 @@ import { computeUserStatus } from '../utils/user-status.util.js';
 
 export class UserDto {
     @DtoField()
-    @ApiProperty({ example: 1 })
+    @ApiProperty({ type: 'integer', example: 1, description: 'User ID' })
     id!: number;
 
     @DtoField()
-    @ApiProperty({ example: 'Ana Torrez' })
+    @ApiProperty({ example: 'Ana Torrez', description: "The user's full name" })
     fullName!: string;
 
     @DtoField()
-    @ApiProperty({ example: 'atorrez' })
+    @ApiProperty({ example: 'atorrez', description: 'Login name, unique among users' })
     username!: string;
 
     @DtoField()
-    @ApiProperty({ example: 'ana@hipermaxi.com', nullable: true })
+    @ApiProperty({ type: String, example: 'ana@hipermaxi.com', nullable: true, description: 'Email address. null when none was given' })
     email!: string | null;
 
     @DtoRelation(() => RoleDto)
-    @ApiProperty({ type: () => RoleDto })
+    @ApiProperty({ type: () => RoleDto, description: "The user's role, which decides what they can do" })
     role!: RoleDto;
 
     @DtoField()
-    @ApiProperty({ example: true })
+    @ApiProperty({ example: true, description: 'false = deactivated by an admin: cannot log in' })
     active!: boolean;
 
     @DtoField()
-    @ApiProperty({ example: false })
+    @ApiProperty({ example: false, description: 'true when two-factor authentication is on for this account (login then needs a TOTP code)' })
     twoFactorEnabled!: boolean;
 
     @DtoField()
@@ -50,14 +50,14 @@ export class UserDto {
     status!: UserStatusEnum;
 
     @DtoField()
-    @ApiProperty({ example: null, nullable: true, description: 'While in the future, the account is locked (RF-A21). Null when never locked.' })
+    @ApiProperty({ type: String, format: 'date-time', example: null, nullable: true, description: 'While in the future, the account is locked (RF-A21). Null when never locked.' })
     lockedUntil!: Date | null;
 
     @DtoField()
-    @ApiProperty({ example: '2026-09-24T14:03:00.000Z', nullable: true, description: 'Last successful login. Null if the user has never logged in.' })
+    @ApiProperty({ type: String, format: 'date-time', example: '2026-09-24T14:03:00.000Z', nullable: true, description: 'Last successful login. Null if the user has never logged in.' })
     lastLoginAt!: Date | null;
 
     @DtoField()
-    @ApiProperty({ example: '2024-01-01T00:00:00.000Z' })
+    @ApiProperty({ type: String, format: 'date-time', example: '2024-01-01T00:00:00.000Z', description: 'Creation timestamp (UTC)' })
     createdAt!: Date;
 }

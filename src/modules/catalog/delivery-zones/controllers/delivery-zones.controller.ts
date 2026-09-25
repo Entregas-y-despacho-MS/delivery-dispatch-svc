@@ -13,7 +13,7 @@ import { UpdateDeliveryZoneDto } from '../dto/update-delivery-zone.dto.js';
 import { FindAllDeliveryZonesParamsDto } from '../dto/find-all-delivery-zones-params.dto.js';
 import { FindAllDeliveryZonesResponseDto } from '../dto/find-all-delivery-zones-response.dto.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
-import { ApiNotFound, ApiUnauthorized, ApiValidationError, ApiConflict } from '../../../../shared/utils/swagger/index.js';
+import { ApiNotFound, ApiUnauthorized, ApiConflict, ApiBadRequests, ApiIdParam } from '../../../../shared/utils/swagger/index.js';
 import { CoordinatorOnly } from '../../../../app/auth/decorators/index.js';
 
 /**
@@ -35,8 +35,9 @@ export class DeliveryZonesController {
     @CoordinatorOnly()
     @ApiOperation({
         summary:     'List delivery zones',
-        description: 'Returns a paginated list of delivery zones, searchable by code or name. Requires coordinator role or root.',
+        description: 'Returns a paginated list of delivery zones (10 per page by default, up to 100). `search` matches the code or the name (case-insensitive). Requires coordinator role or root.',
     })
+    @ApiBadRequests({ validation: true })
     @ApiOkResponse({ type: FindAllDeliveryZonesResponseDto })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async findAll(@Query() params: FindAllDeliveryZonesParamsDto): Promise<PaginationResponseDto<DeliveryZoneDto>> {
@@ -47,8 +48,10 @@ export class DeliveryZonesController {
     @CoordinatorOnly()
     @ApiOperation({
         summary:     'Get a delivery zone by ID',
-        description: 'Returns a single delivery zone by its numeric ID. Requires coordinator role or root.',
+        description: 'Returns one delivery zone by ID. A deleted zone is not found. Requires coordinator role or root.',
     })
+    @ApiIdParam('Delivery zone')
+    @ApiBadRequests({ id: true })
     @ApiOkResponse({ type: DeliveryZoneDto })
     @ApiNotFound({ code: 'DELIVERY_ZONE_NOT_FOUND', message: 'Delivery zone not found.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
@@ -61,10 +64,10 @@ export class DeliveryZonesController {
     @HttpCode(HttpStatus.CREATED)
     @ApiOperation({
         summary:     'Create a delivery zone',
-        description: 'Creates a new delivery zone with its base estimated delivery time. Code must be unique. Requires coordinator role or root.',
+        description: 'Creates a delivery zone. All three fields are required: a unique `code` (409 DELIVERY_ZONE_CODE_ALREADY_EXISTS if another zone uses it), a `name` and the base `estimatedTimeMin` (a positive whole number of minutes). Requires coordinator role or root.',
     })
+    @ApiBadRequests({ validation: true })
     @ApiCreatedResponse({ type: DeliveryZoneDto })
-    @ApiValidationError()
     @ApiConflict({ code: 'DELIVERY_ZONE_CODE_ALREADY_EXISTS', message: 'This code already belongs to another delivery zone.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async create(@Body() dto: CreateDeliveryZoneDto): Promise<DeliveryZoneDto> {
@@ -75,10 +78,11 @@ export class DeliveryZonesController {
     @CoordinatorOnly()
     @ApiOperation({
         summary:     'Update a delivery zone',
-        description: 'Partially updates a delivery zone. Only provided fields are changed. Requires coordinator role or root.',
+        description: 'Partially updates a delivery zone: only the fields sent are changed, and `null` is rejected. A changed `code` must not belong to another zone (409). Requires coordinator role or root.',
     })
+    @ApiIdParam('Delivery zone')
+    @ApiBadRequests({ validation: true, id: true })
     @ApiOkResponse({ type: DeliveryZoneDto })
-    @ApiValidationError()
     @ApiNotFound({ code: 'DELIVERY_ZONE_NOT_FOUND', message: 'Delivery zone not found.' })
     @ApiConflict({ code: 'DELIVERY_ZONE_CODE_ALREADY_EXISTS', message: 'This code already belongs to another delivery zone.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
@@ -94,8 +98,10 @@ export class DeliveryZonesController {
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({
         summary:     'Delete a delivery zone',
-        description: 'Soft-deletes the delivery zone. The record is retained in the database but excluded from all queries. Requires coordinator role or root.',
+        description: 'Soft-deletes the delivery zone: it no longer appears in lists or lookups. Requires coordinator role or root.',
     })
+    @ApiIdParam('Delivery zone')
+    @ApiBadRequests({ id: true })
     @ApiNoContentResponse({ description: 'Delivery zone deleted successfully.' })
     @ApiNotFound({ code: 'DELIVERY_ZONE_NOT_FOUND', message: 'Delivery zone not found.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })

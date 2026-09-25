@@ -3,7 +3,7 @@ import { IsOptional, IsString } from 'class-validator';
 import { PaginationParamsDto } from '../../../../shared/dto/index.js';
 
 export class FindAllDeliveryZonesParamsDto extends PaginationParamsDto {
-    @ApiPropertyOptional({ example: 'Sur', description: 'Filtrar por nombre o código' })
+    @ApiPropertyOptional({ example: 'Sur', description: 'Text contained in the zone code or name (case-insensitive)' })
     @IsOptional()
     @IsString()
     search?: string;

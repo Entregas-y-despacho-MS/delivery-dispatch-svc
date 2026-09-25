@@ -1,16 +1,16 @@
 import { ApiProperty } from '@nestjs/swagger';
 
 class MetadataDto {
-    @ApiProperty({ description: 'Current page number', example: 1 })
+    @ApiProperty({ type: 'integer', description: 'Current page number', example: 1 })
     page: number;
 
-    @ApiProperty({ description: 'Items per page', example: 10 })
+    @ApiProperty({ type: 'integer', description: 'Items per page', example: 10 })
     limit: number;
 
-    @ApiProperty({ description: 'Total number of pages', example: 5 })
+    @ApiProperty({ type: 'integer', description: 'Total number of pages (0 when there are no results)', example: 5 })
     pages: number;
 
-    @ApiProperty({ description: 'Total number of records', example: 42 })
+    @ApiProperty({ type: 'integer', description: 'Total number of records matching the filters', example: 42 })
     total: number;
 }
 

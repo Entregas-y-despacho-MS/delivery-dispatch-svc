@@ -1,5 +1,6 @@
 import { applyDecorators } from '@nestjs/common';
 import {
+    ApiParam,
     ApiNotFoundResponse, ApiBadRequestResponse, ApiUnauthorizedResponse,
     ApiForbiddenResponse, ApiConflictResponse, ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
@@ -120,6 +121,63 @@ export const ApiBadRequest = (...errors: ErrorExample[]) => {
     return applyDecorators(ApiBadRequestResponse({ description: 'Bad request.', ...buildErrorResponse(400, list) }));
 };
 
+export interface BadRequestOptions {
+    /** The endpoint has a body or query params checked by ValidationPipe (message is an array). */
+    validation?: boolean;
+    /** The endpoint has a numeric `:id` path param (ParseIntPipe rejects a non-numeric value). */
+    id?:         boolean;
+    /** Business-rule rejections specific to this endpoint (message is a string, `error` a domain code). */
+    errors?:     ErrorExample[];
+}
+
+/**
+ * 400 — every way an endpoint can answer 400, documented in ONE response.
+ *
+ * Several `@Api*Response(400)` decorators on the same operation overwrite each other, so an
+ * endpoint that can fail validation AND a business rule must use this instead of stacking
+ * `ApiValidationError` + `ApiBadRequest`.
+ */
+export const ApiBadRequests = ({ validation = false, id = false, errors = [] }: BadRequestOptions) => {
+    const examples: Record<string, { summary: string; value: object }> = {};
+    const codes: string[] = [];
+    if (validation) {
+        codes.push('Bad Request');
+        examples['VALIDATION_FAILED'] = {
+            summary: 'A field is invalid — one message per problem (message is an array)',
+            value: { ...errorBody(400, 'Bad Request', 'x'), message: ['name should not be empty', 'targetTimeMin must not be less than 15'] },
+        };
+    }
+    if (id) {
+        codes.push('Bad Request');
+        examples['INVALID_ID'] = {
+            summary: 'The :id in the URL is not a number (message is a string)',
+            value: errorBody(400, 'Bad Request', 'Validation failed (numeric string is expected)'),
+        };
+    }
+    for (const { code, message } of errors) {
+        codes.push(code);
+        examples[code] = { summary: `${code} — business rule (message is a string)`, value: errorBody(400, code, message) };
+    }
+    return applyDecorators(ApiBadRequestResponse({
+        description: 'Bad request.',
+        content: {
+            'application/json': {
+                schema: {
+                    type: 'object',
+                    properties: {
+                        statusCode: { type: 'integer', example: 400 },
+                        error:      { type: 'string', description: `One of: ${codes.join(', ')}` },
+                        message:    { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }], description: 'An array of field errors on validation failures, a single text otherwise.' },
+                        path:       { type: 'string' },
+                        timestamp:  { type: 'string', format: 'date-time' },
+                    },
+                },
+                examples,
+            },
+        },
+    }));
+};
+
 /**
  * 422 — Data is structurally valid but cannot be processed in the current state.
  */
@@ -127,3 +185,7 @@ export const ApiUnprocessableEntity = (...errors: ErrorExample[]) => {
     const list = errors.length ? errors : [{ code: 'UNPROCESSABLE_ENTITY', message: 'Data cannot be processed in its current state.' }];
     return applyDecorators(ApiUnprocessableEntityResponse({ description: 'Unprocessable entity.', ...buildErrorResponse(422, list) }));
 };
+
+/** Documents the numeric `:id` path param. `what` is the resource, e.g. 'Vehicle'. */
+export const ApiIdParam = (what: string) =>
+    applyDecorators(ApiParam({ name: 'id', type: 'integer', example: 1, description: `${what} ID (a positive integer, as returned by the list endpoint).` }));

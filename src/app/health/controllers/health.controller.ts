@@ -1,5 +1,5 @@
 import { Controller, Get } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiOkResponse, ApiOperation, ApiServiceUnavailableResponse, ApiTags } from '@nestjs/swagger';
 import {
     HealthCheck, HealthCheckService,
     TypeOrmHealthIndicator, MemoryHealthIndicator, DiskHealthIndicator,
@@ -22,7 +22,15 @@ export class HealthController {
     @HealthCheck()
     @ApiOperation({
         summary:     'Application health',
-        description: 'Returns 200 if all checks pass, 503 if any check fails. Consumed by Docker, Kubernetes, load balancers, and uptime monitors.',
+        description: 'Public, no token needed. Checks that the database answers, that the memory heap is under 300 MB and that the disk is under 90% full. Returns 200 when every check passes and 503 when any fails; in both cases `details` lists each check. Meant for Docker, load balancers and uptime monitors.',
+    })
+    @ApiOkResponse({
+        description: 'Every check passed.',
+        schema: { example: { status: 'ok', info: { database: { status: 'up' }, memory_heap: { status: 'up' }, disk: { status: 'up' } }, error: {}, details: { database: { status: 'up' }, memory_heap: { status: 'up' }, disk: { status: 'up' } } } },
+    })
+    @ApiServiceUnavailableResponse({
+        description: 'At least one check failed (see `error` for which one).',
+        schema: { example: { status: 'error', info: { memory_heap: { status: 'up' }, disk: { status: 'up' } }, error: { database: { status: 'down' } }, details: { database: { status: 'down' }, memory_heap: { status: 'up' }, disk: { status: 'up' } } } },
     })
     check() {
         return this.health.check([

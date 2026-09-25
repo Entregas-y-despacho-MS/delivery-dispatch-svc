@@ -3,22 +3,22 @@ import { DtoField } from '../../../../shared/orm/index.js';
 
 export class DeliveryZoneDto {
     @DtoField()
-    @ApiProperty({ example: 1 })
+    @ApiProperty({ type: 'integer', example: 1, description: 'Delivery zone ID' })
     id!: number;
 
     @DtoField()
-    @ApiProperty({ example: 'ZON-SUR' })
+    @ApiProperty({ example: 'ZON-SUR', description: 'Unique short code of the zone' })
     code!: string;
 
     @DtoField()
-    @ApiProperty({ example: 'Zona Sur' })
+    @ApiProperty({ example: 'Zona Sur', description: 'Display name of the zone' })
     name!: string;
 
     @DtoField()
-    @ApiProperty({ example: 45, description: 'Tiempo base estimado de entrega, en minutos' })
+    @ApiProperty({ type: 'integer', example: 45, description: 'Base estimated delivery time in this zone, in minutes' })
     estimatedTimeMin!: number;
 
     @DtoField()
-    @ApiProperty({ example: '2024-01-01T00:00:00.000Z' })
+    @ApiProperty({ type: String, format: 'date-time', example: '2024-01-01T00:00:00.000Z', description: 'Creation timestamp (UTC)' })
     createdAt!: Date;
 }

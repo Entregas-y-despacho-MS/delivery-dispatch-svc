@@ -4,34 +4,34 @@ import { VehicleStatusDto } from '../../vehicle-statuses/dto/vehicle-status.dto.
 
 export class VehicleDto {
     @DtoField()
-    @ApiProperty({ example: 1 })
+    @ApiProperty({ type: 'integer', example: 1, description: 'Vehicle ID' })
     id!: number;
 
     @DtoField()
-    @ApiProperty({ example: 'camioneta' })
+    @ApiProperty({ example: 'camioneta', description: 'Kind of vehicle' })
     type!: string;
 
     @DtoField()
-    @ApiProperty({ example: 'Toyota Hilux 2022' })
+    @ApiProperty({ example: 'Toyota Hilux 2022', description: 'Make and model' })
     model!: string;
 
     @DtoField()
-    @ApiProperty({ example: '1234-ABC' })
+    @ApiProperty({ example: '1234-ABC', description: 'License plate, uppercase, unique among vehicles' })
     plate!: string;
 
     @DtoField()
-    @ApiProperty({ example: 1200.5, description: 'Maximum load weight, in kg' })
+    @ApiProperty({ type: 'number', format: 'double', example: 1200.5, description: 'Maximum load weight, in kg' })
     capacityKg!: number;
 
     @DtoField()
-    @ApiProperty({ example: 8.5, description: 'Maximum load volume, in m3' })
+    @ApiProperty({ type: 'number', format: 'double', example: 8.5, description: 'Maximum load volume, in m3' })
     capacityM3!: number;
 
     @DtoRelation(() => VehicleStatusDto)
-    @ApiProperty({ type: () => VehicleStatusDto })
+    @ApiProperty({ type: () => VehicleStatusDto, description: 'Current operational status' })
     vehicleStatus!: VehicleStatusDto;
 
     @DtoField()
-    @ApiProperty({ example: '2024-01-01T00:00:00.000Z' })
+    @ApiProperty({ type: String, format: 'date-time', example: '2024-01-01T00:00:00.000Z', description: 'Creation timestamp (UTC)' })
     createdAt!: Date;
 }

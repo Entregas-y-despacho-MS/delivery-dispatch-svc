@@ -6,7 +6,8 @@ import { FindAllRolesParamsDto } from '../dto/find-all-roles-params.dto.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
 import { Roles } from '../../../../app/auth/decorators/index.js';
 import { RoleEnum } from '../../../../shared/enums/index.js';
-import { ApiNotFound, ApiUnauthorized } from '../../../../shared/utils/swagger/index.js';
+import { FindAllRolesResponseDto } from '../dto/find-all-roles-response.dto.js';
+import { ApiNotFound, ApiUnauthorized, ApiBadRequests, ApiIdParam } from '../../../../shared/utils/swagger/index.js';
 
 /**
  * Error dictionary for this module:
@@ -27,9 +28,10 @@ export class RolesController {
     @Roles(RoleEnum.ADMIN, RoleEnum.COORDINATOR)
     @ApiOperation({
         summary:     'List roles',
-        description: 'Returns a paginated list of roles, searchable by name. Requires admin or coordinator role, or root.',
+        description: 'Returns the roles (root, admin, coordinator, supervisor, driver), paginated. `search` matches the name. Roles are a fixed catalog; use their `id` as `roleId` when creating users or filtering the user list. Requires admin or coordinator role, or root.',
     })
-    @ApiOkResponse({ type: PaginationResponseDto })
+    @ApiBadRequests({ validation: true })
+    @ApiOkResponse({ type: FindAllRolesResponseDto })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async findAll(@Query() params: FindAllRolesParamsDto): Promise<PaginationResponseDto<RoleDto>> {
         return await this.rolesService.findAll(RoleDto, params);
@@ -39,8 +41,10 @@ export class RolesController {
     @Roles(RoleEnum.ADMIN, RoleEnum.COORDINATOR)
     @ApiOperation({
         summary:     'Get a role by ID',
-        description: 'Returns a single role by its numeric ID. Requires admin or coordinator role, or root.',
+        description: 'Returns one role by ID. Requires admin or coordinator role, or root.',
     })
+    @ApiIdParam('Role')
+    @ApiBadRequests({ id: true })
     @ApiOkResponse({ type: RoleDto })
     @ApiNotFound({ code: 'ROLE_NOT_FOUND', message: 'Role not found.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })

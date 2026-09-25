@@ -14,9 +14,7 @@ import { FindAllVehiclesParamsDto } from '../dto/find-all-vehicles-params.dto.js
 import { FindAllVehiclesResponseDto } from '../dto/find-all-vehicles-response.dto.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
 import { RoleEnum } from '../../../../shared/enums/index.js';
-import {
-    ApiNotFound, ApiUnauthorized, ApiValidationError, ApiConflict, ApiBadRequest,
-} from '../../../../shared/utils/swagger/index.js';
+import { ApiNotFound, ApiUnauthorized, ApiConflict, ApiBadRequests, ApiIdParam } from '../../../../shared/utils/swagger/index.js';
 import { Roles } from '../../../../app/auth/decorators/index.js';
 
 /**
@@ -39,8 +37,9 @@ export class VehiclesController {
     @Roles(RoleEnum.SUPERVISOR, RoleEnum.COORDINATOR)
     @ApiOperation({
         summary:     'List vehicles',
-        description: 'Returns a paginated list of vehicles, searchable by plate, model or type and filterable by status. Requires supervisor or coordinator role, or root.',
+        description: 'Returns a paginated list of vehicles (10 per page by default, up to 100). `search` matches the plate, model or type (case-insensitive); `vehicleStatusId` keeps only vehicles in that operational status (1 = active, 2 = maintenance, 3 = out_of_service). Requires supervisor or coordinator role, or root.',
     })
+    @ApiBadRequests({ validation: true })
     @ApiOkResponse({ type: FindAllVehiclesResponseDto })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async findAll(@Query() params: FindAllVehiclesParamsDto): Promise<PaginationResponseDto<VehicleDto>> {
@@ -51,8 +50,10 @@ export class VehiclesController {
     @Roles(RoleEnum.SUPERVISOR, RoleEnum.COORDINATOR)
     @ApiOperation({
         summary:     'Get a vehicle by ID',
-        description: 'Returns a single vehicle by its numeric ID. Requires supervisor or coordinator role, or root.',
+        description: 'Returns one vehicle by ID, with its operational status. A removed vehicle is not found. Requires supervisor or coordinator role, or root.',
     })
+    @ApiIdParam('Vehicle')
+    @ApiBadRequests({ id: true })
     @ApiOkResponse({ type: VehicleDto })
     @ApiNotFound({ code: 'VEHICLE_NOT_FOUND', message: 'Vehicle not found.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
@@ -65,10 +66,10 @@ export class VehiclesController {
     @HttpCode(HttpStatus.CREATED)
     @ApiOperation({
         summary:     'Register a vehicle',
-        description: 'Registers a new vehicle with its plate, model, type and load capacities (kg and m3, both greater than zero). The plate must be unique. New vehicles start in the "active" status, ready for route assignment. Requires supervisor or coordinator role, or root.',
+        description: 'Registers a vehicle. All five fields are required: `type`, `model`, `plate`, `capacityKg` and `capacityM3` (both greater than zero, up to 2 decimals). The plate is trimmed and uppercased, and must not belong to another vehicle (409 VEHICLE_PLATE_ALREADY_EXISTS). The vehicle starts in the `active` status, ready for route assignment. Requires supervisor or coordinator role, or root.',
     })
+    @ApiBadRequests({ validation: true })
     @ApiCreatedResponse({ type: VehicleDto })
-    @ApiValidationError()
     @ApiConflict({ code: 'VEHICLE_PLATE_ALREADY_EXISTS', message: 'A vehicle with this plate already exists.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async create(@Body() dto: CreateVehicleDto): Promise<VehicleDto> {
@@ -79,11 +80,11 @@ export class VehiclesController {
     @Roles(RoleEnum.SUPERVISOR, RoleEnum.COORDINATOR)
     @ApiOperation({
         summary:     'Update a vehicle',
-        description: 'Partially updates a vehicle, including its operational status (vehicleStatusId). Only provided fields are changed. Requires supervisor or coordinator role, or root.',
+        description: 'Partially updates a vehicle: only the fields sent are changed, and `null` is rejected. This is also how the operational status is changed (`vehicleStatusId`: 1 = active, 2 = maintenance, 3 = out_of_service; an unknown ID is a 400 INVALID_VEHICLE_STATUS). A changed plate must not belong to another vehicle (409). Requires supervisor or coordinator role, or root.',
     })
+    @ApiIdParam('Vehicle')
+    @ApiBadRequests({ validation: true, id: true, errors: [{ code: 'INVALID_VEHICLE_STATUS', message: 'The given vehicle status does not exist.' }] })
     @ApiOkResponse({ type: VehicleDto })
-    @ApiValidationError()
-    @ApiBadRequest({ code: 'INVALID_VEHICLE_STATUS', message: 'The given vehicle status does not exist.' })
     @ApiNotFound({ code: 'VEHICLE_NOT_FOUND', message: 'Vehicle not found.' })
     @ApiConflict({ code: 'VEHICLE_PLATE_ALREADY_EXISTS', message: 'A vehicle with this plate already exists.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
@@ -99,8 +100,10 @@ export class VehiclesController {
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({
         summary:     'Remove a vehicle from the fleet',
-        description: 'Soft-deletes the vehicle: historical dispatches and maintenances keep referencing it, but it stops appearing as an option and its plate can be reused. Requires supervisor or coordinator role, or root.',
+        description: 'Soft-deletes the vehicle: historical dispatches and maintenances keep referencing it, but it stops appearing in lists and its plate can be reused. To only take it out of service temporarily, change its status instead (PUT `vehicleStatusId`). Requires supervisor or coordinator role, or root.',
     })
+    @ApiIdParam('Vehicle')
+    @ApiBadRequests({ id: true })
     @ApiNoContentResponse({ description: 'Vehicle removed.' })
     @ApiNotFound({ code: 'VEHICLE_NOT_FOUND', message: 'Vehicle not found.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })

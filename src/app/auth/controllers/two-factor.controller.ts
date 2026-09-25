@@ -10,7 +10,7 @@ import { CurrentUser } from '../../../shared/decorators/current-user.decorator.j
 import type { AuthUser } from '../strategies/jwt.strategy.js';
 import { InvalidCredentialsException, InvalidTotpCodeException } from '../exceptions/index.js';
 import { comparePassword } from '../../../shared/utils/crypto.util.js';
-import { ApiUnauthorized, ApiValidationError } from '../../../shared/utils/swagger/index.js';
+import { ApiUnauthorized, ApiBadRequests } from '../../../shared/utils/swagger/index.js';
 
 /**
  * Error dictionary for this module:
@@ -34,7 +34,7 @@ export class TwoFactorController {
     @HttpCode(HttpStatus.OK)
     @ApiOperation({
         summary:     'Start 2FA enrollment',
-        description: 'Generates a new TOTP secret and returns a QR code to scan with an authenticator app. 2FA is NOT enabled yet — confirm with POST /auth/2fa/confirm.',
+        description: 'Step 1 of 2 to turn on two-factor authentication for your own account: generates a TOTP secret and returns it with a QR code to scan in an authenticator app (Google Authenticator, Authy, etc.). 2FA is NOT active yet: confirm it with POST /auth/2fa/confirm. Calling it again generates a new secret that replaces the previous one. Requires any authenticated user.',
     })
     @ApiOkResponse({ type: TwoFactorSecretDto })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
@@ -49,10 +49,10 @@ export class TwoFactorController {
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({
         summary:     'Confirm 2FA enrollment',
-        description: 'Verifies a code generated from the secret returned by POST /auth/2fa/enable. On success, 2FA becomes required at login.',
+        description: 'Step 2: send the current 6-digit code shown by the authenticator app to prove the secret was scanned. On success 2FA is enabled and every future login must include `totpCode` (401 INVALID_TOTP_CODE if the code does not match). Requires any authenticated user.',
     })
+    @ApiBadRequests({ validation: true })
     @ApiNoContentResponse({ description: '2FA enabled.' })
-    @ApiValidationError()
     @ApiUnauthorized(
         { code: 'INVALID_TOTP_CODE', message: 'Invalid TOTP code.' },
         { code: 'INVALID_TOKEN',     message: 'Invalid or expired token.' },
@@ -69,10 +69,10 @@ export class TwoFactorController {
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({
         summary:     'Disable 2FA',
-        description: 'Requires the current password as confirmation.',
+        description: 'Turns off two-factor authentication for your own account and discards the secret. Requires the current password as confirmation (401 INVALID_CREDENTIALS if wrong). Requires any authenticated user.',
     })
+    @ApiBadRequests({ validation: true })
     @ApiNoContentResponse({ description: '2FA disabled.' })
-    @ApiValidationError()
     @ApiUnauthorized(
         { code: 'INVALID_CREDENTIALS', message: 'Invalid credentials.' },
         { code: 'INVALID_TOKEN',       message: 'Invalid or expired token.' },

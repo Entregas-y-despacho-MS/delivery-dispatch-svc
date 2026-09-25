@@ -6,7 +6,7 @@ export class ValidationExceptionDto {
     @ApiProperty({ example: 400 })
     statusCode: number;
 
-    @ApiProperty({ example: 'BAD_REQUEST' })
+    @ApiProperty({ example: 'Bad Request', description: 'Always "Bad Request" for validation errors (business-rule 400s use their own code)' })
     error: string;
 
     @ApiProperty({

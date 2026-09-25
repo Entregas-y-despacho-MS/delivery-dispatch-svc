@@ -1,6 +1,6 @@
 import { Controller, Patch, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import {
-    ApiTags, ApiOperation,
+    ApiTags, ApiOperation, ApiBearerAuth,
     ApiOkResponse, ApiCreatedResponse, ApiNoContentResponse,
 } from '@nestjs/swagger';
 import { AuthService } from '../services/auth.service.js';
@@ -15,7 +15,7 @@ import { AuthResponseDto } from '../dto/auth-response.dto.js';
 import { Public, AdminOnly } from '../decorators/index.js';
 import { CurrentUser } from '../../../shared/decorators/current-user.decorator.js';
 import type { AuthUser } from '../strategies/jwt.strategy.js';
-import { ApiValidationError, ApiUnauthorized, ApiConflict, ApiBadRequest } from '../../../shared/utils/swagger/index.js';
+import { ApiUnauthorized, ApiConflict, ApiBadRequests } from '../../../shared/utils/swagger/index.js';
 
 /**
  * Error dictionary for this module:
@@ -44,10 +44,10 @@ export class AuthController {
     @HttpCode(HttpStatus.OK)
     @ApiOperation({
         summary:     'Login',
-        description: 'Validates username and password (plus totpCode if 2FA is enabled). Returns an access token (short-lived) and a refresh token (long-lived). The generic 401 message intentionally hides whether the username exists.',
+        description: 'Exchanges a `username` and `password` for an access token (short-lived, sent as `Authorization: Bearer <token>`) and a refresh token (long-lived, used only in POST /auth/refresh). If the account has 2FA enabled, `totpCode` is also required (401 TOTP_REQUIRED without it). Check `mustChangePassword` in the response: when true the client must send the user to change their password before anything else. Repeated wrong passwords lock the account for a while (401 ACCOUNT_LOCKED). A wrong username, wrong password or deactivated account all return the same INVALID_CREDENTIALS, so it never reveals which accounts exist. Public.',
     })
+    @ApiBadRequests({ validation: true })
     @ApiOkResponse({ type: AuthResponseDto })
-    @ApiValidationError()
     @ApiUnauthorized(
         { code: 'INVALID_CREDENTIALS', message: 'Invalid credentials.' },
         { code: 'ACCOUNT_LOCKED',      message: 'Account is temporarily locked due to too many failed login attempts.' },
@@ -59,16 +59,17 @@ export class AuthController {
     }
 
     @AdminOnly()
+    @ApiBearerAuth('access-token')
     @Post('register')
     @HttpCode(HttpStatus.CREATED)
     @ApiOperation({
         summary:     'Register a new internal user',
-        description: 'Creates a new internal account (coordinator/supervisor/driver/admin). Admin-only — this is not public self-registration. Returns the created user, not a token pair (the caller is the admin, not the new user).',
+        description: 'Creates an internal account. Same body and rules as POST /users (admin-only, not a public sign-up). Returns the created user, not tokens: the caller is the admin, not the new user. Requires admin role or root.',
     })
+    @ApiBadRequests({ validation: true, errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }] })
     @ApiCreatedResponse({ type: UserDto })
-    @ApiValidationError()
-    @ApiBadRequest({ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' })
     @ApiConflict({ code: 'USER_ALREADY_EXISTS', message: 'A user with this username or email already exists.' })
+    @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async register(@Body() dto: CreateUserDto): Promise<UserDto> {
         return await this.authService.register(dto);
     }
@@ -78,10 +79,10 @@ export class AuthController {
     @HttpCode(HttpStatus.OK)
     @ApiOperation({
         summary:     'Refresh tokens',
-        description: 'Issues a new access + refresh token pair from the current refresh token. The previous refresh token is immediately invalidated (rotation). If a token is used twice, all sessions are revoked. Also enforces RF-A24 (auto session close on inactivity) — not for the driver role, whose mobile app relies on long-lived sessions while on a route.',
+        description: 'Exchanges a valid refresh token for a new access + refresh pair. The old refresh token stops working immediately (rotation); presenting an already-used one closes every session of that user (401 INVALID_REFRESH_TOKEN). A session that stayed inactive longer than the configured limit is closed (401 SESSION_EXPIRED), except for the driver role, whose mobile app keeps long sessions while on a route. Public: authenticated by the refresh token in the body.',
     })
+    @ApiBadRequests({ validation: true })
     @ApiOkResponse({ type: AuthResponseDto })
-    @ApiValidationError()
     @ApiUnauthorized(
         { code: 'INVALID_REFRESH_TOKEN', message: 'Invalid or expired refresh token.' },
         { code: 'SESSION_EXPIRED',       message: 'Session closed due to inactivity. Please log in again.' },
@@ -92,11 +93,12 @@ export class AuthController {
 
     // No @Roles() — any authenticated user can log out regardless of role (JwtAuthGuard already
     // requires a valid token; RolesGuard allows through when no role list is set).
+    @ApiBearerAuth('access-token')
     @Post('logout')
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({
         summary:     'Logout',
-        description: 'Invalidates the refresh token stored in the database. The current access token remains valid until its natural expiry — clients should discard it locally.',
+        description: 'Revokes the user\'s refresh token, so the session cannot be renewed. The current access token stays valid until it expires: the client must discard it. Requires any authenticated user.',
     })
     @ApiNoContentResponse({ description: 'Logged out successfully.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
@@ -105,18 +107,15 @@ export class AuthController {
     }
 
     // No @Roles() — any authenticated user changes their own password.
+    @ApiBearerAuth('access-token')
     @Patch('change-password')
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({
         summary:     'Change own password',
-        description: 'Requires the current password. On success, revokes the current session — the client must log in again.',
+        description: 'Changes the password of the logged-in user. Requires the current password (401 INVALID_CREDENTIALS if wrong). The new password must be at least 8 characters with an uppercase letter, a lowercase letter, a number and a symbol, meet the configured minimum length (400 PASSWORD_TOO_SHORT), and differ from the current one and the last 3 used (400 PASSWORD_RECENTLY_USED). On success the session is revoked: the client must log in again with the new password. Requires any authenticated user.',
     })
+    @ApiBadRequests({ validation: true, errors: [{ code: 'PASSWORD_TOO_SHORT',     message: 'Password must be at least 8 characters.' }, { code: 'PASSWORD_RECENTLY_USED', message: 'You cannot reuse your current password or any of your last 3 passwords.' }] })
     @ApiNoContentResponse({ description: 'Password changed.' })
-    @ApiValidationError()
-    @ApiBadRequest(
-        { code: 'PASSWORD_TOO_SHORT',     message: 'Password must be at least 8 characters.' },
-        { code: 'PASSWORD_RECENTLY_USED', message: 'You cannot reuse your current password or any of your last 3 passwords.' },
-    )
     @ApiUnauthorized(
         { code: 'INVALID_CREDENTIALS', message: 'Invalid credentials.' },
         { code: 'INVALID_TOKEN',       message: 'Invalid or expired token.' },
@@ -130,10 +129,10 @@ export class AuthController {
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({
         summary:     'Request a password reset',
-        description: 'Sends a reset token by email if the address belongs to an active account. Always responds the same way, whether the email exists or not — never reveals which.',
+        description: 'Starts the password recovery flow: if `email` belongs to an active account, an email with a single-use reset token is sent (valid for a limited time, 30 minutes by default). The response is always 204 whether the email exists or not, so it never reveals which addresses are registered. Public.',
     })
+    @ApiBadRequests({ validation: true })
     @ApiNoContentResponse({ description: 'Request accepted.' })
-    @ApiValidationError()
     async forgotPassword(@Body() dto: ForgotPasswordDto): Promise<void> {
         return await this.authService.forgotPassword(dto);
     }
@@ -143,14 +142,10 @@ export class AuthController {
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({
         summary:     'Reset password with a token',
-        description: 'Completes the flow started by POST /auth/forgot-password. The token is single-use and expires after 30 minutes.',
+        description: 'Finishes the recovery flow started with POST /auth/forgot-password: sets a new password using the emailed `token`. The token is single-use and expires (401 INVALID_RESET_TOKEN once used or expired). The new password follows the same rules as in change-password. Also clears any account lock and closes the user\'s sessions. Public: authenticated by the token.',
     })
+    @ApiBadRequests({ validation: true, errors: [{ code: 'PASSWORD_TOO_SHORT',     message: 'Password must be at least 8 characters.' }, { code: 'PASSWORD_RECENTLY_USED', message: 'You cannot reuse your current password or any of your last 3 passwords.' }] })
     @ApiNoContentResponse({ description: 'Password reset.' })
-    @ApiValidationError()
-    @ApiBadRequest(
-        { code: 'PASSWORD_TOO_SHORT',     message: 'Password must be at least 8 characters.' },
-        { code: 'PASSWORD_RECENTLY_USED', message: 'You cannot reuse your current password or any of your last 3 passwords.' },
-    )
     @ApiUnauthorized({ code: 'INVALID_RESET_TOKEN', message: 'Invalid or expired password reset token.' })
     async resetPassword(@Body() dto: ResetPasswordDto): Promise<void> {
         return await this.authService.resetPassword(dto);

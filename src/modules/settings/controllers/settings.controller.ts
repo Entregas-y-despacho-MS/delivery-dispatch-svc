@@ -1,10 +1,10 @@
 import { Body, Controller, Get, Param, Put } from '@nestjs/common';
-import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import { SettingsService } from '../services/settings.service.js';
 import { SettingDto } from '../dto/setting.dto.js';
 import { UpdateSettingDto } from '../dto/update-setting.dto.js';
 import { AdminOnly } from '../../../app/auth/decorators/index.js';
-import { ApiNotFound, ApiUnauthorized, ApiValidationError } from '../../../shared/utils/swagger/index.js';
+import { ApiNotFound, ApiUnauthorized, ApiBadRequests } from '../../../shared/utils/swagger/index.js';
 
 /**
  * Error dictionary for this module:
@@ -26,7 +26,7 @@ export class SettingsController {
     @AdminOnly()
     @ApiOperation({
         summary:     'List settings',
-        description: 'Returns every business-config key/value. Requires admin role or root.',
+        description: 'Returns every business-configuration entry (delivery window, password policy, lockout and session rules, OTP, SLA alert threshold). Each has a `key`, a text `value` and a `description` of what it controls. Requires admin role or root.',
     })
     @ApiOkResponse({ type: [SettingDto] })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
@@ -38,10 +38,11 @@ export class SettingsController {
     @AdminOnly()
     @ApiOperation({
         summary:     'Update a setting',
-        description: 'Updates a setting\'s value. Requires admin role or root. Takes effect immediately.',
+        description: 'Changes the `value` of the setting identified by `key` (see GET /settings for the valid keys; an unknown key is 404 SETTING_NOT_FOUND). Values are always sent as text (e.g. "5", "08:00") and are stored as given, so send one that is valid for that key. The change applies immediately, with no restart. Requires admin role or root.',
     })
+    @ApiParam({ name: 'key', example: 'max_failed_login_attempts', description: 'Key of the setting, as listed by GET /settings' })
+    @ApiBadRequests({ validation: true })
     @ApiOkResponse({ type: SettingDto })
-    @ApiValidationError()
     @ApiNotFound({ code: 'SETTING_NOT_FOUND', message: 'Setting not found.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async update(@Param('key') key: string, @Body() dto: UpdateSettingDto): Promise<SettingDto> {
