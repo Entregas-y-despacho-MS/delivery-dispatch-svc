@@ -28,7 +28,7 @@ export class CreateUserDto {
     @MaxLength(255)
     password: string;
 
-    @ApiProperty({ type: 'integer', example: 3, description: 'ID of the role to assign, from GET /roles (root, admin, coordinator, supervisor or driver)' })
+    @ApiProperty({ type: 'integer', example: 3, description: 'ID of the role to assign, from GET /roles (root, admin, coordinator, supervisor or driver). An unknown ID is a 400 INVALID_ROLE' })
     @IsInt({ message: 'Role ID must be an integer.' })
     @IsPositive({ message: 'Role ID must be a positive number.' })
     roleId: number;

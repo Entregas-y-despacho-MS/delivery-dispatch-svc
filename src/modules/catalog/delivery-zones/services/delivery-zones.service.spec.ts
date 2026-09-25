@@ -2,7 +2,9 @@
 // Todo mockeado (repo de TypeORM) — sin DB, sin red. La validación de estimatedTimeMin positivo
 // (Escenario 3) vive en el DTO (@IsInt/@IsPositive, cubierta por el ValidationPipe global, no acá).
 import { describe, expect, it, vi } from 'vitest';
+import { plainToInstance } from 'class-transformer';
 import { DeliveryZonesService } from './delivery-zones.service.js';
+import { FindAllDeliveryZonesParamsDto } from '../dto/find-all-delivery-zones-params.dto.js';
 import { DeliveryZoneDto } from '../dto/delivery-zone.dto.js';
 import { DeliveryZoneNotFoundException, DeliveryZoneCodeAlreadyExistsException } from '../exceptions/index.js';
 
@@ -14,6 +16,7 @@ function buildService() {
         delete:     vi.fn(),
         softDelete: vi.fn(),
         findOne:    vi.fn(),
+        findAndCount: vi.fn().mockResolvedValue([[], 0]),
     };
     const service = new DeliveryZonesService(rawRepo as any);
     return { service, rawRepo };
@@ -112,5 +115,31 @@ describe('DeliveryZonesService — integridad de datos (RF-A29)', () => {
 
             await expect(service.remove(999)).rejects.toThrow(DeliveryZoneNotFoundException);
         });
+    });
+});
+
+describe('DeliveryZonesService.findAll — búsqueda', () => {
+    const run = async (over: object = {}) => {
+        const { service, rawRepo } = buildService();
+        await service.findAll(DeliveryZoneDto, plainToInstance(FindAllDeliveryZonesParamsDto, over));
+        return rawRepo.findAndCount.mock.calls[0][0].where;
+    };
+
+    it('busca en código o nombre (2 ramas del OR) con ILIKE contiene', async () => {
+        const where = await run({ search: 'sur' });
+
+        expect(where).toHaveLength(2);
+        expect(where[0].code).toMatchObject({ type: 'ilike', value: '%sur%' });
+        expect(where[1].name).toMatchObject({ type: 'ilike', value: '%sur%' });
+    });
+
+    it('escapa los comodines: "50%" y "a_b" se buscan literalmente', async () => {
+        expect((await run({ search: '50%' }))[0].code.value).toBe('%50\\%%');
+        expect((await run({ search: 'a_b' }))[1].name.value).toBe('%a\\_b%');
+    });
+
+    it('un search vacío o de solo espacios se ignora', async () => {
+        expect(await run({ search: '' })).toEqual({});
+        expect(await run({ search: '   ' })).toEqual({});
     });
 });

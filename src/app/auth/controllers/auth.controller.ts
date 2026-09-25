@@ -66,7 +66,7 @@ export class AuthController {
         summary:     'Register a new internal user',
         description: 'Creates an internal account. Same body and rules as POST /users (admin-only, not a public sign-up). Returns the created user, not tokens: the caller is the admin, not the new user. Requires admin role or root.',
     })
-    @ApiBadRequests({ validation: true, errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }] })
+    @ApiBadRequests({ validation: true, errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }, { code: 'INVALID_ROLE', message: 'The given role does not exist.' }] })
     @ApiCreatedResponse({ type: UserDto })
     @ApiConflict({ code: 'USER_ALREADY_EXISTS', message: 'A user with this username or email already exists.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })

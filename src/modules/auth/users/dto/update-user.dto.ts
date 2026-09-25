@@ -31,7 +31,7 @@ export class UpdateUserDto {
     @MaxLength(255)
     password?: string;
 
-    @ApiPropertyOptional({ type: 'integer', example: 2, description: 'New role, an ID from GET /roles. null is rejected' })
+    @ApiPropertyOptional({ type: 'integer', example: 2, description: 'New role, an ID from GET /roles (an unknown ID is a 400 INVALID_ROLE). null is rejected' })
     @OptionalNotNull()
     @IsInt({ message: 'Role ID must be an integer.' })
     @IsPositive({ message: 'Role ID must be a positive number.' })

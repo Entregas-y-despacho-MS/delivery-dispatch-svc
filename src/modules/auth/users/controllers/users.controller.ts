@@ -22,6 +22,7 @@ import { RoleEnum } from '../../../../shared/enums/index.js';
  *   USER_NOT_FOUND        404 — No user with the given ID exists or it was soft-deleted.
  *   USER_ALREADY_EXISTS   409 — A user with the given username or email already exists.
  *   PASSWORD_TOO_SHORT    400 — Password is shorter than settings.password_min_length.
+ *   INVALID_ROLE          400 — The given roleId does not exist.
  *   CONFLICTING_USER_FILTERS 400 — The list was asked with both `active` and `status`.
  *   INVALID_TOKEN         401 — JWT is missing, malformed, or expired.
  *   INSUFFICIENT_PERMISSIONS 403 — Authenticated but role does not meet the endpoint requirement.
@@ -75,7 +76,7 @@ export class UsersController {
         summary:     'Create a user',
         description: 'Creates an internal user account. `fullName`, `username`, `password` and `roleId` are required; `email` is optional. `username` (and `email`, if given) must not belong to another user (409 USER_ALREADY_EXISTS). The password must be at least 8 characters with an uppercase letter, a lowercase letter, a number and a symbol, and at least the length configured in settings (`password_min_length`, 400 PASSWORD_TOO_SHORT). The account is created active, and the user is asked to change the password at first login. Requires admin role or root.',
     })
-    @ApiBadRequests({ validation: true, errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }] })
+    @ApiBadRequests({ validation: true, errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }, { code: 'INVALID_ROLE', message: 'The given role does not exist.' }] })
     @ApiCreatedResponse({ type: UserDto })
     @ApiConflict({ code: 'USER_ALREADY_EXISTS', message: 'A user with this username or email already exists.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
@@ -87,10 +88,10 @@ export class UsersController {
     @AdminOnly()
     @ApiOperation({
         summary:     'Update a user',
-        description: 'Partially updates a user: only the fields sent are changed. `email` can be cleared by sending `null`; every other field rejects `null`. `active: false` deactivates the account (the user can no longer log in) and `true` reactivates it. A new `password` resets the user\'s password (admin action: the password history is not checked, and the user\'s own sessions are not closed). A changed `username` or `email` must not belong to another user (409). Requires admin role or root.',
+        description: 'Partially updates a user: only the fields sent are changed. `email` can be cleared by sending `null`; every other field rejects `null`. `active: false` deactivates the account (the user can no longer log in) and `true` reactivates it. A new `password` resets the user\'s password (admin action: the password history is not checked, and the user\'s own sessions are not closed). A changed `username` or `email` must not belong to another user (409), and a new `roleId` must exist (400 INVALID_ROLE). Requires admin role or root.',
     })
     @ApiIdParam('User')
-    @ApiBadRequests({ validation: true, id: true, errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }] })
+    @ApiBadRequests({ validation: true, id: true, errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }, { code: 'INVALID_ROLE', message: 'The given role does not exist.' }] })
     @ApiOkResponse({ type: UserDto })
     @ApiNotFound({ code: 'USER_NOT_FOUND', message: 'User not found.' })
     @ApiConflict({ code: 'USER_ALREADY_EXISTS', message: 'A user with this username or email already exists.' })

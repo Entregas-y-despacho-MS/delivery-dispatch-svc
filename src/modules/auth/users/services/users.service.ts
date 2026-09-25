@@ -3,13 +3,14 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsOrder, FindOptionsWhere, ILike, IsNull, LessThanOrEqual, MoreThan, Repository } from 'typeorm';
 import { User } from '../entities/user.entity.js';
 import { PasswordHistory } from '../entities/password-history.entity.js';
+import { Role } from '../../roles/entities/role.entity.js';
 import { UserDto } from '../dto/user.dto.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
 import { UpdateUserDto } from '../dto/update-user.dto.js';
 import { FindAllUsersParamsDto, UserSortBy } from '../dto/find-all-users-params.dto.js';
 import {
     UserNotFoundException, UserAlreadyExistsException, PasswordTooShortException,
-    PasswordRecentlyUsedException, ConflictingUserFiltersException,
+    PasswordRecentlyUsedException, ConflictingUserFiltersException, InvalidRoleException,
 } from '../exceptions/index.js';
 import { DtoRepository } from '../../../../shared/orm/index.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
@@ -31,6 +32,8 @@ export class UsersService {
         private readonly rawRepo: Repository<User>,
         @InjectRepository(PasswordHistory)
         private readonly historyRepo: Repository<PasswordHistory>,
+        @InjectRepository(Role)
+        private readonly roleRepo: Repository<Role>,
         private readonly settings: SettingsService,
     ) {
         this.repo = new DtoRepository(rawRepo);
@@ -151,6 +154,7 @@ export class UsersService {
 
         if (await this.existsByUsernameOrEmail(dto.username, dto.email)) throw new UserAlreadyExistsException();
         this.validatePasswordPolicy(dto.password);
+        await this.assertRoleExists(dto.roleId, options);
 
         const user        = repo.create();
         user.fullName      = dto.fullName;
@@ -186,6 +190,7 @@ export class UsersService {
         }
 
         if (dto.password !== undefined) this.validatePasswordPolicy(dto.password);
+        if (dto.roleId   !== undefined) await this.assertRoleExists(dto.roleId, options);
 
         const payload: Record<string, any> = {};
         if (dto.fullName !== undefined) payload.fullName     = dto.fullName;
@@ -215,6 +220,12 @@ export class UsersService {
     }
 
     // ── Private implementation ────────────────────────────────────────────────
+
+    /** An unknown roleId would otherwise reach the FK and come back as a 500. */
+    private async assertRoleExists(roleId: number, options?: MutationOptions): Promise<void> {
+        const repo = options?.manager?.getRepository(Role) ?? this.roleRepo;
+        if (!(await repo.existsBy({ id: roleId }))) throw new InvalidRoleException();
+    }
 
     /** Backed by settings.password_min_length — every code path that sets a password goes through here. */
     private validatePasswordPolicy(plainPassword: string): void {

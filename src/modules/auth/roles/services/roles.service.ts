@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, ILike, Repository } from 'typeorm';
+import { escapeLike } from '../../../../shared/utils/like.util.js';
 import { Role } from '../entities/role.entity.js';
 import { FindAllRolesParamsDto } from '../dto/find-all-roles-params.dto.js';
 import { RoleNotFoundException } from '../exceptions/index.js';
@@ -26,7 +27,7 @@ export class RolesService {
             dto,
             pagination: params,
             where: {
-                ...(params.search && { name: ILike(`%${params.search}%`) }),
+                ...(params.search?.trim() && { name: ILike(`%${escapeLike(params.search.trim())}%`) }),
             },
             order: { id: 'ASC' },
         });

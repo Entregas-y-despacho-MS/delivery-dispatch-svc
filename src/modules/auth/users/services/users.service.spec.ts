@@ -2,7 +2,7 @@
 // Todo mockeado (repos de TypeORM, SettingsService) — sin DB, sin red.
 import { describe, expect, it, vi } from 'vitest';
 import { UsersService } from './users.service.js';
-import { PasswordTooShortException, PasswordRecentlyUsedException, ConflictingUserFiltersException } from '../exceptions/index.js';
+import { PasswordTooShortException, PasswordRecentlyUsedException, ConflictingUserFiltersException, InvalidRoleException } from '../exceptions/index.js';
 import { FindAllUsersParamsDto, UserSortBy } from '../dto/find-all-users-params.dto.js';
 import { UserDto } from '../dto/user.dto.js';
 import { plainToInstance } from 'class-transformer';
@@ -20,12 +20,15 @@ function buildService(overrides: { minLength?: number } = {}) {
         create: vi.fn((data: any) => data),
         save:   vi.fn(),
     };
+    const roleRepo = {
+        existsBy: vi.fn().mockResolvedValue(true),
+    };
     const settings = {
         getNumber: vi.fn().mockReturnValue(overrides.minLength ?? 8),
     };
 
-    const service = new UsersService(rawRepo as any, historyRepo as any, settings as any);
-    return { service, rawRepo, historyRepo, settings };
+    const service = new UsersService(rawRepo as any, historyRepo as any, roleRepo as any, settings as any);
+    return { service, rawRepo, historyRepo, roleRepo, settings };
 }
 
 describe('UsersService — password policy (RF-A25)', () => {
@@ -284,5 +287,67 @@ describe('UsersService.setLastLogin (RF-A28)', () => {
         expect(id).toBe(7);
         expect(Object.keys(patch)).toEqual(['lastLoginAt']);
         expect(patch.lastLoginAt.getTime()).toBeGreaterThanOrEqual(before);
+    });
+});
+
+describe('UsersService — roleId inexistente (antes daba 500 por la FK)', () => {
+    const create = (over: object = {}) => ({ fullName: 'Ana', username: 'ana', email: undefined, password: 'Passw0rd!', roleId: 99, ...over }) as any;
+
+    function withCreateMocks(roleExists: boolean) {
+        const built = buildService();
+        built.rawRepo.findOne.mockResolvedValue(null); // ningún usuario con ese username/email
+        (built.rawRepo as any).create = vi.fn(() => ({}));
+        (built.rawRepo as any).save   = vi.fn(async (e: any) => ({ id: 1, ...e }));
+        built.roleRepo.existsBy.mockResolvedValue(roleExists);
+        return built;
+    }
+
+    it('create: un roleId que no existe → InvalidRoleException y no se guarda nada', async () => {
+        const { service, rawRepo, roleRepo } = withCreateMocks(false);
+
+        await expect(service.create(UserDto, create())).rejects.toThrow(InvalidRoleException);
+
+        expect(roleRepo.existsBy).toHaveBeenCalledWith({ id: 99 });
+        expect((rawRepo as any).save).not.toHaveBeenCalled();
+    });
+
+    it('create: con un rol que existe sigue guardando', async () => {
+        const { service, rawRepo } = withCreateMocks(true);
+        rawRepo.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null).mockResolvedValue({ id: 1 });
+
+        await service.create(UserDto, create({ roleId: 2 }));
+
+        expect((rawRepo as any).save).toHaveBeenCalledTimes(1);
+    });
+
+    it('create: dentro de una transacción consulta el rol con el manager, no con el repo global', async () => {
+        const { service, roleRepo } = withCreateMocks(true);
+        const managerRoleRepo = { existsBy: vi.fn().mockResolvedValue(false) };
+        const manager = { getRepository: vi.fn(() => managerRoleRepo) };
+
+        await expect(service.create(UserDto, create(), { manager } as any)).rejects.toThrow(InvalidRoleException);
+
+        expect(managerRoleRepo.existsBy).toHaveBeenCalled();
+        expect(roleRepo.existsBy).not.toHaveBeenCalled();
+    });
+
+    it('update: un roleId que no existe → InvalidRoleException y no se actualiza nada', async () => {
+        const { service, rawRepo, roleRepo } = buildService();
+        rawRepo.findOne.mockResolvedValue({ id: 5, username: 'ana', email: null });
+        roleRepo.existsBy.mockResolvedValue(false);
+
+        await expect(service.update(UserDto, 5, { roleId: 99 } as any)).rejects.toThrow(InvalidRoleException);
+
+        expect(rawRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('update: sin roleId en el body no consulta roles', async () => {
+        const { service, rawRepo, roleRepo } = buildService();
+        rawRepo.findOne.mockResolvedValue({ id: 5, username: 'ana', email: null });
+
+        await service.update(UserDto, 5, { fullName: 'Ana B' } as any);
+
+        expect(roleRepo.existsBy).not.toHaveBeenCalled();
+        expect(rawRepo.update).toHaveBeenCalledWith(5, { fullName: 'Ana B' });
     });
 });

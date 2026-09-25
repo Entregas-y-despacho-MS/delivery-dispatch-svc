@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, ILike, QueryFailedError, Repository } from 'typeorm';
+import { escapeLike } from '../../../../shared/utils/like.util.js';
 import { Vehicle } from '../entities/vehicle.entity.js';
 import { VehicleStatus } from '../../vehicle-statuses/entities/vehicle-status.entity.js';
 import { VehicleDto } from '../dto/vehicle.dto.js';
@@ -38,11 +39,13 @@ export class VehiclesService {
             ...(params.vehicleStatusId !== undefined && { vehicleStatusId: params.vehicleStatusId }),
         };
         // The status filter must be repeated in every OR branch, or the search would bypass it.
-        const where: FindOptionsWhere<Vehicle> | FindOptionsWhere<Vehicle>[] = params.search
+        const search  = params.search?.trim();
+        const pattern = search ? `%${escapeLike(search)}%` : undefined;
+        const where: FindOptionsWhere<Vehicle> | FindOptionsWhere<Vehicle>[] = pattern
             ? [
-                { ...base, plate: ILike(`%${params.search}%`) },
-                { ...base, model: ILike(`%${params.search}%`) },
-                { ...base, type:  ILike(`%${params.search}%`) },
+                { ...base, plate: ILike(pattern) },
+                { ...base, model: ILike(pattern) },
+                { ...base, type:  ILike(pattern) },
             ]
             : base;
 

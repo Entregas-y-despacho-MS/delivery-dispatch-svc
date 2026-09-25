@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, ILike, Repository } from 'typeorm';
+import { escapeLike } from '../../../../shared/utils/like.util.js';
 import { DeliveryZone } from '../entities/delivery-zone.entity.js';
 import { DeliveryZoneDto } from '../dto/delivery-zone.dto.js';
 import { CreateDeliveryZoneDto } from '../dto/create-delivery-zone.dto.js';
@@ -25,11 +26,13 @@ export class DeliveryZonesService {
     // ── Queries ───────────────────────────────────────────────────────────────
 
     async findAll<T>(dto: new () => T, params: FindAllDeliveryZonesParamsDto): Promise<PaginationResponseDto<T>> {
+        const search  = params.search?.trim();
+        const pattern = search ? `%${escapeLike(search)}%` : undefined;
         return this.repo.findPaginated({
             dto,
             pagination: params,
-            where: params.search
-                ? [{ code: ILike(`%${params.search}%`) }, { name: ILike(`%${params.search}%`) }]
+            where: pattern
+                ? [{ code: ILike(pattern) }, { name: ILike(pattern) }]
                 : {},
             order: { name: 'ASC' },
         });
