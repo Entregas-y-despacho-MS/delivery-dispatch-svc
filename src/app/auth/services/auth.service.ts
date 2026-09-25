@@ -57,6 +57,7 @@ export class AuthService {
         }
 
         await this.usersService.setLockoutState(user.id, 0, null);
+        await this.usersService.setLastLogin(user.id); // RF-A28 — shown in the user list
 
         const payload: JwtPayload = {
             sub:      user.id,

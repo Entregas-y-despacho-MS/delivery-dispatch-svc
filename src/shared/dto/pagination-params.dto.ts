@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, Min, IsOptional } from 'class-validator';
+import { IsInt, Max, Min, IsOptional } from 'class-validator';
 
 // Query params arrive as strings — @Type(() => Number) converts them before validation.
 // Requires ValidationPipe({ transform: true }) in main.ts.
@@ -12,10 +12,11 @@ export class PaginationParamsDto {
     @Min(1,  { message: "The 'page' parameter must be >= 1." })
     page: number = 1;
 
-    @ApiPropertyOptional({ description: 'Results per page. Default: 10.', example: 20, default: 10 })
+    @ApiPropertyOptional({ description: 'Results per page. Default: 10, maximum: 100.', example: 20, default: 10, maximum: 100 })
     @IsOptional()
     @Type(() => Number)
     @IsInt({ message: "The 'limit' parameter must be an integer." })
     @Min(1,  { message: "The 'limit' parameter must be >= 1." })
+    @Max(100, { message: "The 'limit' parameter must be <= 100." })
     limit: number = 10;
 }

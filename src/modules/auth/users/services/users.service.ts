@@ -1,20 +1,22 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsWhere, Repository } from 'typeorm';
+import { FindOptionsOrder, FindOptionsWhere, ILike, IsNull, LessThanOrEqual, MoreThan, Repository } from 'typeorm';
 import { User } from '../entities/user.entity.js';
 import { PasswordHistory } from '../entities/password-history.entity.js';
 import { UserDto } from '../dto/user.dto.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
 import { UpdateUserDto } from '../dto/update-user.dto.js';
-import { FindAllUsersParamsDto } from '../dto/find-all-users-params.dto.js';
+import { FindAllUsersParamsDto, UserSortBy } from '../dto/find-all-users-params.dto.js';
 import {
     UserNotFoundException, UserAlreadyExistsException, PasswordTooShortException,
-    PasswordRecentlyUsedException,
+    PasswordRecentlyUsedException, ConflictingUserFiltersException,
 } from '../exceptions/index.js';
 import { DtoRepository } from '../../../../shared/orm/index.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
 import { FindOptions, MutationOptions } from '../../../../shared/dto/options.dto.js';
 import { hashPassword, comparePassword } from '../../../../shared/utils/crypto.util.js';
+import { escapeLike } from '../../../../shared/utils/like.util.js';
+import { UserStatusEnum } from '../../../../shared/enums/index.js';
 import { SettingsService } from '../../../settings/services/settings.service.js';
 
 // How many previous passwords are checked for reuse (RF-A25, Escenario 3).
@@ -36,15 +38,20 @@ export class UsersService {
 
     // ── Queries ───────────────────────────────────────────────────────────────
 
+    /**
+     * RF-A28 — server-side pagination + combinable filters (role, status, text search) + sorting.
+     * Every filter narrows the result ("and"); only the text search matches across several columns.
+     */
     async findAll<T>(dto: new () => T, params: FindAllUsersParamsDto): Promise<PaginationResponseDto<T>> {
+        // `active` (raw column) and `status` (derived) overlap — combining them is ambiguous.
+        if (params.active !== undefined && params.status !== undefined) throw new ConflictingUserFiltersException();
+
+        const where = this.buildListWhere(params, new Date());
         return this.repo.findPaginated({
             dto,
             pagination: params,
-            where: {
-                ...(params.roleId !== undefined && { roleId: params.roleId }),
-                ...(params.active !== undefined && { active: params.active }),
-            },
-            order: { createdAt: 'DESC' },
+            where:      where.length === 1 ? where[0] : where,
+            order:      this.buildListOrder(params),
         });
     }
 
@@ -116,6 +123,11 @@ export class UsersService {
 
     async setLockoutState(userId: number, failedAttempts: number, lockedUntil: Date | null): Promise<void> {
         await this.rawRepo.update(userId, { failedAttempts, lockedUntil });
+    }
+
+    /** RF-A28 — called on every successful login (not on token refresh). */
+    async setLastLogin(userId: number): Promise<void> {
+        await this.rawRepo.update(userId, { lastLoginAt: new Date() });
     }
 
     async setPasswordResetToken(userId: number, token: string, expiresAt: Date): Promise<void> {
@@ -229,6 +241,45 @@ export class UsersService {
     private async existsBy(where: FindOptionsWhere<User>, excludeId?: number): Promise<boolean> {
         const found = await this.rawRepo.findOne({ where, withDeleted: true });
         return !!found && found.id !== excludeId;
+    }
+
+    /**
+     * TypeORM expresses OR as an array of where-objects, so a filter that needs an OR (the text
+     * search over 3 columns, the "active" status = no lock OR expired lock) multiplies the branches:
+     * every existing branch is combined with every alternative. At most 2 x 3 = 6 branches.
+     */
+    private buildListWhere(params: FindAllUsersParamsDto, now: Date): FindOptionsWhere<User>[] {
+        let branches: FindOptionsWhere<User>[] = [{
+            ...(params.roleId !== undefined && { roleId: params.roleId }),
+            ...(params.active !== undefined && { active: params.active }),
+        }];
+        const and = (alternatives: FindOptionsWhere<User>[]) => {
+            branches = branches.flatMap((branch) => alternatives.map((alt) => ({ ...branch, ...alt })));
+        };
+
+        switch (params.status) {
+            case UserStatusEnum.INACTIVE: and([{ active: false }]); break;
+            case UserStatusEnum.LOCKED:   and([{ active: true, lockedUntil: MoreThan(now) }]); break;
+            case UserStatusEnum.ACTIVE:
+                and([{ active: true, lockedUntil: IsNull() }, { active: true, lockedUntil: LessThanOrEqual(now) }]);
+                break;
+        }
+
+        const search = params.search?.trim();
+        if (search) {
+            const pattern = `%${escapeLike(search)}%`;
+            and([{ fullName: ILike(pattern) }, { username: ILike(pattern) }, { email: ILike(pattern) }]);
+        }
+        return branches;
+    }
+
+    /** Default: newest first. `id` breaks ties so a page boundary never repeats or skips a row. */
+    private buildListOrder(params: FindAllUsersParamsDto): FindOptionsOrder<User> {
+        const sortBy    = params.sortBy ?? UserSortBy.CREATED_AT;
+        const direction = (params.sortOrder ?? 'desc').toUpperCase() as 'ASC' | 'DESC';
+        // Users who never logged in have no date: keep them last in either direction.
+        const primary = sortBy === UserSortBy.LAST_LOGIN_AT ? { direction, nulls: 'LAST' as const } : direction;
+        return { [sortBy]: primary, id: 'ASC' };
     }
 
     private async _findOne<T>(dto: new () => T, where: FindOptionsWhere<User>, throwException: boolean): Promise<T | null> {

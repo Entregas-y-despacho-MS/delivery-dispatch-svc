@@ -54,6 +54,7 @@ function buildService(options: ServiceOptions = {}) {
         findOneByUsername: vi.fn().mockResolvedValue(user),
         findOneById:        vi.fn().mockResolvedValue(user ? { id: user.id, username: user.username } : null),
         setLockoutState:    vi.fn(),
+        setLastLogin:       vi.fn(),
         setRefreshToken:    vi.fn(),
     };
     const jwtService = { sign: vi.fn().mockReturnValue('signed.jwt.token') };
@@ -79,6 +80,7 @@ describe('AuthService — login / bloqueo temporal (RF-A21, ST-13.3)', () => {
         expect(result.accessToken).toBeDefined();
         expect(result.refreshToken).toBeDefined();
         expect(usersService.setLockoutState).toHaveBeenCalledWith(user.id, 0, null);
+        expect(usersService.setLastLogin).toHaveBeenCalledWith(user.id); // RF-A28: último acceso
     });
 
     it('username inexistente → INVALID_CREDENTIALS (mensaje genérico, no revela si existe)', async () => {
@@ -96,6 +98,7 @@ describe('AuthService — login / bloqueo temporal (RF-A21, ST-13.3)', () => {
             .rejects.toThrow(InvalidCredentialsException);
 
         expect(usersService.setLockoutState).toHaveBeenCalledWith(user.id, 2, null);
+        expect(usersService.setLastLogin).not.toHaveBeenCalled(); // un intento fallido no es un acceso
     });
 
     it('llega al máximo de intentos configurado → bloquea la cuenta (lockedUntil futuro)', async () => {
@@ -125,6 +128,7 @@ describe('AuthService — login / bloqueo temporal (RF-A21, ST-13.3)', () => {
             .rejects.toThrow(AccountLockedException);
 
         expect(usersService.setLockoutState).not.toHaveBeenCalled();
+        expect(usersService.setLastLogin).not.toHaveBeenCalled();
     });
 
     it('respeta settings.max_failed_login_attempts configurado, no un valor fijo', async () => {
@@ -142,10 +146,11 @@ describe('AuthService — login / bloqueo temporal (RF-A21, ST-13.3)', () => {
 
     it('cuenta inactiva → INVALID_CREDENTIALS, mismo mensaje genérico que credenciales inválidas', async () => {
         const user = buildAuthUser({ passwordHash: await hashPassword('Passw0rd!'), active: false });
-        const { service } = buildService({ user });
+        const { service, usersService } = buildService({ user });
 
         await expect(service.login({ username: user.username, password: 'Passw0rd!' } as any))
             .rejects.toThrow(InvalidCredentialsException);
+        expect(usersService.setLastLogin).not.toHaveBeenCalled();
     });
 });
 

@@ -14,18 +14,21 @@ import { FindAllUsersParamsDto } from '../dto/find-all-users-params.dto.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
 import { ApiNotFound, ApiUnauthorized, ApiValidationError, ApiConflict, ApiBadRequest } from '../../../../shared/utils/swagger/index.js';
 import { FindAllUsersResponseDto } from '../dto/find-all-users-response.dto.js';
-import { AdminOnly } from '../../../../app/auth/decorators/index.js';
+import { AdminOnly, Roles } from '../../../../app/auth/decorators/index.js';
+import { RoleEnum } from '../../../../shared/enums/index.js';
 
 /**
  * Error dictionary for this module:
  *   USER_NOT_FOUND        404 — No user with the given ID exists or it was soft-deleted.
  *   USER_ALREADY_EXISTS   409 — A user with the given username or email already exists.
  *   PASSWORD_TOO_SHORT    400 — Password is shorter than settings.password_min_length.
+ *   CONFLICTING_USER_FILTERS 400 — The list was asked with both `active` and `status`.
  *   INVALID_TOKEN         401 — JWT is missing, malformed, or expired.
  *   INSUFFICIENT_PERMISSIONS 403 — Authenticated but role does not meet the endpoint requirement.
  *
  * Internal user management — this is an admin-managed system, every endpoint here requires
- * @AdminOnly() (root bypasses via RolesGuard as usual).
+ * @AdminOnly() (root bypasses via RolesGuard as usual), except the list, which the coordinator also
+ * uses (RF-A28).
  */
 @ApiTags('Users')
 @ApiBearerAuth('access-token')
@@ -33,13 +36,16 @@ import { AdminOnly } from '../../../../app/auth/decorators/index.js';
 export class UsersController {
     constructor(private readonly usersService: UsersService) {}
 
+    // RF-A28 — the list is also for the logistics coordinator (audit / find available operators);
+    // everything else in this controller stays admin-only.
     @Get()
-    @AdminOnly()
+    @Roles(RoleEnum.ADMIN, RoleEnum.COORDINATOR)
     @ApiOperation({
         summary:     'List users',
-        description: 'Returns a paginated list of users. Filterable by roleId and active status. Requires admin role or root.',
+        description: 'Returns a paginated list of users (10 per page by default, max 100). Filters combine with "and": roleId, status (active | inactive | locked), or active (legacy boolean, not combinable with status), plus a text search over name, username and email. Sortable by fullName, username, createdAt or lastLoginAt. Each user carries its derived status and last access date. Requires admin or coordinator role, or root.',
     })
     @ApiOkResponse({ type: FindAllUsersResponseDto })
+    @ApiBadRequest({ code: 'CONFLICTING_USER_FILTERS', message: "Use either the 'active' or the 'status' filter, not both." })
     @ApiUnauthorized(
         { code: 'INVALID_TOKEN',   message: 'Invalid or expired token.' },
     )

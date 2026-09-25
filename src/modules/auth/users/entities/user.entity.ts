@@ -31,6 +31,10 @@ export class User extends BaseEntitySoftDelete {
     @Column({ name: 'locked_until', type: 'timestamptz', nullable: true })
     lockedUntil: Date | null;
 
+    // Last successful login (RF-A28). NULL = never logged in.
+    @Column({ name: 'last_login_at', type: 'timestamptz', nullable: true })
+    lastLoginAt: Date | null;
+
     @Column({ name: 'refresh_token_hash', type: 'varchar', length: 255, nullable: true })
     refreshTokenHash: string | null;
 

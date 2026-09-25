@@ -4,7 +4,8 @@ import { RolesService } from '../services/roles.service.js';
 import { RoleDto } from '../dto/role.dto.js';
 import { FindAllRolesParamsDto } from '../dto/find-all-roles-params.dto.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
-import { AdminOnly } from '../../../../app/auth/decorators/index.js';
+import { Roles } from '../../../../app/auth/decorators/index.js';
+import { RoleEnum } from '../../../../shared/enums/index.js';
 import { ApiNotFound, ApiUnauthorized } from '../../../../shared/utils/swagger/index.js';
 
 /**
@@ -13,7 +14,8 @@ import { ApiNotFound, ApiUnauthorized } from '../../../../shared/utils/swagger/i
  *   INVALID_TOKEN         401 — JWT is missing, malformed, or expired.
  *   INSUFFICIENT_PERMISSIONS 403 — Authenticated but role does not meet the endpoint requirement.
  *
- * Read-only — roles are a fixed catalog, not administrable via the API.
+ * Read-only — roles are a fixed catalog, not administrable via the API. The coordinator can read it
+ * too: the user list (RF-A28) needs it to fill the role filter.
  */
 @ApiTags('Roles')
 @ApiBearerAuth('access-token')
@@ -22,10 +24,10 @@ export class RolesController {
     constructor(private readonly rolesService: RolesService) {}
 
     @Get()
-    @AdminOnly()
+    @Roles(RoleEnum.ADMIN, RoleEnum.COORDINATOR)
     @ApiOperation({
         summary:     'List roles',
-        description: 'Returns a paginated list of roles, searchable by name. Requires admin role or root.',
+        description: 'Returns a paginated list of roles, searchable by name. Requires admin or coordinator role, or root.',
     })
     @ApiOkResponse({ type: PaginationResponseDto })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
@@ -34,10 +36,10 @@ export class RolesController {
     }
 
     @Get(':id')
-    @AdminOnly()
+    @Roles(RoleEnum.ADMIN, RoleEnum.COORDINATOR)
     @ApiOperation({
         summary:     'Get a role by ID',
-        description: 'Returns a single role by its numeric ID. Requires admin role or root.',
+        description: 'Returns a single role by its numeric ID. Requires admin or coordinator role, or root.',
     })
     @ApiOkResponse({ type: RoleDto })
     @ApiNotFound({ code: 'ROLE_NOT_FOUND', message: 'Role not found.' })
