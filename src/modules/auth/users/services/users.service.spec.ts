@@ -132,6 +132,23 @@ describe('UsersService.findAll — consulta del listado (RF-A28)', () => {
         expect(options.where).toEqual({ roleId: 4, active: true });
     });
 
+    describe('active vacío (?active=)', () => {
+        it('no filtra: el DTO lo convierte en null y no debe llegar al where como active = null (eso rompía la consulta)', async () => {
+            const { options } = await run({ active: '' });
+            expect(options.where).toEqual({});
+        });
+
+        it('combinado con otros filtros, los demás se aplican igual', async () => {
+            const { options } = await run({ active: '', roleId: '3' });
+            expect(options.where).toEqual({ roleId: 3 });
+        });
+
+        it('con status no cuenta como "active y status a la vez": no da CONFLICTING_USER_FILTERS', async () => {
+            const { options } = await run({ active: '', status: 'inactive' });
+            expect(options.where).toEqual({ active: false });
+        });
+    });
+
     describe('status (derivado)', () => {
         it('inactive → active = false', async () => {
             const { options } = await run({ status: 'inactive' });

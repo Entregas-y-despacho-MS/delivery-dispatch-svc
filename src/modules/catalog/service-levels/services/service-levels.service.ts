@@ -32,7 +32,8 @@ export class ServiceLevelsService {
     /** Priority hierarchy first (1 = highest), then the tighter target time, then id for a stable order. */
     async findAll<T>(dto: new () => T, params: FindAllServiceLevelsParamsDto): Promise<PaginationResponseDto<T>> {
         const base: FindOptionsWhere<ServiceLevel> = {
-            ...(params.active !== undefined && { active: params.active }),
+            // `?active=` (empty) is converted to null by the DTO: it means "no filter", not "active IS NULL".
+            ...(params.active !== undefined && params.active !== null && { active: params.active }),
         };
         // The active filter must be repeated in every OR branch, or the search would bypass it.
         const search = params.search?.trim();

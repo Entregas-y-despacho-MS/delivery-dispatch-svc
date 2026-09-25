@@ -43,8 +43,12 @@ export class UsersService {
      * Every filter narrows the result ("and"); only the text search matches across several columns.
      */
     async findAll<T>(dto: new () => T, params: FindAllUsersParamsDto): Promise<PaginationResponseDto<T>> {
+        // `?active=` (empty) is converted to null by the DTO: it means "no filter", so it is neither
+        // combined with `status` nor turned into `active IS NULL` (which made the query fail).
+        const hasActive = params.active !== undefined && params.active !== null;
+
         // `active` (raw column) and `status` (derived) overlap — combining them is ambiguous.
-        if (params.active !== undefined && params.status !== undefined) throw new ConflictingUserFiltersException();
+        if (hasActive && params.status !== undefined) throw new ConflictingUserFiltersException();
 
         const where = this.buildListWhere(params, new Date());
         return this.repo.findPaginated({
@@ -251,7 +255,7 @@ export class UsersService {
     private buildListWhere(params: FindAllUsersParamsDto, now: Date): FindOptionsWhere<User>[] {
         let branches: FindOptionsWhere<User>[] = [{
             ...(params.roleId !== undefined && { roleId: params.roleId }),
-            ...(params.active !== undefined && { active: params.active }),
+            ...(params.active !== undefined && params.active !== null && { active: params.active }),
         }];
         const and = (alternatives: FindOptionsWhere<User>[]) => {
             branches = branches.flatMap((branch) => alternatives.map((alt) => ({ ...branch, ...alt })));
