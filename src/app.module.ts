@@ -7,6 +7,7 @@ import { UsersModule } from './modules/auth/users/users.module.js';
 import { RolesModule } from './modules/auth/roles/roles.module.js';
 import { DeliveryZonesModule } from './modules/catalog/delivery-zones/delivery-zones.module.js';
 import { VehiclesModule } from './modules/fleet/vehicles/vehicles.module.js';
+import { ServiceLevelsModule } from './modules/catalog/service-levels/service-levels.module.js';
 import { AuthModule } from './app/auth/auth.module.js';
 import { SyncModule } from './app/sync/sync.module.js';
 import { MailerModule } from './plugins/mailer/mailer.module.js';
@@ -26,6 +27,7 @@ import { OsrmModule } from './plugins/osrm/osrm.module.js';
         RolesModule,
         DeliveryZonesModule,
         VehiclesModule,
+        ServiceLevelsModule,
         AuthModule,
         SyncModule,
         MailerModule.register(),
