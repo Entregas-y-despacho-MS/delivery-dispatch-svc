@@ -39,7 +39,7 @@ export class ServiceLevelsController {
         description: 'Returns a paginated list (10 per page by default, up to 100) of the service levels that have not been deleted, ordered by the priority hierarchy: priority 1 first, then the tighter target time, then ID. The order is fixed. `search` matches the name or the description; `active` narrows to enabled or disabled levels, and it is kept when a search is also given. Requires coordinator role or root.',
     })
     @ApiOkResponse({ type: FindAllServiceLevelsResponseDto })
-    @ApiBadRequests({ validation: true })
+    @ApiBadRequests({ validation: true, example: ["The 'limit' parameter must be <= 100."] })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async findAll(@Query() params: FindAllServiceLevelsParamsDto): Promise<PaginationResponseDto<ServiceLevelDto>> {
         return await this.serviceLevelsService.findAll(ServiceLevelDto, params);
@@ -68,7 +68,7 @@ export class ServiceLevelsController {
         description: 'Creates a service level with its target time (SLA: an integer number of minutes, from 15 to 43200) and its place in the priority hierarchy (1 = highest; levels may share a value). The name is required, is trimmed, and must not be used by another level. The description is optional. The new level is always created enabled (`active: true`), so `active` is not accepted here. 400 when a value is invalid (a target time under 15 minutes is rejected and nothing is saved); 409 when the name is taken. Requires coordinator role or root.',
     })
     @ApiCreatedResponse({ type: ServiceLevelDto })
-    @ApiBadRequests({ validation: true })
+    @ApiBadRequests({ validation: true, example: ['Name is required.', 'Target time must be at least 15 minutes.'] })
     @ApiConflict({ code: 'SERVICE_LEVEL_NAME_ALREADY_EXISTS', message: 'A service level with this name already exists.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async create(@Body() dto: CreateServiceLevelDto): Promise<ServiceLevelDto> {
@@ -83,7 +83,7 @@ export class ServiceLevelsController {
     })
     @ApiIdParam('Service level')
     @ApiOkResponse({ type: ServiceLevelDto })
-    @ApiBadRequests({ validation: true, id: true })
+    @ApiBadRequests({ validation: true, example: ['Target time must be at least 15 minutes.'], id: true })
     @ApiNotFound({ code: 'SERVICE_LEVEL_NOT_FOUND', message: 'Service level not found.' })
     @ApiConflict({ code: 'SERVICE_LEVEL_NAME_ALREADY_EXISTS', message: 'A service level with this name already exists.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })

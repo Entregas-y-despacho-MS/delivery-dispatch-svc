@@ -45,7 +45,7 @@ export class UsersController {
         summary:     'List users',
         description: 'Returns a paginated list of users (10 per page by default, up to 100), newest first unless `sortBy`/`sortOrder` say otherwise. All filters are optional and combine with "and": `roleId` (see GET /roles), `status` (active | inactive | locked) or `active` (true/false; do not send both, that is a 400 CONFLICTING_USER_FILTERS), and `search` over full name, username and email. Each user carries its derived `status` and last login date. Requires admin or coordinator role, or root.',
     })
-    @ApiBadRequests({ validation: true, errors: [{ code: 'CONFLICTING_USER_FILTERS', message: "Use either the 'active' or the 'status' filter, not both." }] })
+    @ApiBadRequests({ validation: true, example: ["The 'limit' parameter must be <= 100."], errors: [{ code: 'CONFLICTING_USER_FILTERS', message: "Use either the 'active' or the 'status' filter, not both." }] })
     @ApiOkResponse({ type: FindAllUsersResponseDto })
     @ApiUnauthorized(
         { code: 'INVALID_TOKEN',   message: 'Invalid or expired token.' },
@@ -76,7 +76,7 @@ export class UsersController {
         summary:     'Create a user',
         description: 'Creates an internal user account. `fullName`, `username`, `password` and `roleId` are required; `email` is optional. `username` (and `email`, if given) must not belong to another user (409 USER_ALREADY_EXISTS). The password must be at least 8 characters with an uppercase letter, a lowercase letter, a number and a symbol, and at least the length configured in settings (`password_min_length`, 400 PASSWORD_TOO_SHORT). The account is created active, and the user is asked to change the password at first login. Requires admin role or root.',
     })
-    @ApiBadRequests({ validation: true, errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }, { code: 'INVALID_ROLE', message: 'The given role does not exist.' }] })
+    @ApiBadRequests({ validation: true, example: ['Full name is required.', 'Role ID must be an integer.'], errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }, { code: 'INVALID_ROLE', message: 'The given role does not exist.' }] })
     @ApiCreatedResponse({ type: UserDto })
     @ApiConflict({ code: 'USER_ALREADY_EXISTS', message: 'A user with this username or email already exists.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
@@ -91,7 +91,7 @@ export class UsersController {
         description: 'Partially updates a user: only the fields sent are changed. `email` can be cleared by sending `null`; every other field rejects `null`. `active: false` deactivates the account (the user can no longer log in) and `true` reactivates it. A new `password` resets the user\'s password (admin action: the password history is not checked, and the user\'s own sessions are not closed). A changed `username` or `email` must not belong to another user (409), and a new `roleId` must exist (400 INVALID_ROLE). Requires admin role or root.',
     })
     @ApiIdParam('User')
-    @ApiBadRequests({ validation: true, id: true, errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }, { code: 'INVALID_ROLE', message: 'The given role does not exist.' }] })
+    @ApiBadRequests({ validation: true, example: ['Email must be a valid email address.'], id: true, errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }, { code: 'INVALID_ROLE', message: 'The given role does not exist.' }] })
     @ApiOkResponse({ type: UserDto })
     @ApiNotFound({ code: 'USER_NOT_FOUND', message: 'User not found.' })
     @ApiConflict({ code: 'USER_ALREADY_EXISTS', message: 'A user with this username or email already exists.' })

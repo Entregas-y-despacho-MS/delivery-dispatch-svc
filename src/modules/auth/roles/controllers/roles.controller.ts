@@ -30,7 +30,7 @@ export class RolesController {
         summary:     'List roles',
         description: 'Returns the roles (root, admin, coordinator, supervisor, driver), paginated. `search` matches the name. Roles are a fixed catalog; use their `id` as `roleId` when creating users or filtering the user list. Requires admin or coordinator role, or root.',
     })
-    @ApiBadRequests({ validation: true })
+    @ApiBadRequests({ validation: true, example: ["The 'limit' parameter must be <= 100."] })
     @ApiOkResponse({ type: FindAllRolesResponseDto })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async findAll(@Query() params: FindAllRolesParamsDto): Promise<PaginationResponseDto<RoleDto>> {

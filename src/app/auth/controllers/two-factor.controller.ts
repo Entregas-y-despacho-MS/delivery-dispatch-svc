@@ -51,7 +51,7 @@ export class TwoFactorController {
         summary:     'Confirm 2FA enrollment',
         description: 'Step 2: send the current 6-digit code shown by the authenticator app to prove the secret was scanned. On success 2FA is enabled and every future login must include `totpCode` (401 INVALID_TOTP_CODE if the code does not match). Requires any authenticated user.',
     })
-    @ApiBadRequests({ validation: true })
+    @ApiBadRequests({ validation: true, example: ['Code must be 6 digits.'] })
     @ApiNoContentResponse({ description: '2FA enabled.' })
     @ApiUnauthorized(
         { code: 'INVALID_TOTP_CODE', message: 'Invalid TOTP code.' },
@@ -71,7 +71,7 @@ export class TwoFactorController {
         summary:     'Disable 2FA',
         description: 'Turns off two-factor authentication for your own account and discards the secret. Requires the current password as confirmation (401 INVALID_CREDENTIALS if wrong). Requires any authenticated user.',
     })
-    @ApiBadRequests({ validation: true })
+    @ApiBadRequests({ validation: true, example: ['Password is required.'] })
     @ApiNoContentResponse({ description: '2FA disabled.' })
     @ApiUnauthorized(
         { code: 'INVALID_CREDENTIALS', message: 'Invalid credentials.' },

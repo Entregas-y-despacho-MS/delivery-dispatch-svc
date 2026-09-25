@@ -69,6 +69,28 @@ describe('Swagger document (e2e)', () => {
         expect(bad).toEqual([]);
     });
 
+    it('the 400 validation example uses messages this endpoint can really return (not the generic placeholder)', () => {
+        const bad = operations()
+            .filter(({ op }) => op.responses['400']?.content?.['application/json']?.examples?.VALIDATION_FAILED)
+            .filter(({ op }) => op.responses['400'].content['application/json'].examples.VALIDATION_FAILED.value.message.includes('A field is invalid.'))
+            .map((o) => o.key);
+        expect(bad).toEqual([]);
+    });
+
+    it('optional filters are not pre-filled: Swagger UI sends every `example` on "Try it out", so only page/limit carry one', () => {
+        const bad = operations().flatMap(({ key, op }) => (op.parameters ?? [])
+            .filter((p: any) => p.in === 'query' && !['page', 'limit'].includes(p.name) && (p.example !== undefined || p.schema?.example !== undefined))
+            .map((p: any) => `${key} → ${p.name}`));
+        expect(bad).toEqual([]);
+    });
+
+    it('page and limit are pre-filled with their defaults (1 and 10), so "Try it out" returns the first page', () => {
+        const bad = operations().flatMap(({ key, op }) => (op.parameters ?? [])
+            .filter((p: any) => p.in === 'query' && ((p.name === 'page' && p.schema?.example !== 1) || (p.name === 'limit' && p.schema?.example !== 10)))
+            .map((p: any) => `${key} → ${p.name}`));
+        expect(bad).toEqual([]);
+    });
+
     it('every schema field is described and no nullable field is published as a bare "object"', () => {
         const bad: string[] = [];
         for (const [name, schema] of Object.entries(doc.components?.schemas ?? {})) {

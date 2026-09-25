@@ -124,6 +124,8 @@ export const ApiBadRequest = (...errors: ErrorExample[]) => {
 export interface BadRequestOptions {
     /** The endpoint has a body or query params checked by ValidationPipe (message is an array). */
     validation?: boolean;
+    /** The messages shown in the validation example — pick ones this endpoint can really return. */
+    example?:    string[];
     /** The endpoint has a numeric `:id` path param (ParseIntPipe rejects a non-numeric value). */
     id?:         boolean;
     /** Business-rule rejections specific to this endpoint (message is a string, `error` a domain code). */
@@ -137,14 +139,14 @@ export interface BadRequestOptions {
  * endpoint that can fail validation AND a business rule must use this instead of stacking
  * `ApiValidationError` + `ApiBadRequest`.
  */
-export const ApiBadRequests = ({ validation = false, id = false, errors = [] }: BadRequestOptions) => {
+export const ApiBadRequests = ({ validation = false, example, id = false, errors = [] }: BadRequestOptions) => {
     const examples: Record<string, { summary: string; value: object }> = {};
     const codes: string[] = [];
     if (validation) {
         codes.push('Bad Request');
         examples['VALIDATION_FAILED'] = {
             summary: 'A field is invalid — one message per problem (message is an array)',
-            value: { ...errorBody(400, 'Bad Request', 'x'), message: ['name should not be empty', 'targetTimeMin must not be less than 15'] },
+            value: { ...errorBody(400, 'Bad Request', 'x'), message: example ?? ['A field is invalid.'] },
         };
     }
     if (id) {

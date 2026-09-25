@@ -41,7 +41,7 @@ export class SettingsController {
         description: 'Changes the `value` of the setting identified by `key` (see GET /settings for the valid keys; an unknown key is 404 SETTING_NOT_FOUND). Values are always sent as text (e.g. "5", "08:00") and are stored as given, so send one that is valid for that key. The change applies immediately, with no restart. Requires admin role or root.',
     })
     @ApiParam({ name: 'key', example: 'max_failed_login_attempts', description: 'Key of the setting, as listed by GET /settings' })
-    @ApiBadRequests({ validation: true })
+    @ApiBadRequests({ validation: true, example: ['Value is required.'] })
     @ApiOkResponse({ type: SettingDto })
     @ApiNotFound({ code: 'SETTING_NOT_FOUND', message: 'Setting not found.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })

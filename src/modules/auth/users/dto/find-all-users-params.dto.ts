@@ -13,7 +13,7 @@ export enum UserSortBy {
 }
 
 export class FindAllUsersParamsDto extends PaginationParamsDto {
-    @ApiPropertyOptional({ type: 'integer', example: 2, description: 'Only users with this role. Use an ID from GET /roles' })
+    @ApiPropertyOptional({ type: 'integer', description: 'Only users with this role. Use an ID from GET /roles (e.g. 2)' })
     @IsOptional()
     @Type(() => Number)
     @IsInt()
@@ -28,13 +28,13 @@ export class FindAllUsersParamsDto extends PaginationParamsDto {
     @IsEnum(UserStatusEnum, { message: "The 'status' parameter must be one of: active, inactive, locked." })
     status?: UserStatusEnum;
 
-    @ApiPropertyOptional({ example: true, description: 'true = only active accounts, false = only deactivated ones (it looks at the `active` flag only; to tell locked users apart use `status`). Omit or send it empty for all. Cannot be combined with `status`.' })
+    @ApiPropertyOptional({ description: 'true = only active accounts, false = only deactivated ones (it looks at the `active` flag only; to tell locked users apart use `status`). Omit or send it empty for all. Cannot be combined with `status`.' })
     @IsOptional()
     @Transform(({ value }) => transformToBoolean(value, 'active'))
     @IsBoolean()
     active?: boolean;
 
-    @ApiPropertyOptional({ example: 'carlos', maxLength: 100, description: 'Text contained in the full name, username or email (case-insensitive). Combined with the other filters using "and".' })
+    @ApiPropertyOptional({ maxLength: 100, description: 'E.g. carlos. Text contained in the full name, username or email (case-insensitive). Combined with the other filters using "and".' })
     @IsOptional()
     @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
     @IsString()

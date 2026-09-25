@@ -37,7 +37,7 @@ export class DeliveryZonesController {
         summary:     'List delivery zones',
         description: 'Returns a paginated list of delivery zones (10 per page by default, up to 100). `search` matches the code or the name (case-insensitive). Requires coordinator role or root.',
     })
-    @ApiBadRequests({ validation: true })
+    @ApiBadRequests({ validation: true, example: ["The 'limit' parameter must be <= 100."] })
     @ApiOkResponse({ type: FindAllDeliveryZonesResponseDto })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async findAll(@Query() params: FindAllDeliveryZonesParamsDto): Promise<PaginationResponseDto<DeliveryZoneDto>> {
@@ -66,7 +66,7 @@ export class DeliveryZonesController {
         summary:     'Create a delivery zone',
         description: 'Creates a delivery zone. All three fields are required: a unique `code` (409 DELIVERY_ZONE_CODE_ALREADY_EXISTS if another zone uses it), a `name` and the base `estimatedTimeMin` (a positive whole number of minutes). Requires coordinator role or root.',
     })
-    @ApiBadRequests({ validation: true })
+    @ApiBadRequests({ validation: true, example: ['Code is required.', 'Estimated time must be a positive number.'] })
     @ApiCreatedResponse({ type: DeliveryZoneDto })
     @ApiConflict({ code: 'DELIVERY_ZONE_CODE_ALREADY_EXISTS', message: 'This code already belongs to another delivery zone.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
@@ -81,7 +81,7 @@ export class DeliveryZonesController {
         description: 'Partially updates a delivery zone: only the fields sent are changed, and `null` is rejected. A changed `code` must not belong to another zone (409). Requires coordinator role or root.',
     })
     @ApiIdParam('Delivery zone')
-    @ApiBadRequests({ validation: true, id: true })
+    @ApiBadRequests({ validation: true, example: ['Estimated time must be an integer.'], id: true })
     @ApiOkResponse({ type: DeliveryZoneDto })
     @ApiNotFound({ code: 'DELIVERY_ZONE_NOT_FOUND', message: 'Delivery zone not found.' })
     @ApiConflict({ code: 'DELIVERY_ZONE_CODE_ALREADY_EXISTS', message: 'This code already belongs to another delivery zone.' })

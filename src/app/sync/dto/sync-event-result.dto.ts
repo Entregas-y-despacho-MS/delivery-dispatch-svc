@@ -15,7 +15,7 @@ export class SyncEventResultDto {
 
     // Only present when outcome === FAILED — lets the device know this one still needs a retry
     // (with a fix), instead of silently marking it synced: true.
-    @ApiPropertyOptional({ example: 'Dispatch not found.', description: 'Why it failed. Only present when outcome = failed' })
+    @ApiPropertyOptional({ description: 'Why it failed (e.g. "Dispatch not found."). Only present when outcome = failed' })
     error?: string;
 }
 

@@ -39,7 +39,7 @@ export class VehiclesController {
         summary:     'List vehicles',
         description: 'Returns a paginated list of vehicles (10 per page by default, up to 100). `search` matches the plate, model or type (case-insensitive); `vehicleStatusId` keeps only vehicles in that operational status (1 = active, 2 = maintenance, 3 = out_of_service). Requires supervisor or coordinator role, or root.',
     })
-    @ApiBadRequests({ validation: true })
+    @ApiBadRequests({ validation: true, example: ["The 'limit' parameter must be <= 100."] })
     @ApiOkResponse({ type: FindAllVehiclesResponseDto })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async findAll(@Query() params: FindAllVehiclesParamsDto): Promise<PaginationResponseDto<VehicleDto>> {
@@ -68,7 +68,7 @@ export class VehiclesController {
         summary:     'Register a vehicle',
         description: 'Registers a vehicle. All five fields are required: `type`, `model`, `plate`, `capacityKg` and `capacityM3` (both greater than zero, up to 2 decimals). The plate is trimmed and uppercased, and must not belong to another vehicle (409 VEHICLE_PLATE_ALREADY_EXISTS). The vehicle starts in the `active` status, ready for route assignment. Requires supervisor or coordinator role, or root.',
     })
-    @ApiBadRequests({ validation: true })
+    @ApiBadRequests({ validation: true, example: ['Plate is required.', 'Capacity in kg must be greater than zero.'] })
     @ApiCreatedResponse({ type: VehicleDto })
     @ApiConflict({ code: 'VEHICLE_PLATE_ALREADY_EXISTS', message: 'A vehicle with this plate already exists.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
@@ -83,7 +83,7 @@ export class VehiclesController {
         description: 'Partially updates a vehicle: only the fields sent are changed, and `null` is rejected. This is also how the operational status is changed (`vehicleStatusId`: 1 = active, 2 = maintenance, 3 = out_of_service; an unknown ID is a 400 INVALID_VEHICLE_STATUS). A changed plate must not belong to another vehicle (409). Requires supervisor or coordinator role, or root.',
     })
     @ApiIdParam('Vehicle')
-    @ApiBadRequests({ validation: true, id: true, errors: [{ code: 'INVALID_VEHICLE_STATUS', message: 'The given vehicle status does not exist.' }] })
+    @ApiBadRequests({ validation: true, example: ['Capacity in m3 must be greater than zero.'], id: true, errors: [{ code: 'INVALID_VEHICLE_STATUS', message: 'The given vehicle status does not exist.' }] })
     @ApiOkResponse({ type: VehicleDto })
     @ApiNotFound({ code: 'VEHICLE_NOT_FOUND', message: 'Vehicle not found.' })
     @ApiConflict({ code: 'VEHICLE_PLATE_ALREADY_EXISTS', message: 'A vehicle with this plate already exists.' })
