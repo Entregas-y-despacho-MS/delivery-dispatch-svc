@@ -7,7 +7,7 @@ export class RoleDto {
     id!: number;
 
     @DtoField()
-    @ApiProperty({ example: 'admin', enum: ['root', 'admin', 'coordinator', 'supervisor', 'driver'], description: 'Role name. root is the system account and can do everything; the others are independent of each other, each with its own permissions' })
+    @ApiProperty({ example: 'admin', enum: ['root', 'admin', 'coordinator', 'supervisor', 'driver'], description: 'Role name. root: the system account, can do everything (only root manages root accounts) · admin: users and settings · coordinator: delivery zones, service levels and vehicles, and reads users and roles · supervisor: vehicles · driver: the mobile app (sync). admin, coordinator, supervisor and driver are independent of each other' })
     name!: string;
 
     @DtoField()

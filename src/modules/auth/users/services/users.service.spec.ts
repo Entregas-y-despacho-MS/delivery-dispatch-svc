@@ -507,3 +507,31 @@ describe('UsersService.findForAuthentication', () => {
         expect(await service.findForAuthentication(8)).toBeNull();
     });
 });
+
+describe('UsersService.countByRoles', () => {
+    function withQueryBuilder(rows: any[]) {
+        const built = buildService();
+        const qb: any = { select: vi.fn().mockReturnThis(), addSelect: vi.fn().mockReturnThis(), where: vi.fn().mockReturnThis(), groupBy: vi.fn().mockReturnThis(), getRawMany: vi.fn().mockResolvedValue(rows) };
+        (built.rawRepo as any).createQueryBuilder = vi.fn(() => qb);
+        return { ...built, qb };
+    }
+
+    it('groups the users of the given roles and returns totals and active counts as numbers', async () => {
+        const { service, qb } = withQueryBuilder([{ roleId: 2, total: '4', active: '3' }, { roleId: 5, total: '1', active: '0' }]);
+
+        const counts = await service.countByRoles([1, 2, 5]);
+
+        expect(qb.where).toHaveBeenCalledWith('u.role_id IN (:...roleIds)', { roleIds: [1, 2, 5] });
+        expect(qb.groupBy).toHaveBeenCalledWith('u.role_id');
+        expect(counts.get(2)).toEqual({ total: 4, active: 3 });
+        expect(counts.get(5)).toEqual({ total: 1, active: 0 });
+        expect(counts.has(1)).toBe(false); // a role with no users is simply absent
+    });
+
+    it('no roles → no query', async () => {
+        const { service, qb } = withQueryBuilder([]);
+
+        expect((await service.countByRoles([])).size).toBe(0);
+        expect(qb.getRawMany).not.toHaveBeenCalled();
+    });
+});

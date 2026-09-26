@@ -98,6 +98,26 @@ export class UsersService {
     }
 
     /**
+     * How many users (not deleted) each of these roles has, and how many of them are active.
+     * A role without users is simply absent from the map.
+     */
+    async countByRoles(roleIds: number[]): Promise<Map<number, { total: number; active: number }>> {
+        const counts = new Map<number, { total: number; active: number }>();
+        if (roleIds.length === 0) return counts;
+
+        const rows = await this.rawRepo.createQueryBuilder('u')
+            .select('u.role_id', 'roleId')
+            .addSelect('COUNT(*)', 'total')
+            .addSelect('COUNT(*) FILTER (WHERE u.active)', 'active')
+            .where('u.role_id IN (:...roleIds)', { roleIds })
+            .groupBy('u.role_id')
+            .getRawMany<{ roleId: number; total: string; active: string }>();
+
+        for (const row of rows) counts.set(Number(row.roleId), { total: Number(row.total), active: Number(row.active) });
+        return counts;
+    }
+
+    /**
      * What the JWT strategy needs to trust an access token: the user as it is NOW. The token itself may be
      * up to 15 minutes old, but a user deactivated, deleted or moved to another role must not keep the old
      * access. Returns null for a missing (or soft-deleted) user.

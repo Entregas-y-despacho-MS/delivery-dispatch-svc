@@ -1,11 +1,13 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiOkResponse } from '@nestjs/swagger';
 import { RolesService } from '../services/roles.service.js';
-import { RoleDto } from '../dto/role.dto.js';
+import { RoleDetailDto } from '../dto/role-detail.dto.js';
 import { FindAllRolesParamsDto } from '../dto/find-all-roles-params.dto.js';
 import { ParseIdPipe } from '../../../../shared/pipes/index.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
 import { Roles } from '../../../../app/auth/decorators/index.js';
+import { CurrentUser } from '../../../../shared/decorators/current-user.decorator.js';
+import type { AuthUser } from '../../../../app/auth/strategies/jwt.strategy.js';
 import { RoleEnum } from '../../../../shared/enums/index.js';
 import { FindAllRolesResponseDto } from '../dto/find-all-roles-response.dto.js';
 import { ApiNotFound, ApiUnauthorized, ApiBadRequests, ApiIdParam } from '../../../../shared/utils/swagger/index.js';
@@ -29,27 +31,27 @@ export class RolesController {
     @Roles(RoleEnum.ADMIN, RoleEnum.COORDINATOR)
     @ApiOperation({
         summary:     'List roles',
-        description: 'Returns the roles (root, admin, coordinator, supervisor, driver), paginated. `search` matches the name. Roles are a fixed catalog; use their `id` as `roleId` when creating users or filtering the user list. Requires admin or coordinator role, or root.',
+        description: 'Returns the roles, paginated (10 per page by default, up to 100). Roles are a fixed catalog of 5 (root, admin, coordinator, supervisor, driver) that cannot be created, edited or deleted through the API; use a role\'s `id` as `roleId` when creating or updating a user, or to filter `GET /users`. Each role comes with `userCount` and `activeUserCount`. All filters are optional and combine with "and": `search` (name contains), `name` (exactly one role), and `assignable=true` (only the roles the caller may give to a user: no `root` unless the caller is root, which is what the user form\'s role selector needs). Sorted by `sortBy` / `sortOrder` (default: id, ascending). Requires admin or coordinator role, or root.',
     })
-    @ApiBadRequests({ validation: true, example: ["The 'limit' parameter must be <= 100."] })
+    @ApiBadRequests({ validation: true, example: ["The 'sortBy' parameter must be one of: id, name, createdAt."] })
     @ApiOkResponse({ type: FindAllRolesResponseDto })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
-    async findAll(@Query() params: FindAllRolesParamsDto): Promise<PaginationResponseDto<RoleDto>> {
-        return await this.rolesService.findAll(RoleDto, params);
+    async findAll(@Query() params: FindAllRolesParamsDto, @CurrentUser() actor: AuthUser): Promise<PaginationResponseDto<RoleDetailDto>> {
+        return await this.rolesService.findAllWithUserCounts(params, actor.role);
     }
 
     @Get(':id')
     @Roles(RoleEnum.ADMIN, RoleEnum.COORDINATOR)
     @ApiOperation({
         summary:     'Get a role by ID',
-        description: 'Returns one role by ID. Requires admin or coordinator role, or root.',
+        description: 'Returns one role by ID, with its `userCount` and `activeUserCount`. Requires admin or coordinator role, or root.',
     })
     @ApiIdParam('Role')
     @ApiBadRequests({ id: true })
-    @ApiOkResponse({ type: RoleDto })
+    @ApiOkResponse({ type: RoleDetailDto })
     @ApiNotFound({ code: 'ROLE_NOT_FOUND', message: 'Role not found.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
-    async findOne(@Param('id', ParseIdPipe) id: number): Promise<RoleDto> {
-        return await this.rolesService.findOneById(RoleDto, id);
+    async findOne(@Param('id', ParseIdPipe) id: number): Promise<RoleDetailDto> {
+        return await this.rolesService.findOneByIdWithUserCounts(id);
     }
 }
