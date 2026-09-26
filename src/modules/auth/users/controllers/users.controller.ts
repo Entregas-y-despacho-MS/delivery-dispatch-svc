@@ -1,6 +1,6 @@
 import {
     Controller, Get, Post, Put, Delete,
-    Body, Param, Query, ParseIntPipe, HttpCode, HttpStatus,
+    Body, Param, Query, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import {
     ApiTags, ApiBearerAuth, ApiOperation,
@@ -11,6 +11,9 @@ import { UserDto } from '../dto/user.dto.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
 import { UpdateUserDto } from '../dto/update-user.dto.js';
 import { FindAllUsersParamsDto } from '../dto/find-all-users-params.dto.js';
+import { CurrentUser } from '../../../../shared/decorators/current-user.decorator.js';
+import type { AuthUser } from '../../../../app/auth/strategies/jwt.strategy.js';
+import { ParseIdPipe } from '../../../../shared/pipes/index.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
 import { ApiNotFound, ApiUnauthorized, ApiConflict, ApiBadRequests, ApiIdParam } from '../../../../shared/utils/swagger/index.js';
 import { FindAllUsersResponseDto } from '../dto/find-all-users-response.dto.js';
@@ -23,6 +26,7 @@ import { RoleEnum } from '../../../../shared/enums/index.js';
  *   USER_ALREADY_EXISTS   409 — A user with the given username or email already exists.
  *   PASSWORD_TOO_SHORT    400 — Password is shorter than settings.password_min_length.
  *   INVALID_ROLE          400 — The given roleId does not exist.
+ *   ROOT_ACCOUNT_PROTECTED 403 — An admin tried to create/edit/delete a root account or give the root role.
  *   CONFLICTING_USER_FILTERS 400 — The list was asked with both `active` and `status`.
  *   INVALID_TOKEN         401 — JWT is missing, malformed, or expired.
  *   INSUFFICIENT_PERMISSIONS 403 — Authenticated but role does not meet the endpoint requirement.
@@ -65,7 +69,7 @@ export class UsersController {
     @ApiOkResponse({ type: UserDto })
     @ApiNotFound({ code: 'USER_NOT_FOUND', message: 'User not found.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
-    async findOne(@Param('id', ParseIntPipe) id: number): Promise<UserDto> {
+    async findOne(@Param('id', ParseIdPipe) id: number): Promise<UserDto> {
         return await this.usersService.findOneById(UserDto, id);
     }
 
@@ -80,7 +84,8 @@ export class UsersController {
     @ApiCreatedResponse({ type: UserDto })
     @ApiConflict({ code: 'USER_ALREADY_EXISTS', message: 'A user with this username or email already exists.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
-    async create(@Body() dto: CreateUserDto): Promise<UserDto> {
+    async create(@Body() dto: CreateUserDto, @CurrentUser() actor: AuthUser): Promise<UserDto> {
+        await this.usersService.assertCanManageRoot(actor, { roleId: dto.roleId });
         return await this.usersService.create(UserDto, dto);
     }
 
@@ -88,7 +93,7 @@ export class UsersController {
     @AdminOnly()
     @ApiOperation({
         summary:     'Update a user',
-        description: 'Partially updates a user: only the fields sent are changed. `email` can be cleared by sending `null`; every other field rejects `null`. `active: false` deactivates the account (the user can no longer log in) and `true` reactivates it. A new `password` resets the user\'s password (admin action: the password history is not checked, and the user\'s own sessions are not closed). A changed `username` or `email` must not belong to another user (409), and a new `roleId` must exist (400 INVALID_ROLE). Requires admin role or root.',
+        description: 'Partially updates a user: only the fields sent are changed. `email` can be cleared by sending `null`; every other field rejects `null`. `active: false` deactivates the account (the user can no longer log in) and `true` reactivates it. A new `password` resets the user\'s password (admin action: the password history is not checked, and the user\'s own sessions are not closed). A changed `username` or `email` must not belong to another user (409), and a new `roleId` must exist (400 INVALID_ROLE). Root accounts (and the root role) can only be managed by root: an admin gets 403 ROOT_ACCOUNT_PROTECTED. Requires admin role or root.',
     })
     @ApiIdParam('User')
     @ApiBadRequests({ validation: true, example: ['Email must be a valid email address.'], id: true, errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }, { code: 'INVALID_ROLE', message: 'The given role does not exist.' }] })
@@ -97,9 +102,11 @@ export class UsersController {
     @ApiConflict({ code: 'USER_ALREADY_EXISTS', message: 'A user with this username or email already exists.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async update(
-        @Param('id', ParseIntPipe) id: number,
+        @Param('id', ParseIdPipe) id: number,
         @Body() dto: UpdateUserDto,
+        @CurrentUser() actor: AuthUser,
     ): Promise<UserDto> {
+        await this.usersService.assertCanManageRoot(actor, { userId: id, roleId: dto.roleId });
         return await this.usersService.update(UserDto, id, dto);
     }
 
@@ -108,14 +115,15 @@ export class UsersController {
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({
         summary:     'Delete a user',
-        description: 'Soft-deletes the user: the record stays in the database but no longer appears in lists or lookups. To only block access, deactivate the user instead (PUT `active: false`). Requires admin role or root.',
+        description: 'Soft-deletes the user: the record stays in the database but no longer appears in lists or lookups. To only block access, deactivate the user instead (PUT `active: false`). A root account can only be deleted by root (403 ROOT_ACCOUNT_PROTECTED for an admin). Requires admin role or root.',
     })
     @ApiIdParam('User')
     @ApiBadRequests({ id: true })
     @ApiNoContentResponse({ description: 'User deleted successfully.' })
     @ApiNotFound({ code: 'USER_NOT_FOUND', message: 'User not found.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
-    async remove(@Param('id', ParseIntPipe) id: number): Promise<void> {
+    async remove(@Param('id', ParseIdPipe) id: number, @CurrentUser() actor: AuthUser): Promise<void> {
+        await this.usersService.assertCanManageRoot(actor, { userId: id });
         return await this.usersService.remove(id);
     }
 }

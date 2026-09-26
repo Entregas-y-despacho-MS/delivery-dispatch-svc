@@ -1,8 +1,9 @@
-import { Controller, Get, Param, Query, ParseIntPipe } from '@nestjs/common';
+import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiOkResponse } from '@nestjs/swagger';
 import { RolesService } from '../services/roles.service.js';
 import { RoleDto } from '../dto/role.dto.js';
 import { FindAllRolesParamsDto } from '../dto/find-all-roles-params.dto.js';
+import { ParseIdPipe } from '../../../../shared/pipes/index.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
 import { Roles } from '../../../../app/auth/decorators/index.js';
 import { RoleEnum } from '../../../../shared/enums/index.js';
@@ -48,7 +49,7 @@ export class RolesController {
     @ApiOkResponse({ type: RoleDto })
     @ApiNotFound({ code: 'ROLE_NOT_FOUND', message: 'Role not found.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
-    async findOne(@Param('id', ParseIntPipe) id: number): Promise<RoleDto> {
+    async findOne(@Param('id', ParseIdPipe) id: number): Promise<RoleDto> {
         return await this.rolesService.findOneById(RoleDto, id);
     }
 }

@@ -1,6 +1,6 @@
 import {
     Controller, Get, Post, Put, Delete,
-    Body, Param, Query, ParseIntPipe, HttpCode, HttpStatus,
+    Body, Param, Query, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import {
     ApiTags, ApiBearerAuth, ApiOperation,
@@ -12,6 +12,7 @@ import { CreateDeliveryZoneDto } from '../dto/create-delivery-zone.dto.js';
 import { UpdateDeliveryZoneDto } from '../dto/update-delivery-zone.dto.js';
 import { FindAllDeliveryZonesParamsDto } from '../dto/find-all-delivery-zones-params.dto.js';
 import { FindAllDeliveryZonesResponseDto } from '../dto/find-all-delivery-zones-response.dto.js';
+import { ParseIdPipe } from '../../../../shared/pipes/index.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
 import { ApiNotFound, ApiUnauthorized, ApiConflict, ApiBadRequests, ApiIdParam } from '../../../../shared/utils/swagger/index.js';
 import { CoordinatorOnly } from '../../../../app/auth/decorators/index.js';
@@ -55,7 +56,7 @@ export class DeliveryZonesController {
     @ApiOkResponse({ type: DeliveryZoneDto })
     @ApiNotFound({ code: 'DELIVERY_ZONE_NOT_FOUND', message: 'Delivery zone not found.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
-    async findOne(@Param('id', ParseIntPipe) id: number): Promise<DeliveryZoneDto> {
+    async findOne(@Param('id', ParseIdPipe) id: number): Promise<DeliveryZoneDto> {
         return await this.deliveryZonesService.findOneById(DeliveryZoneDto, id);
     }
 
@@ -87,7 +88,7 @@ export class DeliveryZonesController {
     @ApiConflict({ code: 'DELIVERY_ZONE_CODE_ALREADY_EXISTS', message: 'This code already belongs to another delivery zone.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async update(
-        @Param('id', ParseIntPipe) id: number,
+        @Param('id', ParseIdPipe) id: number,
         @Body() dto: UpdateDeliveryZoneDto,
     ): Promise<DeliveryZoneDto> {
         return await this.deliveryZonesService.update(DeliveryZoneDto, id, dto);
@@ -105,7 +106,7 @@ export class DeliveryZonesController {
     @ApiNoContentResponse({ description: 'Delivery zone deleted successfully.' })
     @ApiNotFound({ code: 'DELIVERY_ZONE_NOT_FOUND', message: 'Delivery zone not found.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
-    async remove(@Param('id', ParseIntPipe) id: number): Promise<void> {
+    async remove(@Param('id', ParseIdPipe) id: number): Promise<void> {
         return await this.deliveryZonesService.remove(id);
     }
 }

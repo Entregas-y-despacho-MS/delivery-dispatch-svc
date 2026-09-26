@@ -8,7 +8,7 @@ import { CreateDeliveryZoneDto } from '../dto/create-delivery-zone.dto.js';
 import { UpdateDeliveryZoneDto } from '../dto/update-delivery-zone.dto.js';
 import { FindAllDeliveryZonesParamsDto } from '../dto/find-all-delivery-zones-params.dto.js';
 import { DeliveryZoneNotFoundException, DeliveryZoneCodeAlreadyExistsException } from '../exceptions/index.js';
-import { DtoRepository } from '../../../../shared/orm/index.js';
+import { DtoRepository, isUniqueViolation } from '../../../../shared/orm/index.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
 import { FindOptions, MutationOptions } from '../../../../shared/dto/options.dto.js';
 
@@ -63,7 +63,7 @@ export class DeliveryZonesService {
         zone.name              = dto.name;
         zone.estimatedTimeMin  = dto.estimatedTimeMin;
 
-        const saved = await repo.save(zone);
+        const saved = await this.saveHandlingDuplicate(() => repo.save(zone));
 
         const result = await new DtoRepository(repo).findOne({ dto: returnDto, where: { id: saved.id } });
         return result!;
@@ -83,7 +83,7 @@ export class DeliveryZonesService {
         if (dto.name             !== undefined) payload.name             = dto.name;
         if (dto.estimatedTimeMin !== undefined) payload.estimatedTimeMin = dto.estimatedTimeMin;
 
-        await repo.update(id, payload);
+        await this.saveHandlingDuplicate(() => repo.update(id, payload));
 
         const result = await new DtoRepository(repo).findOne({ dto: returnDto, where: { id } });
         return result!;
@@ -100,6 +100,16 @@ export class DeliveryZonesService {
     }
 
     // ── Private implementation ────────────────────────────────────────────────
+
+    /** Two concurrent requests with the same code can both pass the pre-check — map the index error to the same 409. */
+    private async saveHandlingDuplicate<R>(write: () => Promise<R>): Promise<R> {
+        try {
+            return await write();
+        } catch (err) {
+            if (isUniqueViolation(err)) throw new DeliveryZoneCodeAlreadyExistsException();
+            throw err;
+        }
+    }
 
     private async existsByCode(code: string, excludeId?: number): Promise<boolean> {
         const found = await this.rawRepo.findOne({ where: { code } });

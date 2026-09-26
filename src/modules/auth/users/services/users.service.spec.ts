@@ -2,7 +2,11 @@
 // Todo mockeado (repos de TypeORM, SettingsService) — sin DB, sin red.
 import { describe, expect, it, vi } from 'vitest';
 import { UsersService } from './users.service.js';
-import { PasswordTooShortException, PasswordRecentlyUsedException, ConflictingUserFiltersException, InvalidRoleException } from '../exceptions/index.js';
+import { PasswordTooShortException, PasswordRecentlyUsedException, ConflictingUserFiltersException, InvalidRoleException, UserAlreadyExistsException } from '../exceptions/index.js';
+import { RootAccountProtectedException } from '../../../../app/auth/exceptions/index.js';
+import { QueryFailedError } from 'typeorm';
+import { CreateUserDto } from '../dto/create-user.dto.js';
+import { UpdateUserDto } from '../dto/update-user.dto.js';
 import { FindAllUsersParamsDto, UserSortBy } from '../dto/find-all-users-params.dto.js';
 import { UserDto } from '../dto/user.dto.js';
 import { plainToInstance } from 'class-transformer';
@@ -349,5 +353,125 @@ describe('UsersService — roleId inexistente (antes daba 500 por la FK)', () =>
 
         expect(roleRepo.existsBy).not.toHaveBeenCalled();
         expect(rawRepo.update).toHaveBeenCalledWith(5, { fullName: 'Ana B' });
+    });
+});
+
+describe('UsersService.assertCanManageRoot — un admin no puede llegar a root', () => {
+    const ROOT_ROLE_ID = 1;
+    const actor = (role: string) => ({ id: 9, username: 'x', roleId: 2, role }) as any;
+    const withRoot = () => {
+        const built = buildService();
+        (built.roleRepo as any).findOneBy = vi.fn().mockResolvedValue({ id: ROOT_ROLE_ID, name: 'root' });
+        return built;
+    };
+
+    it('root puede todo: crear usuarios root y editar/borrar cuentas root', async () => {
+        const { service, rawRepo } = withRoot();
+        rawRepo.findOne.mockResolvedValue({ id: 5, roleId: ROOT_ROLE_ID });
+
+        await expect(service.assertCanManageRoot(actor('root'), { roleId: ROOT_ROLE_ID, userId: 5 })).resolves.toBeUndefined();
+    });
+
+    it('un admin no puede dar el rol root (crear un usuario root o ascenderse a sí mismo)', async () => {
+        const { service } = withRoot();
+
+        await expect(service.assertCanManageRoot(actor('admin'), { roleId: ROOT_ROLE_ID })).rejects.toThrow(RootAccountProtectedException);
+    });
+
+    it('un admin no puede editar ni borrar una cuenta que ya es root (cambiarle la contraseña = tomar la cuenta)', async () => {
+        const { service, rawRepo } = withRoot();
+        rawRepo.findOne.mockResolvedValue({ id: 5, roleId: ROOT_ROLE_ID });
+
+        await expect(service.assertCanManageRoot(actor('admin'), { userId: 5 })).rejects.toThrow(RootAccountProtectedException);
+    });
+
+    it('un admin sí puede gestionar cuentas que no son root y asignar otros roles', async () => {
+        const { service, rawRepo } = withRoot();
+        rawRepo.findOne.mockResolvedValue({ id: 6, roleId: 3 });
+
+        await expect(service.assertCanManageRoot(actor('admin'), { userId: 6, roleId: 4 })).resolves.toBeUndefined();
+    });
+
+    it('un usuario que no existe no se bloquea acá (el 404 lo da el servicio)', async () => {
+        const { service, rawRepo } = withRoot();
+        rawRepo.findOne.mockResolvedValue(null);
+
+        await expect(service.assertCanManageRoot(actor('admin'), { userId: 999 })).resolves.toBeUndefined();
+    });
+});
+
+describe('UsersService.registerFailedLogin — un solo UPDATE atómico', () => {
+    it('manda un único UPDATE con el máximo y el instante de desbloqueo', async () => {
+        const { service, rawRepo } = buildService();
+        (rawRepo as any).query = vi.fn();
+        const before = Date.now();
+
+        await service.registerFailedLogin(7, 5, 15 * 60_000);
+
+        expect((rawRepo as any).query).toHaveBeenCalledTimes(1);
+        const [sql, [userId, now, max, until]] = (rawRepo as any).query.mock.calls[0];
+        expect(sql).toMatch(/^\s*UPDATE users SET/);
+        expect(sql).toContain('failed_attempts + 1'); // se incrementa en la base, no se calcula acá
+        expect([userId, max]).toEqual([7, 5]);
+        expect(now.getTime()).toBeGreaterThanOrEqual(before);
+        expect(until.getTime() - now.getTime()).toBe(15 * 60_000);
+        expect(rawRepo.update).not.toHaveBeenCalled(); // nada de leer-y-escribir
+    });
+});
+
+describe('UsersService — carrera al crear/editar con un username o email repetido', () => {
+    const dup = () => new QueryFailedError('INSERT ...', [], Object.assign(new Error('dup'), { code: '23505' }));
+    const other = () => new QueryFailedError('INSERT ...', [], Object.assign(new Error('null'), { code: '23502' }));
+    const dto = { fullName: 'Ana', username: 'ana', password: 'Passw0rd!', roleId: 2 } as any;
+
+    it('create: el índice único (dos pedidos a la vez) responde 409, no 500', async () => {
+        const { service, rawRepo } = buildService();
+        rawRepo.findOne.mockResolvedValue(null);
+        (rawRepo as any).create = vi.fn(() => ({}));
+        (rawRepo as any).save   = vi.fn().mockRejectedValue(dup());
+
+        await expect(service.create(UserDto, dto)).rejects.toThrow(UserAlreadyExistsException);
+    });
+
+    it('create: otro error de base de datos se propaga tal cual', async () => {
+        const { service, rawRepo } = buildService();
+        rawRepo.findOne.mockResolvedValue(null);
+        const failure = other();
+        (rawRepo as any).create = vi.fn(() => ({}));
+        (rawRepo as any).save   = vi.fn().mockRejectedValue(failure);
+
+        await expect(service.create(UserDto, dto)).rejects.toBe(failure);
+    });
+
+    it('update: el índice único también responde 409', async () => {
+        const { service, rawRepo } = buildService();
+        rawRepo.findOne.mockResolvedValue({ id: 5, username: 'ana', email: null });
+        rawRepo.update.mockRejectedValue(dup());
+
+        await expect(service.update(UserDto, 5, { fullName: 'Ana B' } as any)).rejects.toThrow(UserAlreadyExistsException);
+    });
+});
+
+describe('correo en minúsculas', () => {
+    it('CreateUserDto y UpdateUserDto lo recortan y pasan a minúsculas antes de validar', () => {
+        const create = plainToInstance(CreateUserDto, { email: '  Ana@Hipermaxi.COM ' });
+        const update = plainToInstance(UpdateUserDto, { email: 'ANA@X.com' });
+
+        expect(create.email).toBe('ana@hipermaxi.com');
+        expect(update.email).toBe('ana@x.com');
+    });
+
+    it('null sigue significando "borrar el correo" en el update', () => {
+        expect(plainToInstance(UpdateUserDto, { email: null }).email).toBeNull();
+    });
+
+    it('la búsqueda por correo ignora mayúsculas (filas viejas guardadas con mayúsculas)', async () => {
+        const { service, rawRepo } = buildService();
+        rawRepo.findOne.mockResolvedValue(null);
+
+        await service.findOneByEmail(UserDto, 'Ana@X.com', { throwException: false });
+
+        const where = rawRepo.findOne.mock.calls[0][0].where;
+        expect(where.email).toMatchObject({ type: 'ilike', value: 'Ana@X.com' });
     });
 });

@@ -6,6 +6,14 @@ import { StoragePort, UploadOptions, UploadResult } from '../storage.port.js';
 import { LocalStorageConfig } from './local.config.js';
 import { StorageUploadException } from '../exceptions/index.js';
 
+const EXTENSION_BY_MIME: Record<string, string> = {
+    'image/jpeg': 'jpg',
+    'image/png':  'png',
+    'image/webp': 'webp',
+    'image/heic': 'heic',
+    'image/heif': 'heif',
+};
+
 // Writes to disk under LocalStorageConfig.uploadsDir and returns a URL served by
 // LocalStorageModule's ServeStaticModule mount (see local.module.ts) — dev only,
 // most cloud hosts wipe local disk on restart/redeploy. Use `cloudinary` there.
@@ -21,10 +29,10 @@ export class LocalStorageAdapter extends StoragePort {
         try {
             await mkdir(this.config.uploadsDir, { recursive: true });
 
-            const extension = options.filename.split('.').pop();
-            const storedName = extension && extension !== options.filename
-                ? `${randomUUID()}.${extension}`
-                : randomUUID();
+            // The extension comes from the (checked) content type, never from the client's filename: this
+            // folder is served statically, so a name like "x.html" would be served as a page.
+            const extension  = options.mimeType ? EXTENSION_BY_MIME[options.mimeType] : undefined;
+            const storedName = extension ? `${randomUUID()}.${extension}` : randomUUID();
 
             await writeFile(join(this.config.uploadsDir, storedName), options.buffer);
 

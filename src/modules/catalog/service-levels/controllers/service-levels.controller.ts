@@ -1,6 +1,6 @@
 import {
     Controller, Get, Post, Put, Delete,
-    Body, Param, Query, ParseIntPipe, HttpCode, HttpStatus,
+    Body, Param, Query, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import {
     ApiTags, ApiBearerAuth, ApiOperation,
@@ -12,6 +12,7 @@ import { CreateServiceLevelDto } from '../dto/create-service-level.dto.js';
 import { UpdateServiceLevelDto } from '../dto/update-service-level.dto.js';
 import { FindAllServiceLevelsParamsDto } from '../dto/find-all-service-levels-params.dto.js';
 import { FindAllServiceLevelsResponseDto } from '../dto/find-all-service-levels-response.dto.js';
+import { ParseIdPipe } from '../../../../shared/pipes/index.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
 import { ApiNotFound, ApiUnauthorized, ApiBadRequests, ApiIdParam, ApiConflict } from '../../../../shared/utils/swagger/index.js';
 import { CoordinatorOnly } from '../../../../app/auth/decorators/index.js';
@@ -56,7 +57,7 @@ export class ServiceLevelsController {
     @ApiOkResponse({ type: ServiceLevelDto })
     @ApiNotFound({ code: 'SERVICE_LEVEL_NOT_FOUND', message: 'Service level not found.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
-    async findOne(@Param('id', ParseIntPipe) id: number): Promise<ServiceLevelDto> {
+    async findOne(@Param('id', ParseIdPipe) id: number): Promise<ServiceLevelDto> {
         return await this.serviceLevelsService.findOneById(ServiceLevelDto, id);
     }
 
@@ -88,7 +89,7 @@ export class ServiceLevelsController {
     @ApiConflict({ code: 'SERVICE_LEVEL_NAME_ALREADY_EXISTS', message: 'A service level with this name already exists.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async update(
-        @Param('id', ParseIntPipe) id: number,
+        @Param('id', ParseIdPipe) id: number,
         @Body() dto: UpdateServiceLevelDto,
     ): Promise<ServiceLevelDto> {
         return await this.serviceLevelsService.update(ServiceLevelDto, id, dto);
@@ -107,7 +108,7 @@ export class ServiceLevelsController {
     @ApiNotFound({ code: 'SERVICE_LEVEL_NOT_FOUND', message: 'Service level not found.' })
     @ApiConflict({ code: 'SERVICE_LEVEL_IN_USE', message: 'This service level has active dispatches and cannot be deleted. Disable it instead (active: false) so it only applies to future orders.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
-    async remove(@Param('id', ParseIntPipe) id: number): Promise<void> {
+    async remove(@Param('id', ParseIdPipe) id: number): Promise<void> {
         return await this.serviceLevelsService.remove(id);
     }
 }

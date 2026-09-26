@@ -64,14 +64,14 @@ export class AuthController {
     @HttpCode(HttpStatus.CREATED)
     @ApiOperation({
         summary:     'Register a new internal user',
-        description: 'Creates an internal account. Same body and rules as POST /users (admin-only, not a public sign-up). Returns the created user, not tokens: the caller is the admin, not the new user. Requires admin role or root.',
+        description: 'Creates an internal account. Same body and rules as POST /users (admin-only, not a public sign-up; giving the root role needs a root caller, 403 ROOT_ACCOUNT_PROTECTED). Returns the created user, not tokens: the caller is the admin, not the new user. Requires admin role or root.',
     })
     @ApiBadRequests({ validation: true, example: ['Full name is required.', 'Role ID must be an integer.'], errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }, { code: 'INVALID_ROLE', message: 'The given role does not exist.' }] })
     @ApiCreatedResponse({ type: UserDto })
     @ApiConflict({ code: 'USER_ALREADY_EXISTS', message: 'A user with this username or email already exists.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
-    async register(@Body() dto: CreateUserDto): Promise<UserDto> {
-        return await this.authService.register(dto);
+    async register(@Body() dto: CreateUserDto, @CurrentUser() actor: AuthUser): Promise<UserDto> {
+        return await this.authService.register(dto, actor);
     }
 
     @Public()

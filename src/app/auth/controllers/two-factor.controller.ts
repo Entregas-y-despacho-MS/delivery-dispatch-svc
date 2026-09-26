@@ -8,12 +8,13 @@ import { ConfirmTwoFactorDto } from '../dto/confirm-two-factor.dto.js';
 import { DisableTwoFactorDto } from '../dto/disable-two-factor.dto.js';
 import { CurrentUser } from '../../../shared/decorators/current-user.decorator.js';
 import type { AuthUser } from '../strategies/jwt.strategy.js';
-import { InvalidCredentialsException, InvalidTotpCodeException } from '../exceptions/index.js';
+import { InvalidCredentialsException, InvalidTotpCodeException, TwoFactorAlreadyEnabledException } from '../exceptions/index.js';
 import { comparePassword } from '../../../shared/utils/crypto.util.js';
-import { ApiUnauthorized, ApiBadRequests } from '../../../shared/utils/swagger/index.js';
+import { ApiUnauthorized, ApiBadRequests, ApiConflict } from '../../../shared/utils/swagger/index.js';
 
 /**
  * Error dictionary for this module:
+ *   TWO_FACTOR_ALREADY_ENABLED 409 — enable was called while 2FA is already on.
  *   INVALID_TOTP_CODE   401 — The 6-digit code does not match.
  *   INVALID_CREDENTIALS 401 — Wrong password (disable only).
  *   INVALID_TOKEN        401 — JWT is missing, malformed, or expired.
@@ -34,11 +35,17 @@ export class TwoFactorController {
     @HttpCode(HttpStatus.OK)
     @ApiOperation({
         summary:     'Start 2FA enrollment',
-        description: 'Step 1 of 2 to turn on two-factor authentication for your own account: generates a TOTP secret and returns it with a QR code to scan in an authenticator app (Google Authenticator, Authy, etc.). 2FA is NOT active yet: confirm it with POST /auth/2fa/confirm. Calling it again generates a new secret that replaces the previous one. Requires any authenticated user.',
+        description: 'Step 1 of 2 to turn on two-factor authentication for your own account: generates a TOTP secret and returns it with a QR code to scan in an authenticator app (Google Authenticator, Authy, etc.). 2FA is NOT active yet: confirm it with POST /auth/2fa/confirm. Until then, calling it again generates a new secret that replaces the previous one. Once 2FA is enabled this answers 409 TWO_FACTOR_ALREADY_ENABLED: disable it first (POST /auth/2fa/disable, which asks for the password). Requires any authenticated user.',
     })
     @ApiOkResponse({ type: TwoFactorSecretDto })
+    @ApiConflict({ code: 'TWO_FACTOR_ALREADY_ENABLED', message: 'Two-factor authentication is already enabled. Disable it first (POST /auth/2fa/disable) to enrol a new device.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async enable(@CurrentUser() user: AuthUser): Promise<TwoFactorSecretDto> {
+        // Re-enrolling while 2FA is on would swap the secret: the owner's authenticator stops working, and a
+        // stolen access token could take over the second factor without knowing the password.
+        const current = await this.usersService.findOneById(UserForAuthDto, user.id);
+        if (current.twoFactorEnabled) throw new TwoFactorAlreadyEnabledException();
+
         const secret = this.twoFactor.generateSecret();
         await this.usersService.setTwoFactorSecret(user.id, secret);
         const qrCodeDataUrl = await this.twoFactor.generateQrCodeDataUrl(secret, user.username);

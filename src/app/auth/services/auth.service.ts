@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { UsersService } from '../../../modules/auth/users/services/users.service.js';
@@ -21,7 +21,8 @@ import {
     InvalidResetTokenException, TotpRequiredException, InvalidTotpCodeException,
     SessionExpiredException,
 } from '../exceptions/index.js';
-import { comparePassword, hashPassword } from '../../../shared/utils/crypto.util.js';
+import { comparePassword, hashToken, tokenMatchesHash } from '../../../shared/utils/crypto.util.js';
+import type { AuthUser } from '../strategies/jwt.strategy.js';
 import { RoleEnum } from '../../../shared/enums/index.js';
 
 @Injectable()
@@ -73,7 +74,8 @@ export class AuthService {
 
     // Admin-only (see AuthController) — creates an internal account. No tokens are returned:
     // the caller is the admin, not the new user, so there is no session to hand back.
-    async register(dto: CreateUserDto): Promise<UserDto> {
+    async register(dto: CreateUserDto, actor: AuthUser): Promise<UserDto> {
+        await this.usersService.assertCanManageRoot(actor, { roleId: dto.roleId });
         return await this.usersService.create(UserDto, dto);
     }
 
@@ -104,10 +106,10 @@ export class AuthService {
 
         if (!user || !user.active || !user.refreshTokenHash) throw new InvalidRefreshTokenException();
 
-        const tokenMatches = await comparePassword(dto.refreshToken, user.refreshTokenHash);
+        const tokenMatches = tokenMatchesHash(dto.refreshToken, user.refreshTokenHash);
 
         if (!tokenMatches) {
-            // Hash mismatch may indicate refresh token reuse — revoke all sessions.
+            // A valid token that is not the current one was already rotated: it is being reused — revoke all sessions.
             await this.usersService.setRefreshToken(user.id, null);
             throw new InvalidRefreshTokenException();
         }
@@ -182,15 +184,13 @@ export class AuthService {
         return ageMs > expirationDays * 24 * 60 * 60 * 1000;
     }
 
+    // The counter is incremented inside the database (one atomic UPDATE), not read-modified-written
+    // here: parallel wrong passwords used to overwrite each other and never reached the limit.
     private async registerFailedAttempt(user: UserForAuthDto): Promise<void> {
         const maxAttempts    = this.settings.getNumber('max_failed_login_attempts', 5);
         const lockoutMinutes = this.settings.getNumber('account_lockout_minutes', 15);
 
-        const failedAttempts = user.failedAttempts + 1;
-        const lockedUntil = failedAttempts >= maxAttempts
-            ? new Date(Date.now() + lockoutMinutes * 60_000)
-            : null;
-        await this.usersService.setLockoutState(user.id, failedAttempts, lockedUntil);
+        await this.usersService.registerFailedLogin(user.id, maxAttempts, lockoutMinutes * 60_000);
     }
 
     private async buildTokens(payload: JwtPayload): Promise<{ accessToken: string; refreshToken: string }> {
@@ -199,11 +199,12 @@ export class AuthService {
         const refreshToken = this.jwtService.sign(payload, {
             secret:    this.jwtConfig.refreshSecret,
             expiresIn: this.jwtConfig.refreshExpiresIn as any,
+            // Unique per issue, so two tokens made in the same second are still different tokens.
+            jwtid:     randomUUID(),
         });
 
-        // Never store refresh tokens in plain text — treat them like passwords.
-        const hashed = await hashPassword(refreshToken);
-        await this.usersService.setRefreshToken(payload.sub, hashed);
+        // Never store refresh tokens in plain text — only their fingerprint (see hashToken).
+        await this.usersService.setRefreshToken(payload.sub, hashToken(refreshToken));
 
         return { accessToken, refreshToken };
     }

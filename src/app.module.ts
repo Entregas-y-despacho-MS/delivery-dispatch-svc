@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { APP_PIPE } from '@nestjs/core';
+import { NoNullBytesPipe } from './shared/pipes/index.js';
 import { AppConfigModule } from './config/config.module.js';
 import { HealthModule } from './app/health/health.module.js';
 import { DatabaseModule } from './database/database.module.js';
@@ -36,6 +38,10 @@ import { OsrmModule } from './plugins/osrm/osrm.module.js';
         StorageModule.register(),
         PushModule.register(),
         OsrmModule,
+    ],
+    providers: [
+        // Rejects NUL characters in body/query/params (Postgres cannot store them: it was a 500).
+        { provide: APP_PIPE, useClass: NoNullBytesPipe },
     ],
 })
 export class AppModule {}

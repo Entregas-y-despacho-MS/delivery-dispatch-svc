@@ -12,12 +12,14 @@ import {
     UserNotFoundException, UserAlreadyExistsException, PasswordTooShortException,
     PasswordRecentlyUsedException, ConflictingUserFiltersException, InvalidRoleException,
 } from '../exceptions/index.js';
-import { DtoRepository } from '../../../../shared/orm/index.js';
+import { DtoRepository, isUniqueViolation } from '../../../../shared/orm/index.js';
+import type { AuthUser } from '../../../../app/auth/strategies/jwt.strategy.js';
+import { RootAccountProtectedException } from '../../../../app/auth/exceptions/root-account-protected.exception.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
 import { FindOptions, MutationOptions } from '../../../../shared/dto/options.dto.js';
 import { hashPassword, comparePassword } from '../../../../shared/utils/crypto.util.js';
 import { escapeLike } from '../../../../shared/utils/like.util.js';
-import { UserStatusEnum } from '../../../../shared/enums/index.js';
+import { RoleEnum, UserStatusEnum } from '../../../../shared/enums/index.js';
 import { SettingsService } from '../../../settings/services/settings.service.js';
 
 // How many previous passwords are checked for reuse (RF-A25, Escenario 3).
@@ -87,7 +89,8 @@ export class UsersService {
     findOneByEmail<T>(dto: new () => T, email: string, options: { throwException: false }): Promise<T | null>;
     findOneByEmail<T>(dto: new () => T, email: string, options?: FindOptions): Promise<T>;
     async findOneByEmail<T>(dto: new () => T, email: string, { throwException = true }: FindOptions = {}): Promise<T | null> {
-        return this._findOne(dto, { email }, throwException);
+        // Case-insensitive: emails are stored lowercase now, but rows from before that may not be.
+        return this._findOne(dto, { email: ILike(escapeLike(email.trim())) }, throwException);
     }
 
     findOneByResetToken<T>(dto: new () => T, token: string, options: { throwException: false }): Promise<T | null>;
@@ -132,6 +135,44 @@ export class UsersService {
         await this.rawRepo.update(userId, { failedAttempts, lockedUntil });
     }
 
+    /**
+     * RF-A21 — counts one more wrong password and locks the account when the limit is reached.
+     * A single UPDATE: read-modify-write lost increments when wrong passwords arrived in parallel
+     * (12 at once counted as 1 and never locked the account). When a previous lock has already
+     * expired the count starts again from 1, so one typo after the lock does not lock it anew.
+     */
+    async registerFailedLogin(userId: number, maxAttempts: number, lockoutMs: number): Promise<void> {
+        const now         = new Date();
+        const lockedUntil = new Date(now.getTime() + lockoutMs);
+        await this.rawRepo.query(
+            `UPDATE users SET
+                failed_attempts = CASE WHEN locked_until IS NOT NULL AND locked_until <= $2::timestamptz THEN 1 ELSE failed_attempts + 1 END,
+                locked_until    = CASE WHEN (CASE WHEN locked_until IS NOT NULL AND locked_until <= $2::timestamptz THEN 1 ELSE failed_attempts + 1 END) >= $3
+                                       THEN $4::timestamptz ELSE NULL END
+             WHERE user_id = $1`,
+            [userId, now, maxAttempts, lockedUntil],
+        );
+    }
+
+    /**
+     * Root is the break-glass account: an admin must not be able to reach it (reset its password,
+     * delete it) or hand out its role (create a root user, promote themselves) — either lets the
+     * admin become root. Only root itself may manage root accounts.
+     */
+    async assertCanManageRoot(actor: AuthUser, target: { userId?: number; roleId?: number }): Promise<void> {
+        if (actor.role === RoleEnum.ROOT) return;
+
+        const rootRole = await this.roleRepo.findOneBy({ name: RoleEnum.ROOT });
+        if (!rootRole) return;
+
+        if (target.roleId !== undefined && target.roleId === rootRole.id) throw new RootAccountProtectedException();
+
+        if (target.userId !== undefined) {
+            const targetUser = await this.rawRepo.findOne({ where: { id: target.userId }, select: { id: true, roleId: true } });
+            if (targetUser?.roleId === rootRole.id) throw new RootAccountProtectedException();
+        }
+    }
+
     /** RF-A28 — called on every successful login (not on token refresh). */
     async setLastLogin(userId: number): Promise<void> {
         await this.rawRepo.update(userId, { lastLoginAt: new Date() });
@@ -163,7 +204,7 @@ export class UsersService {
         user.passwordHash  = await hashPassword(dto.password);
         user.roleId        = dto.roleId;
 
-        const saved = await repo.save(user);
+        const saved = await this.saveHandlingDuplicate(() => repo.save(user));
 
         // Build DtoRepository from the same repo so the result is visible within any active transaction.
         const result = await new DtoRepository(repo).findOne({ dto: returnDto, where: { id: saved.id } });
@@ -203,7 +244,7 @@ export class UsersService {
             payload.passwordChangedAt = new Date();
         }
 
-        await repo.update(id, payload);
+        await this.saveHandlingDuplicate(() => repo.update(id, payload));
 
         const result = await new DtoRepository(repo).findOne({ dto: returnDto, where: { id } });
         return result!;
@@ -220,6 +261,16 @@ export class UsersService {
     }
 
     // ── Private implementation ────────────────────────────────────────────────
+
+    /** Two concurrent requests with the same username/email can both pass the pre-check — map the index error to the same 409. */
+    private async saveHandlingDuplicate<R>(write: () => Promise<R>): Promise<R> {
+        try {
+            return await write();
+        } catch (err) {
+            if (isUniqueViolation(err)) throw new UserAlreadyExistsException();
+            throw err;
+        }
+    }
 
     /** An unknown roleId would otherwise reach the FK and come back as a 500. */
     private async assertRoleExists(roleId: number, options?: MutationOptions): Promise<void> {
@@ -249,7 +300,7 @@ export class UsersService {
 
     private async existsByUsernameOrEmail(username?: string, email?: string, excludeId?: number): Promise<boolean> {
         if (username && await this.existsBy({ username }, excludeId)) return true;
-        if (email && await this.existsBy({ email }, excludeId)) return true;
+        if (email && await this.existsBy({ email: ILike(escapeLike(email.trim())) }, excludeId)) return true;
         return false;
     }
 

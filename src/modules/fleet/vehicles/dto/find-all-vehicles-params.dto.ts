@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsPositive, IsString } from 'class-validator';
+import { IsInt, IsOptional, IsPositive, IsString, Max } from 'class-validator';
+import { INT4_MAX } from '../../../../shared/constants/int4.js';
 import { PaginationParamsDto } from '../../../../shared/dto/index.js';
 
 export class FindAllVehiclesParamsDto extends PaginationParamsDto {
@@ -14,5 +15,6 @@ export class FindAllVehiclesParamsDto extends PaginationParamsDto {
     @Type(() => Number)
     @IsInt()
     @IsPositive()
+    @Max(INT4_MAX)
     vehicleStatusId?: number;
 }

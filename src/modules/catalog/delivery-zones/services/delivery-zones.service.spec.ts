@@ -3,6 +3,7 @@
 // (Escenario 3) vive en el DTO (@IsInt/@IsPositive, cubierta por el ValidationPipe global, no acá).
 import { describe, expect, it, vi } from 'vitest';
 import { plainToInstance } from 'class-transformer';
+import { QueryFailedError } from 'typeorm';
 import { DeliveryZonesService } from './delivery-zones.service.js';
 import { FindAllDeliveryZonesParamsDto } from '../dto/find-all-delivery-zones-params.dto.js';
 import { DeliveryZoneDto } from '../dto/delivery-zone.dto.js';
@@ -141,5 +142,34 @@ describe('DeliveryZonesService.findAll — búsqueda', () => {
     it('un search vacío o de solo espacios se ignora', async () => {
         expect(await run({ search: '' })).toEqual({});
         expect(await run({ search: '   ' })).toEqual({});
+    });
+});
+
+describe('DeliveryZonesService — carrera al crear/editar con un código repetido', () => {
+    const dup = () => new QueryFailedError('INSERT ...', [], Object.assign(new Error('dup'), { code: '23505' }));
+
+    it('create: el índice único (dos pedidos a la vez) responde 409, no 500', async () => {
+        const { service, rawRepo } = buildService();
+        rawRepo.findOne.mockResolvedValue(null);
+        rawRepo.save.mockRejectedValue(dup());
+
+        await expect(service.create(DeliveryZoneDto, { code: 'ZON-X', name: 'X', estimatedTimeMin: 10 } as any)).rejects.toThrow(DeliveryZoneCodeAlreadyExistsException);
+    });
+
+    it('update: también responde 409', async () => {
+        const { service, rawRepo } = buildService();
+        rawRepo.findOne.mockResolvedValueOnce(EXISTING_ZONE).mockResolvedValue(null);
+        rawRepo.update.mockRejectedValue(dup());
+
+        await expect(service.update(DeliveryZoneDto, 1, { code: 'ZON-NEW' } as any)).rejects.toThrow(DeliveryZoneCodeAlreadyExistsException);
+    });
+
+    it('otro error de base de datos se propaga tal cual', async () => {
+        const { service, rawRepo } = buildService();
+        rawRepo.findOne.mockResolvedValue(null);
+        const failure = new QueryFailedError('INSERT', [], Object.assign(new Error('null'), { code: '23502' }));
+        rawRepo.save.mockRejectedValue(failure);
+
+        await expect(service.create(DeliveryZoneDto, { code: 'ZON-X', name: 'X', estimatedTimeMin: 10 } as any)).rejects.toBe(failure);
     });
 });

@@ -25,6 +25,12 @@ export class DispatchesService {
         return repo.existsBy({ id });
     }
 
+    /** Whether the dispatch belongs to a route batch assigned to this driver (a driver may only report on their own). */
+    async isAssignedToDriver(dispatchId: number, driverId: number, options?: MutationOptions): Promise<boolean> {
+        const repo = options?.manager?.getRepository(Dispatch) ?? this.rawRepo;
+        return repo.exists({ where: { id: dispatchId, routeBatch: { driverId } } });
+    }
+
     /** Whether any dispatch that is still in progress uses this service level (RF-A31, Escenario 3). */
     async hasActiveByServiceLevel(serviceLevelId: number, options?: MutationOptions): Promise<boolean> {
         const repo = options?.manager?.getRepository(Dispatch) ?? this.rawRepo;

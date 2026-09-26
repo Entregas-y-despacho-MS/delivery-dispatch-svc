@@ -7,3 +7,5 @@ export * from './invalid-reset-token.exception.js';
 export * from './totp-required.exception.js';
 export * from './invalid-totp-code.exception.js';
 export * from './session-expired.exception.js';
+export * from './two-factor-already-enabled.exception.js';
+export * from './root-account-protected.exception.js';

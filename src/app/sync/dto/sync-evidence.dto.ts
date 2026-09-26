@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsPositive, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsPositive, IsString, IsUUID, Max, MaxLength } from 'class-validator';
+
+import { INT4_MAX } from '../../../shared/constants/int4.js';
 
 // Comes from a multipart/form-data body — every field arrives as a string, hence @Type(() => Number).
 export class SyncEvidenceDto {
@@ -14,6 +16,7 @@ export class SyncEvidenceDto {
     @Type(() => Number)
     @IsInt()
     @IsPositive()
+    @Max(INT4_MAX)
     dispatchId: number;
 
     @ApiProperty({ enum: ['photo', 'signature', 'otp'], description: 'Kind of evidence: a photo of the delivery, the recipient signature, or the OTP code they gave' })

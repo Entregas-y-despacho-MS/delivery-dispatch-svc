@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsInt, IsNotEmpty, IsNumber, IsPositive, IsString, Max, MaxLength } from 'class-validator';
+import { INT4_MAX } from '../../../../shared/constants/int4.js';
 import { OptionalNotNull } from '../../../../shared/validators/optional-not-null.validator.js';
 
 const MAX_CAPACITY = 99999999.99;
@@ -49,5 +50,6 @@ export class UpdateVehicleDto {
     @OptionalNotNull()
     @IsInt({ message: 'Vehicle status ID must be an integer.' })
     @IsPositive({ message: 'Vehicle status ID must be a positive number.' })
+    @Max(INT4_MAX, { message: 'Vehicle status ID is too large.' })
     vehicleStatusId?: number;
 }

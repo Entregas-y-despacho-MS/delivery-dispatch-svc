@@ -126,7 +126,7 @@ export interface BadRequestOptions {
     validation?: boolean;
     /** The messages shown in the validation example — pick ones this endpoint can really return. */
     example?:    string[];
-    /** The endpoint has a numeric `:id` path param (ParseIntPipe rejects a non-numeric value). */
+    /** The endpoint has a numeric `:id` path param (ParseIdPipe rejects a non-numeric or out-of-range value). */
     id?:         boolean;
     /** Business-rule rejections specific to this endpoint (message is a string, `error` a domain code). */
     errors?:     ErrorExample[];
@@ -190,4 +190,4 @@ export const ApiUnprocessableEntity = (...errors: ErrorExample[]) => {
 
 /** Documents the numeric `:id` path param. `what` is the resource, e.g. 'Vehicle'. */
 export const ApiIdParam = (what: string) =>
-    applyDecorators(ApiParam({ name: 'id', type: 'integer', example: 1, description: `${what} ID (a positive integer, as returned by the list endpoint).` }));
+    applyDecorators(ApiParam({ name: 'id', type: 'integer', example: 1, description: `${what} ID (a whole number from 1 to 2147483647, as returned by the list endpoint). Anything else is a 400.` }));

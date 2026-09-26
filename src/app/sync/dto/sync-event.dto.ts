@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsDateString, IsEnum, IsInt, IsOptional, IsPositive, IsString, IsUUID, MaxLength, ValidateIf } from 'class-validator';
+import { IsDateString, IsEnum, IsInt, IsOptional, IsPositive, IsString, IsUUID, Max, MaxLength, ValidateIf } from 'class-validator';
+import { INT4_MAX } from '../../../shared/constants/int4.js';
 import { SyncEventType } from './sync-event-type.enum.js';
 
 export class SyncEventDto {
@@ -16,6 +17,7 @@ export class SyncEventDto {
     @ApiProperty({ type: 'integer', example: 42, description: 'ID of the dispatch the event is about' })
     @IsInt()
     @IsPositive()
+    @Max(INT4_MAX)
     dispatchId: number;
 
     // The device's own UTC clock when the change actually happened — not when it finally synced.
@@ -27,12 +29,14 @@ export class SyncEventDto {
     @ValidateIf((o: SyncEventDto) => o.type === SyncEventType.STATUS_CHANGE)
     @IsInt()
     @IsPositive()
+    @Max(INT4_MAX)
     dispatchStatusId?: number;
 
     @ApiPropertyOptional({ type: 'integer', example: 2, description: 'Required when type = incident: the ID of the incident reason' })
     @ValidateIf((o: SyncEventDto) => o.type === SyncEventType.INCIDENT)
     @IsInt()
     @IsPositive()
+    @Max(INT4_MAX)
     incidentReasonId?: number;
 
     @ApiPropertyOptional({ maxLength: 1000, example: 'Client not at home', description: 'Optional free text: why the status changed, or a description of the incident' })

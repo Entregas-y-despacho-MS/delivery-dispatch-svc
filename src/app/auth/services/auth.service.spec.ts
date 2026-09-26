@@ -3,7 +3,7 @@
 // Todo mockeado (UsersService, JwtService, SettingsService, etc.) — sin DB, sin red.
 import { describe, expect, it, vi } from 'vitest';
 import { AuthService } from './auth.service.js';
-import { InvalidCredentialsException, AccountLockedException } from '../exceptions/index.js';
+import { InvalidCredentialsException, AccountLockedException, InvalidRefreshTokenException } from '../exceptions/index.js';
 import { RoleEnum } from '../../../shared/enums/index.js';
 import { hashPassword } from '../../../shared/utils/crypto.util.js';
 
@@ -54,6 +54,7 @@ function buildService(options: ServiceOptions = {}) {
         findOneByUsername: vi.fn().mockResolvedValue(user),
         findOneById:        vi.fn().mockResolvedValue(user ? { id: user.id, username: user.username } : null),
         setLockoutState:    vi.fn(),
+        registerFailedLogin: vi.fn(),
         setLastLogin:       vi.fn(),
         setRefreshToken:    vi.fn(),
     };
@@ -97,22 +98,22 @@ describe('AuthService — login / bloqueo temporal (RF-A21, ST-13.3)', () => {
         await expect(service.login({ username: user.username, password: 'Incorrecta1!' } as any))
             .rejects.toThrow(InvalidCredentialsException);
 
-        expect(usersService.setLockoutState).toHaveBeenCalledWith(user.id, 2, null);
+        // El contador lo incrementa la base en un solo UPDATE atómico (ver e2e): acá solo se pide.
+        expect(usersService.registerFailedLogin).toHaveBeenCalledWith(user.id, 5, 15 * 60_000);
         expect(usersService.setLastLogin).not.toHaveBeenCalled(); // un intento fallido no es un acceso
     });
 
-    it('llega al máximo de intentos configurado → bloquea la cuenta (lockedUntil futuro)', async () => {
+    // Cuándo se llega al máximo y se bloquea la cuenta lo decide el UPDATE atómico de la base:
+    // se prueba contra Postgres real en test/security-hardening.e2e-spec.ts.
+    it('un login fallido registra el intento una sola vez, sin leer-y-escribir el contador desde acá', async () => {
         const user = buildAuthUser({ passwordHash: await hashPassword('Passw0rd!'), failedAttempts: 4 });
         const { service, usersService } = buildService({ user, maxFailedAttempts: 5, lockoutMinutes: 15 });
 
         await expect(service.login({ username: user.username, password: 'Incorrecta1!' } as any))
             .rejects.toThrow(InvalidCredentialsException);
 
-        expect(usersService.setLockoutState).toHaveBeenCalledTimes(1);
-        const [, failedAttempts, lockedUntil] = usersService.setLockoutState.mock.calls[0];
-        expect(failedAttempts).toBe(5);
-        expect(lockedUntil).toBeInstanceOf(Date);
-        expect(lockedUntil.getTime()).toBeGreaterThan(Date.now());
+        expect(usersService.registerFailedLogin).toHaveBeenCalledTimes(1);
+        expect(usersService.setLockoutState).not.toHaveBeenCalled();
     });
 
     it('cuenta ya bloqueada → ACCOUNT_LOCKED, sin siquiera comparar la contraseña', async () => {
@@ -133,15 +134,13 @@ describe('AuthService — login / bloqueo temporal (RF-A21, ST-13.3)', () => {
 
     it('respeta settings.max_failed_login_attempts configurado, no un valor fijo', async () => {
         const user = buildAuthUser({ passwordHash: await hashPassword('Passw0rd!'), failedAttempts: 1 });
-        // Con el máximo bajado a 2, el 2do intento fallido ya debe bloquear.
-        const { service, usersService } = buildService({ user, maxFailedAttempts: 2, lockoutMinutes: 15 });
+        // Con el máximo bajado a 2 y el bloqueo a 30 min, eso es lo que se le pasa a la base.
+        const { service, usersService } = buildService({ user, maxFailedAttempts: 2, lockoutMinutes: 30 });
 
         await expect(service.login({ username: user.username, password: 'Incorrecta1!' } as any))
             .rejects.toThrow(InvalidCredentialsException);
 
-        const [, failedAttempts, lockedUntil] = usersService.setLockoutState.mock.calls[0];
-        expect(failedAttempts).toBe(2);
-        expect(lockedUntil).toBeInstanceOf(Date);
+        expect(usersService.registerFailedLogin).toHaveBeenCalledWith(user.id, 2, 30 * 60_000);
     });
 
     it('cuenta inactiva → INVALID_CREDENTIALS, mismo mensaje genérico que credenciales inválidas', async () => {
@@ -207,5 +206,97 @@ describe('AuthService — mustChangePassword (RF-A25, Escenario 2)', () => {
         const result = await service.login({ username: user.username, password } as any);
         expect(settings.getNumber).toHaveBeenCalledWith('password_expiration_days', 90);
         expect(result.mustChangePassword).toBe(true);
+    });
+});
+
+// ── rotación de refresh tokens ─────────────────────────────────────────────────
+// Antes se guardaba un bcrypt del token, que solo lee sus primeros 72 bytes: TODOS los refresh tokens de
+// un mismo usuario "coincidían" y un token ya rotado seguía sirviendo. Ahora se guarda su SHA-256.
+describe('AuthService — refresh token: se guarda la huella completa, no un bcrypt', () => {
+    async function withRealJwt(user: ReturnType<typeof buildAuthUser>) {
+        const { JwtService } = await import('@nestjs/jwt');
+        const jwt = new JwtService({ secret: 'access-secret' });
+        const usersService = {
+            findOneByUsername: vi.fn().mockResolvedValue(user),
+            findOneById:       vi.fn(async () => ({ ...user })), // a fresh copy per call: tests change user.refreshTokenHash
+            setLockoutState:   vi.fn(),
+            setLastLogin:      vi.fn(),
+            setRefreshToken:   vi.fn(),
+        };
+        const jwtConfig = { refreshSecret: 'refresh-secret', refreshExpiresIn: '7d' };
+        const settings  = { getNumber: vi.fn((_k: string, fallback: number) => fallback) };
+        const service   = new AuthService(usersService as any, jwt, jwtConfig as any, { verify: vi.fn() } as any, { send: vi.fn() } as any, settings as any);
+        return { service, usersService };
+    }
+
+    it('login guarda el SHA-256 del refresh token (64 hex), no un hash bcrypt', async () => {
+        const user = buildAuthUser({ passwordHash: await hashPassword('Passw0rd!') });
+        const { service, usersService } = await withRealJwt(user);
+
+        const { refreshToken } = await service.login({ username: user.username, password: 'Passw0rd!' } as any);
+
+        const stored = usersService.setRefreshToken.mock.calls.at(-1)![1] as string;
+        expect(stored).toMatch(/^[0-9a-f]{64}$/);
+        expect(stored).toBe((await import('../../../shared/utils/crypto.util.js')).hashToken(refreshToken));
+    });
+
+    it('dos logins seguidos del mismo usuario dan refresh tokens distintos (jti único)', async () => {
+        const user = buildAuthUser({ passwordHash: await hashPassword('Passw0rd!') });
+        const { service } = await withRealJwt(user);
+
+        const a = await service.login({ username: user.username, password: 'Passw0rd!' } as any);
+        const b = await service.login({ username: user.username, password: 'Passw0rd!' } as any);
+
+        expect(a.refreshToken).not.toBe(b.refreshToken);
+    });
+
+    it('refresh con el token vigente → tokens nuevos y se guarda la huella del nuevo', async () => {
+        const user = buildAuthUser({ passwordHash: await hashPassword('Passw0rd!') });
+        const { service, usersService } = await withRealJwt(user);
+        const { refreshToken } = await service.login({ username: user.username, password: 'Passw0rd!' } as any);
+        user.refreshTokenHash = usersService.setRefreshToken.mock.calls.at(-1)![1] as any;
+
+        const next = await service.refresh({ refreshToken } as any);
+
+        expect(next.refreshToken).not.toBe(refreshToken);
+        expect(usersService.setRefreshToken.mock.calls.at(-1)![1]).not.toBe(user.refreshTokenHash);
+    });
+
+    it('un token YA ROTADO (mismo usuario, mismo inicio) es rechazado y cierra todas las sesiones', async () => {
+        const user = buildAuthUser({ passwordHash: await hashPassword('Passw0rd!') });
+        const { service, usersService } = await withRealJwt(user);
+        const first = await service.login({ username: user.username, password: 'Passw0rd!' } as any);
+        user.refreshTokenHash = usersService.setRefreshToken.mock.calls.at(-1)![1] as any;
+        const second = await service.refresh({ refreshToken: first.refreshToken } as any); // rota: first ya no vale
+        user.refreshTokenHash = usersService.setRefreshToken.mock.calls.at(-1)![1] as any;
+
+        await expect(service.refresh({ refreshToken: first.refreshToken } as any)).rejects.toThrow(InvalidRefreshTokenException);
+
+        expect(usersService.setRefreshToken).toHaveBeenLastCalledWith(user.id, null); // reuso → revoca todo
+        expect(second.refreshToken).toBeDefined();
+    });
+
+    it('un hash bcrypt viejo en la base (de antes de este cambio) no sirve: hay que volver a iniciar sesión', async () => {
+        const user = buildAuthUser({ passwordHash: await hashPassword('Passw0rd!') });
+        const { service, usersService } = await withRealJwt(user);
+        const { refreshToken } = await service.login({ username: user.username, password: 'Passw0rd!' } as any);
+        user.refreshTokenHash = (await hashPassword(refreshToken)) as any;
+
+        await expect(service.refresh({ refreshToken } as any)).rejects.toThrow(InvalidRefreshTokenException);
+        expect(usersService.setRefreshToken).toHaveBeenLastCalledWith(user.id, null);
+    });
+});
+
+describe('AuthService.register — solo root puede dar el rol root', () => {
+    it('comprueba al que llama antes de crear la cuenta', async () => {
+        const { service, usersService } = buildService();
+        (usersService as any).assertCanManageRoot = vi.fn().mockRejectedValue(new Error('blocked'));
+        (usersService as any).create = vi.fn();
+        const actor = { id: 2, username: 'admin', roleId: 2, role: RoleEnum.ADMIN };
+
+        await expect(service.register({ roleId: 1 } as any, actor)).rejects.toThrow('blocked');
+
+        expect((usersService as any).assertCanManageRoot).toHaveBeenCalledWith(actor, { roleId: 1 });
+        expect((usersService as any).create).not.toHaveBeenCalled();
     });
 });

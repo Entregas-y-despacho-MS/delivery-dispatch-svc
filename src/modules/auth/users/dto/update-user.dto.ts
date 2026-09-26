@@ -1,5 +1,8 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsEmail, IsInt, IsOptional, IsPositive, IsString, IsStrongPassword, MaxLength } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsBoolean, IsEmail, IsInt, IsOptional, IsPositive, IsString, IsStrongPassword, Max, MaxLength } from 'class-validator';
+import { INT4_MAX } from '../../../../shared/constants/int4.js';
+import { normalizeEmail } from './create-user.dto.js';
 import { OptionalNotNull } from '../../../../shared/validators/optional-not-null.validator.js';
 import { STRONG_PASSWORD_OPTIONS, STRONG_PASSWORD_MESSAGE } from '../../../../shared/validators/password.validator.js';
 
@@ -20,6 +23,7 @@ export class UpdateUserDto {
     // way to clear it. Every other field here is NOT NULL.
     @ApiPropertyOptional({ type: String, example: 'ana@hipermaxi.com', maxLength: 150, nullable: true, description: 'New email, which must not belong to another user. null clears it' })
     @IsOptional()
+    @Transform(normalizeEmail)
     @IsEmail({}, { message: 'Email must be a valid email address.' })
     @MaxLength(150)
     email?: string;
@@ -35,6 +39,7 @@ export class UpdateUserDto {
     @OptionalNotNull()
     @IsInt({ message: 'Role ID must be an integer.' })
     @IsPositive({ message: 'Role ID must be a positive number.' })
+    @Max(INT4_MAX, { message: 'Role ID is too large.' })
     roleId?: number;
 
     @ApiPropertyOptional({ example: false, description: 'false deactivates the user (cannot log in) without deleting it; true reactivates. null is rejected' })

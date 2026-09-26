@@ -1,6 +1,6 @@
 import {
     Controller, Get, Post, Put, Delete,
-    Body, Param, Query, ParseIntPipe, HttpCode, HttpStatus,
+    Body, Param, Query, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import {
     ApiTags, ApiBearerAuth, ApiOperation,
@@ -12,6 +12,7 @@ import { CreateVehicleDto } from '../dto/create-vehicle.dto.js';
 import { UpdateVehicleDto } from '../dto/update-vehicle.dto.js';
 import { FindAllVehiclesParamsDto } from '../dto/find-all-vehicles-params.dto.js';
 import { FindAllVehiclesResponseDto } from '../dto/find-all-vehicles-response.dto.js';
+import { ParseIdPipe } from '../../../../shared/pipes/index.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
 import { RoleEnum } from '../../../../shared/enums/index.js';
 import { ApiNotFound, ApiUnauthorized, ApiConflict, ApiBadRequests, ApiIdParam } from '../../../../shared/utils/swagger/index.js';
@@ -57,7 +58,7 @@ export class VehiclesController {
     @ApiOkResponse({ type: VehicleDto })
     @ApiNotFound({ code: 'VEHICLE_NOT_FOUND', message: 'Vehicle not found.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
-    async findOne(@Param('id', ParseIntPipe) id: number): Promise<VehicleDto> {
+    async findOne(@Param('id', ParseIdPipe) id: number): Promise<VehicleDto> {
         return await this.vehiclesService.findOneById(VehicleDto, id);
     }
 
@@ -89,7 +90,7 @@ export class VehiclesController {
     @ApiConflict({ code: 'VEHICLE_PLATE_ALREADY_EXISTS', message: 'A vehicle with this plate already exists.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async update(
-        @Param('id', ParseIntPipe) id: number,
+        @Param('id', ParseIdPipe) id: number,
         @Body() dto: UpdateVehicleDto,
     ): Promise<VehicleDto> {
         return await this.vehiclesService.update(VehicleDto, id, dto);
@@ -107,7 +108,7 @@ export class VehiclesController {
     @ApiNoContentResponse({ description: 'Vehicle removed.' })
     @ApiNotFound({ code: 'VEHICLE_NOT_FOUND', message: 'Vehicle not found.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
-    async remove(@Param('id', ParseIntPipe) id: number): Promise<void> {
+    async remove(@Param('id', ParseIdPipe) id: number): Promise<void> {
         return await this.vehiclesService.remove(id);
     }
 }

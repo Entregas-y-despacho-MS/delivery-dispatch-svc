@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
-import { IsBoolean, IsEnum, IsIn, IsInt, IsOptional, IsPositive, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsEnum, IsIn, IsInt, IsOptional, IsPositive, IsString, Max, MaxLength } from 'class-validator';
+import { INT4_MAX } from '../../../../shared/constants/int4.js';
 import { PaginationParamsDto } from '../../../../shared/dto/index.js';
 import { UserStatusEnum } from '../../../../shared/enums/index.js';
 import { transformToBoolean } from '../../../../shared/utils/transformers.util.js';
@@ -18,6 +19,7 @@ export class FindAllUsersParamsDto extends PaginationParamsDto {
     @Type(() => Number)
     @IsInt()
     @IsPositive()
+    @Max(INT4_MAX)
     roleId?: number;
 
     @ApiPropertyOptional({

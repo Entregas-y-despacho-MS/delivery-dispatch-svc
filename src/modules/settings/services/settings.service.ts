@@ -3,7 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Setting } from '../entities/setting.entity.js';
 import { DtoRepository } from '../../../shared/orm/index.js';
-import { SettingNotFoundException } from '../exceptions/index.js';
+import { SettingNotFoundException, InvalidSettingValueException } from '../exceptions/index.js';
+import { validateSettingValue } from '../utils/setting-value.validator.js';
 
 // Refreshes the in-memory cache periodically as a safety net for changes made directly in the
 // DB (outside update()) — update() itself refreshes its own key immediately, no need to wait.
@@ -71,6 +72,9 @@ export class SettingsService implements OnModuleInit, OnModuleDestroy {
     }
 
     async update<T>(returnDto: new () => T, key: string, value: string): Promise<T> {
+        const problem = validateSettingValue(key, value);
+        if (problem) throw new InvalidSettingValueException(problem);
+
         const result = await this.rawRepo.update(key, { value });
         if (result.affected === 0) throw new SettingNotFoundException();
 
