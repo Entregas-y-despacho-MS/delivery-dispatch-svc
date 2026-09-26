@@ -224,12 +224,12 @@ describe('Security hardening (e2e)', () => {
         it('cannot be started again while enabled (the secret would be swapped without the password)', async () => {
             const u = await mkUser('coordinator', 'tfa');
             const H = { Authorization: `Bearer ${(await login(u.username)).body.accessToken}` };
-            const enable = await http().post(api('/auth/2fa/enable')).set(H);
+            const enable = await http().post(api('/auth/2fa/enable')).set(H).send({ password: PASSWORD });
             expect(enable.status).toBe(200);
             const code = await new OTP({ strategy: 'totp' }).generate({ secret: enable.body.secret });
             await http().post(api('/auth/2fa/confirm')).set(H).send({ code }).expect(204);
 
-            const again = await http().post(api('/auth/2fa/enable')).set(H);
+            const again = await http().post(api('/auth/2fa/enable')).set(H).send({ password: PASSWORD });
             expect(again.status).toBe(409);
             expect(again.body.error).toBe('TWO_FACTOR_ALREADY_ENABLED');
 
@@ -241,14 +241,14 @@ describe('Security hardening (e2e)', () => {
         it('can be started again before it is confirmed, and after disabling it', async () => {
             const u = await mkUser('coordinator', 'tfb');
             const H = { Authorization: `Bearer ${(await login(u.username)).body.accessToken}` };
-            const first = await http().post(api('/auth/2fa/enable')).set(H);
-            const second = await http().post(api('/auth/2fa/enable')).set(H);
+            const first = await http().post(api('/auth/2fa/enable')).set(H).send({ password: PASSWORD });
+            const second = await http().post(api('/auth/2fa/enable')).set(H).send({ password: PASSWORD });
             expect([first.status, second.status]).toEqual([200, 200]);
 
             const code = await new OTP({ strategy: 'totp' }).generate({ secret: second.body.secret });
             await http().post(api('/auth/2fa/confirm')).set(H).send({ code }).expect(204);
             await http().post(api('/auth/2fa/disable')).set(H).send({ password: PASSWORD }).expect(204);
-            expect((await http().post(api('/auth/2fa/enable')).set(H)).status).toBe(200);
+            expect((await http().post(api('/auth/2fa/enable')).set(H).send({ password: PASSWORD })).status).toBe(200);
         });
     });
 
@@ -389,6 +389,163 @@ describe('Security hardening (e2e)', () => {
         });
     });
 
+    // ── the access token is checked against the database ───────────────────────
+    describe('an access token is only as good as its user is now', () => {
+        const get = (token: string) => http().get(api('/roles')).set({ Authorization: `Bearer ${token}` });
+
+        it('deactivating the user closes their access token on the very next request', async () => {
+            const u = await mkUser('coordinator', 'tk1');
+            const token = (await login(u.username)).body.accessToken as string;
+            expect((await get(token)).status).toBe(200);
+
+            await http().put(api(`/users/${u.id}`)).set(auth('admin')).send({ active: false }).expect(200);
+
+            const res = await get(token);
+            expect(res.status).toBe(401);
+            expect(res.body.error).toBe('INVALID_TOKEN');
+        });
+
+        it('deleting the user closes it too', async () => {
+            const u = await mkUser('coordinator', 'tk2');
+            const token = (await login(u.username)).body.accessToken as string;
+            await http().delete(api(`/users/${u.id}`)).set(auth('admin')).expect(204);
+            expect((await get(token)).status).toBe(401);
+        });
+
+        it('a role change applies at once: a token minted as admin stops being admin', async () => {
+            const u = await mkUser('admin', 'tk3');
+            const token = (await login(u.username)).body.accessToken as string;
+            expect((await http().get(api('/settings')).set({ Authorization: `Bearer ${token}` })).status).toBe(200);
+
+            await http().put(api(`/users/${u.id}`)).set(auth('admin')).send({ roleId: roles.driver }).expect(200);
+
+            expect((await http().get(api('/settings')).set({ Authorization: `Bearer ${token}` })).status).toBe(403);
+        });
+
+        it('a password change closes the access tokens issued before it (also one stolen earlier)', async () => {
+            const u = await mkUser('coordinator', 'tk4');
+            const stolen = (await login(u.username)).body.accessToken as string;
+            await new Promise((r) => setTimeout(r, 1100)); // the JWT clock has second resolution
+
+            await http().put(api(`/users/${u.id}`)).set(auth('admin')).send({ password: 'NewSecret1234!' }).expect(200);
+
+            expect((await get(stolen)).status).toBe(401);
+            const fresh = (await login(u.username, 'NewSecret1234!')).body.accessToken as string;
+            expect((await get(fresh)).status).toBe(200);
+        });
+
+        it('the user\'s own change-password also closes the current token (they must log in again)', async () => {
+            const u = await mkUser('coordinator', 'tk5');
+            const token = (await login(u.username)).body.accessToken as string;
+            await new Promise((r) => setTimeout(r, 1100));
+            await http().patch(api('/auth/change-password')).set({ Authorization: `Bearer ${token}` }).send({ currentPassword: PASSWORD, newPassword: 'OtherSecret1234!' }).expect(204);
+            expect((await get(token)).status).toBe(401);
+        });
+    });
+
+    // ── a password change is enforced, not just suggested ──────────────────────
+    describe('an account that must change its password can do nothing else (RF-A25)', () => {
+        it('gets 403 PASSWORD_CHANGE_REQUIRED everywhere except change-password and logout', async () => {
+            const u = await mkUser('admin', 'pw1');
+            await ds.query(`UPDATE users SET requires_pwd_change = true WHERE user_id = $1`, [u.id]);
+            const l = await login(u.username);
+            expect(l.body.mustChangePassword).toBe(true);
+            const H = { Authorization: `Bearer ${l.body.accessToken}` };
+
+            for (const path of ['/users', '/roles', '/settings', '/service-levels', '/vehicles']) {
+                const res = await http().get(api(path)).set(H);
+                expect(res.status, path).toBe(403);
+                expect(res.body.error).toBe('PASSWORD_CHANGE_REQUIRED');
+            }
+            expect((await http().post(api('/auth/2fa/enable')).set(H).send({ password: PASSWORD })).status).toBe(403);
+        });
+
+        it('can change the password, then log in and use the system normally', async () => {
+            const u = await mkUser('admin', 'pw2');
+            await ds.query(`UPDATE users SET requires_pwd_change = true WHERE user_id = $1`, [u.id]);
+            const token = (await login(u.username)).body.accessToken as string;
+            await new Promise((r) => setTimeout(r, 1100));
+
+            await http().patch(api('/auth/change-password')).set({ Authorization: `Bearer ${token}` }).send({ currentPassword: PASSWORD, newPassword: 'ChangedNow1234!' }).expect(204);
+
+            const again = await login(u.username, 'ChangedNow1234!');
+            expect(again.body.mustChangePassword).toBe(false);
+            expect((await http().get(api('/roles')).set({ Authorization: `Bearer ${again.body.accessToken}` })).status).toBe(200);
+        });
+
+        it('can log out', async () => {
+            const u = await mkUser('coordinator', 'pw3');
+            await ds.query(`UPDATE users SET requires_pwd_change = true WHERE user_id = $1`, [u.id]);
+            const token = (await login(u.username)).body.accessToken as string;
+            expect((await http().post(api('/auth/logout')).set({ Authorization: `Bearer ${token}` })).status).toBe(204);
+        });
+
+        it('an expired password (older than password_expiration_days) is enforced the same way', async () => {
+            const u = await mkUser('coordinator', 'pw4');
+            await ds.query(`UPDATE users SET password_changed_at = now() - interval '200 days' WHERE user_id = $1`, [u.id]);
+            const token = (await login(u.username)).body.accessToken as string;
+            const res = await http().get(api('/roles')).set({ Authorization: `Bearer ${token}` });
+            expect(res.status).toBe(403);
+            expect(res.body.error).toBe('PASSWORD_CHANGE_REQUIRED');
+        });
+    });
+
+    // ── login does not reveal which accounts exist ─────────────────────────────
+    describe('login answers do not reveal accounts', () => {
+        it('a locked account with a WRONG password gets the generic answer, and no extra attempt is counted', async () => {
+            const u = await mkUser('coordinator', 'en1');
+            for (let i = 0; i < 5; i++) await login(u.username, 'Wrong-Passw0rd!');
+            const before = (await userRow(u.id)).failed_attempts;
+
+            const wrong = await login(u.username, 'Another-Wrong1!');
+            expect(wrong.status).toBe(401);
+            expect(wrong.body.error).toBe('INVALID_CREDENTIALS');
+            expect((await userRow(u.id)).failed_attempts).toBe(before);
+
+            const right = await login(u.username);
+            expect(right.body.error).toBe('ACCOUNT_LOCKED'); // the real owner still learns why
+        });
+    });
+
+    // ── nobody locks themselves out ────────────────────────────────────────────
+    describe('own account', () => {
+        it('cannot be deleted, deactivated or re-roled by its owner; other edits are fine', async () => {
+            const u = await mkUser('admin', 'self1');
+            const H = { Authorization: `Bearer ${(await login(u.username)).body.accessToken}` };
+
+            for (const res of [
+                await http().delete(api(`/users/${u.id}`)).set(H),
+                await http().put(api(`/users/${u.id}`)).set(H).send({ active: false }),
+                await http().put(api(`/users/${u.id}`)).set(H).send({ roleId: roles.supervisor }),
+            ]) {
+                expect(res.status).toBe(403);
+                expect(res.body.error).toBe('CANNOT_MODIFY_OWN_ACCOUNT');
+            }
+            const row = await userRow(u.id);
+            expect([row.active, row.deleted_at, row.role_id]).toEqual([true, null, roles.admin]);
+
+            expect((await http().put(api(`/users/${u.id}`)).set(H).send({ fullName: 'Renamed Myself' })).status).toBe(200);
+        });
+
+        it('root cannot delete itself either', async () => {
+            const [{ user_id }] = await ds.query(`SELECT user_id FROM users WHERE username = $1`, [`hd_base_root_${run}`]);
+            expect((await http().delete(api(`/users/${user_id}`)).set(auth('root'))).status).toBe(403);
+        });
+    });
+
+    // ── 2FA needs the password ─────────────────────────────────────────────────
+    describe('2FA enrolment asks for the password', () => {
+        it('wrong or missing password → 401 / 400, and the account is not touched', async () => {
+            const u = await mkUser('coordinator', 'tfp');
+            const H = { Authorization: `Bearer ${(await login(u.username)).body.accessToken}` };
+
+            const wrong = await http().post(api('/auth/2fa/enable')).set(H).send({ password: 'Wrong-Passw0rd!' });
+            expect([wrong.status, wrong.body.error]).toEqual([401, 'INVALID_CREDENTIALS']);
+            expect((await http().post(api('/auth/2fa/enable')).set(H).send({})).status).toBe(400);
+            expect((await userRow(u.id)).two_factor_secret).toBeNull();
+        });
+    });
+
     // ── sync ───────────────────────────────────────────────────────────────────
     describe('sync: a driver only touches their own dispatches', () => {
         let driverA: { id: number; username: string }; let driverB: { id: number; username: string };
@@ -396,7 +553,7 @@ describe('Security hardening (e2e)', () => {
         let seq = 0;
         const uuid = () => `01933b6e-7f2a-7c3d-9a1b-${(Date.now() % 1e9).toString().padStart(9, '0')}${String(++seq).padStart(3, '0')}`;
         const events = (who: string, list: object[]) => http().post(api('/sync/events')).set({ Authorization: `Bearer ${who}` }).send({ events: list });
-        const status = (over: object = {}) => ({ type: 'status_change', clientEventId: uuid(), dispatchId, occurredAt: '2026-09-22T14:03:00.000Z', dispatchStatusId: 2, ...over });
+        const status = (over: object = {}) => ({ type: 'status_change', clientEventId: uuid(), dispatchId, occurredAt: new Date(Date.now() - 60_000).toISOString(), dispatchStatusId: 2, ...over });
         const evidence = (who: string, fields: Record<string, string>, file?: { buf: Buffer; name: string; type: string }) => {
             let r = http().post(api('/sync/evidences')).set({ Authorization: `Bearer ${who}` });
             for (const [k, v] of Object.entries(fields)) r = r.field(k, v);
@@ -416,7 +573,7 @@ describe('Security hardening (e2e)', () => {
         });
 
         it('the assigned driver syncs status changes and incidents (201, applied)', async () => {
-            const res = await events(tokenA, [status(), { type: 'incident', clientEventId: uuid(), dispatchId, occurredAt: '2026-09-22T14:10:00.000Z', incidentReasonId: reasonId, detail: 'Client absent' }]);
+            const res = await events(tokenA, [status(), { type: 'incident', clientEventId: uuid(), dispatchId, occurredAt: new Date(Date.now() - 30_000).toISOString(), incidentReasonId: reasonId, detail: 'Client absent' }]);
             expect(res.status).toBe(201);
             expect(res.body.results.map((r: any) => r.outcome)).toEqual(['applied', 'applied']);
             expect((await ds.query(`SELECT dispatch_status_id FROM dispatches WHERE dispatch_id = $1`, [dispatchId]))[0].dispatch_status_id).toBe(2);
@@ -439,12 +596,29 @@ describe('Security hardening (e2e)', () => {
         });
 
         it('a status or incident reason that does not exist is failed with a clear message', async () => {
-            const res = await events(tokenA, [status({ dispatchStatusId: 999999 }), { type: 'incident', clientEventId: uuid(), dispatchId, occurredAt: '2026-09-22T14:10:00.000Z', incidentReasonId: 999999 }]);
+            const res = await events(tokenA, [status({ dispatchStatusId: 999999 }), { type: 'incident', clientEventId: uuid(), dispatchId, occurredAt: new Date(Date.now() - 30_000).toISOString(), incidentReasonId: 999999 }]);
             expect(res.body.results.map((r: any) => r.error)).toEqual(['The given dispatch status does not exist.', 'The given incident reason does not exist.']);
         });
 
         it('ids above INTEGER in an event are a 400 for the batch', async () => {
             expect((await events(tokenA, [status({ dispatchId: 99999999999 })])).status).toBe(400);
+        });
+
+        it('a delivered dispatch cannot be reopened by a later (or duplicated) event', async () => {
+            const [{ dispatch_id }] = await ds.query(`SELECT dispatch_id FROM dispatches WHERE dispatch_id = $1`, [dispatchId]);
+            await ds.query(`UPDATE dispatches SET dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = 'delivered') WHERE dispatch_id = $1`, [dispatch_id]);
+
+            const res = await events(tokenA, [status({ dispatchStatusId: 1 })]);
+
+            expect(res.body.results[0]).toMatchObject({ outcome: 'failed', error: 'The dispatch is already delivered: its status cannot change.' });
+            expect((await ds.query(`SELECT s.name FROM dispatches d JOIN dispatch_statuses s USING (dispatch_status_id) WHERE d.dispatch_id = $1`, [dispatch_id]))[0].name).toBe('delivered');
+            await ds.query(`UPDATE dispatches SET dispatch_status_id = 1 WHERE dispatch_id = $1`, [dispatch_id]); // reopen for the next tests
+        });
+
+        it('an implausible occurredAt (2099, or older than 30 days) is failed', async () => {
+            const res = await events(tokenA, [status({ occurredAt: '2099-01-01T00:00:00.000Z' }), status({ occurredAt: '2020-01-01T00:00:00.000Z' })]);
+            expect(res.body.results.map((r: any) => r.outcome)).toEqual(['failed', 'failed']);
+            expect(res.body.results[0].error).toContain('occurredAt is not plausible');
         });
 
         it('a non-driver cannot sync', async () => {

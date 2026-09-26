@@ -1,4 +1,6 @@
 import { Controller, Patch, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
+import { SENSITIVE_LIMIT, SENSITIVE_TTL_MS } from '../config/throttle.js';
 import {
     ApiTags, ApiOperation, ApiBearerAuth,
     ApiOkResponse, ApiCreatedResponse, ApiNoContentResponse,
@@ -12,7 +14,7 @@ import { ChangePasswordDto } from '../dto/change-password.dto.js';
 import { ForgotPasswordDto } from '../dto/forgot-password.dto.js';
 import { ResetPasswordDto } from '../dto/reset-password.dto.js';
 import { AuthResponseDto } from '../dto/auth-response.dto.js';
-import { Public, AdminOnly } from '../decorators/index.js';
+import { Public, AdminOnly, AllowWhilePasswordChangeRequired } from '../decorators/index.js';
 import { CurrentUser } from '../../../shared/decorators/current-user.decorator.js';
 import type { AuthUser } from '../strategies/jwt.strategy.js';
 import { ApiUnauthorized, ApiConflict, ApiBadRequests } from '../../../shared/utils/swagger/index.js';
@@ -44,7 +46,7 @@ export class AuthController {
     @HttpCode(HttpStatus.OK)
     @ApiOperation({
         summary:     'Login',
-        description: 'Exchanges a `username` and `password` for an access token (short-lived, sent as `Authorization: Bearer <token>`) and a refresh token (long-lived, used only in POST /auth/refresh). If the account has 2FA enabled, `totpCode` is also required (401 TOTP_REQUIRED without it). Check `mustChangePassword` in the response: when true the client must send the user to change their password before anything else. Repeated wrong passwords lock the account for a while (401 ACCOUNT_LOCKED). A wrong username, wrong password or deactivated account all return the same INVALID_CREDENTIALS, so it never reveals which accounts exist. Public.',
+        description: 'Exchanges a `username` and `password` for an access token (short-lived, sent as `Authorization: Bearer <token>`) and a refresh token (long-lived, used only in POST /auth/refresh). If the account has 2FA enabled, `totpCode` is also required (401 TOTP_REQUIRED without it). Check `mustChangePassword` in the response: when true the client must send the user to change their password, because until then every endpoint except `PATCH /auth/change-password` and `POST /auth/logout` answers 403 `PASSWORD_CHANGE_REQUIRED`. Repeated wrong passwords lock the account for a while (401 ACCOUNT_LOCKED, shown only when the password is right; a wrong password on a locked account is the generic INVALID_CREDENTIALS and does not count). A wrong username, wrong password or deactivated account all return the same INVALID_CREDENTIALS, so it never reveals which accounts exist. Public.',
     })
     @ApiBadRequests({ validation: true, example: ['Username is required.'] })
     @ApiOkResponse({ type: AuthResponseDto })
@@ -93,12 +95,13 @@ export class AuthController {
 
     // No @Roles() — any authenticated user can log out regardless of role (JwtAuthGuard already
     // requires a valid token; RolesGuard allows through when no role list is set).
+    @AllowWhilePasswordChangeRequired()
     @ApiBearerAuth('access-token')
     @Post('logout')
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({
         summary:     'Logout',
-        description: 'Revokes the user\'s refresh token, so the session cannot be renewed. The current access token stays valid until it expires: the client must discard it. Requires any authenticated user.',
+        description: 'Revokes the user\'s refresh token, so the session cannot be renewed. The current access token stays valid until it expires: the client must discard it. Allowed even while the account must change its password. Requires any authenticated user.',
     })
     @ApiNoContentResponse({ description: 'Logged out successfully.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
@@ -107,12 +110,14 @@ export class AuthController {
     }
 
     // No @Roles() — any authenticated user changes their own password.
+    @AllowWhilePasswordChangeRequired()
+    @Throttle({ default: { limit: SENSITIVE_LIMIT, ttl: SENSITIVE_TTL_MS } })
     @ApiBearerAuth('access-token')
     @Patch('change-password')
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({
         summary:     'Change own password',
-        description: 'Changes the password of the logged-in user. Requires the current password (401 INVALID_CREDENTIALS if wrong). The new password must be at least 8 characters with an uppercase letter, a lowercase letter, a number and a symbol, meet the configured minimum length (400 PASSWORD_TOO_SHORT), and differ from the current one and the last 3 used (400 PASSWORD_RECENTLY_USED). On success the session is revoked: the client must log in again with the new password. Requires any authenticated user.',
+        description: 'Changes the password of the logged-in user. Requires the current password (401 INVALID_CREDENTIALS if wrong). The new password must be at least 8 characters with an uppercase letter, a lowercase letter, a number and a symbol, meet the configured minimum length (400 PASSWORD_TOO_SHORT), and differ from the current one and the last 3 used (400 PASSWORD_RECENTLY_USED). On success the session is revoked and every access token issued before the change stops working: the client must log in again with the new password. Allowed even while the account must change its password. Limited to a few attempts per minute (429). Requires any authenticated user.',
     })
     @ApiBadRequests({ validation: true, example: ['New password is required.'], errors: [{ code: 'PASSWORD_TOO_SHORT',     message: 'Password must be at least 8 characters.' }, { code: 'PASSWORD_RECENTLY_USED', message: 'You cannot reuse your current password or any of your last 3 passwords.' }] })
     @ApiNoContentResponse({ description: 'Password changed.' })

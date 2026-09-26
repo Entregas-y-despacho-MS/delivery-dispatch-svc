@@ -27,7 +27,17 @@ async function bootstrap() {
     if (swagger) {
         setupSwagger(app, {
             title:       'delivery-dispatch-svc',
-            description: 'API Documentation',
+            description: [
+                'Delivery / dispatch microservice of the ERP.',
+                '',
+                '**Authenticating.** `POST /auth/login` returns an access token (15 min) and a refresh token (7 days). Click **Authorize** and paste the access token; renew it with `POST /auth/refresh`. The token is checked against the database on every request: a deactivated or deleted user, a changed role or a changed password takes effect immediately (401 `INVALID_TOKEN`).',
+                '',
+                '**Must change password.** When login answers `mustChangePassword: true`, every endpoint except `PATCH /auth/change-password` and `POST /auth/logout` answers 403 `PASSWORD_CHANGE_REQUIRED` until the password is changed.',
+                '',
+                '**Errors.** Every error is `{ statusCode, error, message, path, timestamp }`. `error` is a stable code (`SERVICE_LEVEL_IN_USE`, ...) you can branch on; validation errors (400) have `error: "Bad Request"` and `message` as a list, one entry per invalid field.',
+                '',
+                '**Common statuses.** 401 missing/invalid token · 403 the role cannot do this · 404 not found · 409 conflict (duplicate name/code, or in use) · 429 rate limit (stricter on `change-password` and the 2FA endpoints).',
+            ].join('\n'),
             version:     '1.0',
             path:        'api/docs',
         });

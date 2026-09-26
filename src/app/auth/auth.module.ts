@@ -13,6 +13,7 @@ import { TwoFactorController } from './controllers/two-factor.controller.js';
 import { JwtStrategy } from './strategies/jwt.strategy.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 import { RolesGuard } from './guards/roles.guard.js';
+import { PasswordChangeGuard } from './guards/password-change.guard.js';
 
 @Module({
     imports: [
@@ -45,6 +46,7 @@ import { RolesGuard } from './guards/roles.guard.js';
     providers: [
         // APP_GUARD applies these guards globally. Remove this module from AppModule to disable them.
         { provide: APP_GUARD, useClass: JwtAuthGuard },
+        { provide: APP_GUARD, useClass: PasswordChangeGuard }, // after JwtAuthGuard: needs request.user
         { provide: APP_GUARD, useClass: RolesGuard },
         { provide: APP_GUARD, useClass: ThrottlerGuard },
         JwtConfig,

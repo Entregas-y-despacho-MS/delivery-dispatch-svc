@@ -8,10 +8,16 @@ import { DeliveryEvidencesService } from '../../../modules/dispatch/delivery-evi
 import { DispatchesService } from '../../../modules/dispatch/dispatches/services/dispatches.service.js';
 import { DispatchNotFoundException } from '../../../modules/dispatch/dispatches/exceptions/index.js';
 import { StoragePort } from '../../../plugins/storage/storage.port.js';
+import { FINAL_STATUSES } from '../../../modules/dispatch/dispatches/services/dispatches.service.js';
 import { SyncEventDto } from '../dto/sync-event.dto.js';
 import { SyncEventType } from '../dto/sync-event-type.enum.js';
 import { SyncEventOutcome, SyncEventResultDto, SyncEventsBatchResultDto } from '../dto/sync-event-result.dto.js';
 import { SyncEvidenceDto } from '../dto/sync-evidence.dto.js';
+
+// A device clock is never exact, but an event from 2099 or from last year is not a real one: it would
+// corrupt the history (and every report built on it).
+const MAX_FUTURE_MS = 60 * 60 * 1000;
+const MAX_AGE_MS    = 30 * 24 * 60 * 60 * 1000;
 
 // RF-U13 — orquesta la sincronización offline: idempotencia por clientEventId + orden estricto
 // del lote. Las operaciones genéricas (create/exists) viven en cada módulo de dominio; acá solo
@@ -89,9 +95,17 @@ export class SyncService {
                 if (await this.dispatchEventsService.existsByClientEventId(event.clientEventId, options)) {
                     return SyncEventOutcome.ALREADY_PROCESSED;
                 }
+                this.assertPlausibleTime(event.occurredAt);
 
                 // Unknown dispatch and someone else's dispatch answer the same: a driver cannot probe other routes.
                 if (!(await this.dispatchesService.isAssignedToDriver(event.dispatchId, driverId, options))) throw new DispatchNotFoundException();
+                // A finished order (delivered / returned) cannot go back: a late or duplicated event from the
+                // device must not reopen it.
+                const current = await this.dispatchesService.getStatusName(event.dispatchId, options);
+                const target  = await this.dispatchesService.getStatusNameById(event.dispatchStatusId!, options);
+                if (current && FINAL_STATUSES.includes(current) && target !== current) {
+                    throw new BadRequestException(`The dispatch is already ${current}: its status cannot change.`);
+                }
                 await this.dispatchesService.updateStatus(event.dispatchId, event.dispatchStatusId!, options);
                 await this.dispatchEventsService.create({
                     dispatchId:    event.dispatchId,
@@ -107,6 +121,7 @@ export class SyncService {
             if (await this.dispatchIncidentsService.existsById(event.clientEventId, options)) {
                 return SyncEventOutcome.ALREADY_PROCESSED;
             }
+            this.assertPlausibleTime(event.occurredAt);
             if (!(await this.dispatchesService.isAssignedToDriver(event.dispatchId, driverId, options))) throw new DispatchNotFoundException();
 
             await this.dispatchIncidentsService.create({
@@ -133,6 +148,14 @@ export class SyncService {
         }
         if (driverError?.code === '22003') return 'A numeric value is out of range.';
         return null;
+    }
+
+    private assertPlausibleTime(occurredAt: string): void {
+        const at = new Date(occurredAt).getTime();
+        const now = Date.now();
+        if (at > now + MAX_FUTURE_MS || at < now - MAX_AGE_MS) {
+            throw new BadRequestException('occurredAt is not plausible: it is in the future or more than 30 days old. Check the device clock.');
+        }
     }
 
     private toFailedResult(clientEventId: string, err: unknown): SyncEventResultDto {

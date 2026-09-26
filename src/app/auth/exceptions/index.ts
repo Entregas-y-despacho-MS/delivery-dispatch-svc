@@ -9,3 +9,5 @@ export * from './invalid-totp-code.exception.js';
 export * from './session-expired.exception.js';
 export * from './two-factor-already-enabled.exception.js';
 export * from './root-account-protected.exception.js';
+export * from './password-change-required.exception.js';
+export * from './cannot-modify-own-account.exception.js';

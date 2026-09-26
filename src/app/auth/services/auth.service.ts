@@ -24,6 +24,11 @@ import {
 import { comparePassword, hashToken, tokenMatchesHash } from '../../../shared/utils/crypto.util.js';
 import type { AuthUser } from '../strategies/jwt.strategy.js';
 import { RoleEnum } from '../../../shared/enums/index.js';
+import { isPasswordChangeRequired } from '../utils/password-change.util.js';
+
+// A valid bcrypt hash of a throwaway string. Compared against when the username does not exist or is
+// inactive, so those answers take as long as a wrong password (no timing tell to enumerate accounts).
+const DUMMY_PASSWORD_HASH = '$2b$10$QTKT.i..aWZuuWaSNXDU8esuSOXp.tFw2Ul.X.CChZqockTp3QClG';
 
 @Injectable()
 export class AuthService {
@@ -41,15 +46,21 @@ export class AuthService {
 
         // Same generic error whether the username doesn't exist, the account is inactive,
         // or the password doesn't match — never reveal which case it was.
-        if (!user || !user.active) throw new InvalidCredentialsException();
-
-        if (user.lockedUntil && user.lockedUntil > new Date()) throw new AccountLockedException();
-
-        const passwordMatch = await comparePassword(dto.password, user.passwordHash);
-        if (!passwordMatch) {
-            await this.registerFailedAttempt(user);
+        if (!user || !user.active) {
+            await comparePassword(dto.password, DUMMY_PASSWORD_HASH);
             throw new InvalidCredentialsException();
         }
+
+        // The password is checked BEFORE saying the account is locked: otherwise anyone could learn that a
+        // username exists (and is locked) without knowing its password. A locked account with a wrong
+        // password gets the generic answer and does not count another attempt.
+        const locked = !!user.lockedUntil && user.lockedUntil > new Date();
+        const passwordMatch = await comparePassword(dto.password, user.passwordHash);
+        if (!passwordMatch) {
+            if (!locked) await this.registerFailedAttempt(user);
+            throw new InvalidCredentialsException();
+        }
+        if (locked) throw new AccountLockedException();
 
         if (user.twoFactorEnabled) {
             if (!dto.totpCode) throw new TotpRequiredException();
@@ -177,11 +188,7 @@ export class AuthService {
     // password is older than settings.password_expiration_days. Doesn't block the login itself,
     // just signals the client to redirect to a forced change screen.
     private computeMustChangePassword(user: UserForAuthDto): boolean {
-        if (user.requiresPwdChange) return true;
-
-        const expirationDays = this.settings.getNumber('password_expiration_days', 90);
-        const ageMs = Date.now() - user.passwordChangedAt.getTime();
-        return ageMs > expirationDays * 24 * 60 * 60 * 1000;
+        return isPasswordChangeRequired(user, this.settings.getNumber('password_expiration_days', 90));
     }
 
     // The counter is incremented inside the database (one atomic UPDATE), not read-modified-written

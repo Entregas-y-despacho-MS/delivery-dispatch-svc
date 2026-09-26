@@ -2,9 +2,13 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Dispatch } from '../entities/dispatch.entity.js';
+import { DispatchStatus } from '../../dispatch-statuses/entities/dispatch-status.entity.js';
 import { DispatchNotFoundException } from '../exceptions/index.js';
 import { MutationOptions } from '../../../../shared/dto/options.dto.js';
 import { DispatchStatusEnum } from '../../../../shared/enums/index.js';
+
+// Statuses a dispatch never leaves: a delivered or returned order is finished.
+export const FINAL_STATUSES: string[] = [DispatchStatusEnum.DELIVERED, DispatchStatusEnum.RETURNED];
 
 // A dispatch is "active" (in progress) until it reaches a final state. `not_delivered` is left out on
 // purpose: it is a failed attempt that can still be rescheduled, but the business definition used for
@@ -23,6 +27,19 @@ export class DispatchesService {
     async existsById(id: number, options?: MutationOptions): Promise<boolean> {
         const repo = options?.manager?.getRepository(Dispatch) ?? this.rawRepo;
         return repo.existsBy({ id });
+    }
+
+    /** Current status name of a dispatch, or null when it does not exist. */
+    async getStatusName(dispatchId: number, options?: MutationOptions): Promise<string | null> {
+        const repo = options?.manager?.getRepository(Dispatch) ?? this.rawRepo;
+        const dispatch = await repo.findOne({ where: { id: dispatchId }, relations: { dispatchStatus: true }, select: { id: true, dispatchStatus: { id: true, name: true } } });
+        return dispatch?.dispatchStatus?.name ?? null;
+    }
+
+    /** Name of a dispatch status by id, or null when there is no such status. */
+    async getStatusNameById(statusId: number, options?: MutationOptions): Promise<string | null> {
+        const repo = options?.manager?.getRepository(DispatchStatus) ?? this.rawRepo.manager.getRepository(DispatchStatus);
+        return (await repo.findOne({ where: { id: statusId }, select: { id: true, name: true } }))?.name ?? null;
     }
 
     /** Whether the dispatch belongs to a route batch assigned to this driver (a driver may only report on their own). */

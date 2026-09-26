@@ -67,5 +67,7 @@ export const envValidation = Joi.object({
     // -- Rate limiting (@nestjs/throttler) ---------------------------------------
     THROTTLE_TTL_MS: Joi.number().default(60000),
     THROTTLE_LIMIT:  Joi.number().default(100),
+    // change-password and the 2FA endpoints (they verify a secret of a logged-in user)
+    THROTTLE_SENSITIVE_LIMIT: Joi.number().default(10),
 
 });

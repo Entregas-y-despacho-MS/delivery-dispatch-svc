@@ -1,4 +1,5 @@
 import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { ApiBearerAuth, ApiNoContentResponse, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { UsersService } from '../../../modules/auth/users/services/users.service.js';
 import { UserForAuthDto } from '../../../modules/auth/users/dto/user-for-auth.dto.js';
@@ -6,6 +7,8 @@ import { TwoFactorService } from '../services/two-factor.service.js';
 import { TwoFactorSecretDto } from '../dto/two-factor-secret.dto.js';
 import { ConfirmTwoFactorDto } from '../dto/confirm-two-factor.dto.js';
 import { DisableTwoFactorDto } from '../dto/disable-two-factor.dto.js';
+import { EnableTwoFactorDto } from '../dto/enable-two-factor.dto.js';
+import { SENSITIVE_LIMIT, SENSITIVE_TTL_MS } from '../config/throttle.js';
 import { CurrentUser } from '../../../shared/decorators/current-user.decorator.js';
 import type { AuthUser } from '../strategies/jwt.strategy.js';
 import { InvalidCredentialsException, InvalidTotpCodeException, TwoFactorAlreadyEnabledException } from '../exceptions/index.js';
@@ -24,6 +27,8 @@ import { ApiUnauthorized, ApiBadRequests, ApiConflict } from '../../../shared/ut
  */
 @ApiTags('Auth — 2FA')
 @ApiBearerAuth('access-token')
+// Each of these verifies a secret (password or code) of a logged-in user: a stricter rate limit than the global one.
+@Throttle({ default: { limit: SENSITIVE_LIMIT, ttl: SENSITIVE_TTL_MS } })
 @Controller('auth/2fa')
 export class TwoFactorController {
     constructor(
@@ -35,15 +40,20 @@ export class TwoFactorController {
     @HttpCode(HttpStatus.OK)
     @ApiOperation({
         summary:     'Start 2FA enrollment',
-        description: 'Step 1 of 2 to turn on two-factor authentication for your own account: generates a TOTP secret and returns it with a QR code to scan in an authenticator app (Google Authenticator, Authy, etc.). 2FA is NOT active yet: confirm it with POST /auth/2fa/confirm. Until then, calling it again generates a new secret that replaces the previous one. Once 2FA is enabled this answers 409 TWO_FACTOR_ALREADY_ENABLED: disable it first (POST /auth/2fa/disable, which asks for the password). Requires any authenticated user.',
+        description: 'Step 1 of 2 to turn on two-factor authentication for your own account. Send your current password (401 INVALID_CREDENTIALS if wrong), so a stolen access token alone cannot do it. Generates a TOTP secret and returns it with a QR code to scan in an authenticator app (Google Authenticator, Authy, etc.). 2FA is NOT active yet: confirm it with POST /auth/2fa/confirm. Until then, calling it again generates a new secret that replaces the previous one. Once 2FA is enabled this answers 409 TWO_FACTOR_ALREADY_ENABLED: disable it first (POST /auth/2fa/disable, which asks for the password). Requires any authenticated user.',
     })
+    @ApiBadRequests({ validation: true, example: ['Password is required.'] })
     @ApiOkResponse({ type: TwoFactorSecretDto })
     @ApiConflict({ code: 'TWO_FACTOR_ALREADY_ENABLED', message: 'Two-factor authentication is already enabled. Disable it first (POST /auth/2fa/disable) to enrol a new device.' })
-    @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
-    async enable(@CurrentUser() user: AuthUser): Promise<TwoFactorSecretDto> {
+    @ApiUnauthorized(
+        { code: 'INVALID_CREDENTIALS', message: 'Invalid credentials.' },
+        { code: 'INVALID_TOKEN',       message: 'Invalid or expired token.' },
+    )
+    async enable(@CurrentUser() user: AuthUser, @Body() dto: EnableTwoFactorDto): Promise<TwoFactorSecretDto> {
         // Re-enrolling while 2FA is on would swap the secret: the owner's authenticator stops working, and a
         // stolen access token could take over the second factor without knowing the password.
         const current = await this.usersService.findOneById(UserForAuthDto, user.id);
+        if (!(await comparePassword(dto.password, current.passwordHash))) throw new InvalidCredentialsException();
         if (current.twoFactorEnabled) throw new TwoFactorAlreadyEnabledException();
 
         const secret = this.twoFactor.generateSecret();
@@ -76,7 +86,7 @@ export class TwoFactorController {
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({
         summary:     'Disable 2FA',
-        description: 'Turns off two-factor authentication for your own account and discards the secret. Requires the current password as confirmation (401 INVALID_CREDENTIALS if wrong). Requires any authenticated user.',
+        description: 'Turns off two-factor authentication for your own account and discards the secret. Requires the current password as confirmation (401 INVALID_CREDENTIALS if wrong). Limited to a few attempts per minute (429). Requires any authenticated user.',
     })
     @ApiBadRequests({ validation: true, example: ['Password is required.'] })
     @ApiNoContentResponse({ description: '2FA disabled.' })

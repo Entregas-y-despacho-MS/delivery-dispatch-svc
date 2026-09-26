@@ -14,14 +14,20 @@ function build(over: { assigned?: boolean } = {}) {
     const events    = { existsByClientEventId: vi.fn().mockResolvedValue(false), create: vi.fn() };
     const incidents = { existsById: vi.fn().mockResolvedValue(false), create: vi.fn() };
     const evidences = { existsById: vi.fn().mockResolvedValue(false), create: vi.fn() };
-    const dispatches = { isAssignedToDriver: vi.fn().mockResolvedValue(over.assigned ?? true), updateStatus: vi.fn() };
+    const dispatches = {
+        isAssignedToDriver: vi.fn().mockResolvedValue(over.assigned ?? true),
+        updateStatus:       vi.fn(),
+        getStatusName:      vi.fn().mockResolvedValue('pending'),       // current status of the dispatch
+        getStatusNameById:  vi.fn().mockResolvedValue('in_transit'),    // status the event asks for
+    };
     const storage = { upload: vi.fn().mockResolvedValue({ url: 'http://x/uploads/a.png' }) };
     const service = new SyncService(dataSource as any, events as any, incidents as any, evidences as any, dispatches as any, storage as any);
     return { service, events, incidents, evidences, dispatches, storage, manager };
 }
 
-const statusEvent = (over: object = {}) => ({ type: SyncEventType.STATUS_CHANGE, clientEventId: ID1, dispatchId: 42, occurredAt: '2026-09-22T14:03:00.000Z', dispatchStatusId: 2, ...over }) as any;
-const incidentEvent = (over: object = {}) => ({ type: SyncEventType.INCIDENT, clientEventId: ID1, dispatchId: 42, occurredAt: '2026-09-22T14:03:00.000Z', incidentReasonId: 2, ...over }) as any;
+const recent = () => new Date(Date.now() - 60_000).toISOString();
+const statusEvent = (over: object = {}) => ({ type: SyncEventType.STATUS_CHANGE, clientEventId: ID1, dispatchId: 42, occurredAt: recent(), dispatchStatusId: 2, ...over }) as any;
+const incidentEvent = (over: object = {}) => ({ type: SyncEventType.INCIDENT, clientEventId: ID1, dispatchId: 42, occurredAt: recent(), incidentReasonId: 2, ...over }) as any;
 const fkError = (column: string) => new QueryFailedError('UPDATE ...', [], Object.assign(new Error('fk'), { code: '23503', detail: `Key (${column})=(999) is not present in table "x".` }));
 
 describe('SyncService.processBatch — a driver only syncs their own dispatches', () => {
@@ -76,6 +82,71 @@ describe('SyncService.processBatch — a driver only syncs their own dispatches'
         const { results } = await service.processBatch([statusEvent(), statusEvent({ clientEventId: ID1.replace('10', '12') })], DRIVER);
 
         expect(results.map((r) => r.outcome)).toEqual(['failed', 'applied']);
+    });
+});
+
+describe('SyncService — a finished dispatch cannot be reopened', () => {
+    it.each(['delivered', 'returned'])('a %s dispatch does not accept another status (failed, nothing written)', async (finalStatus) => {
+        const { service, dispatches, events } = build();
+        dispatches.getStatusName.mockResolvedValue(finalStatus);
+        dispatches.getStatusNameById.mockResolvedValue('pending');
+
+        const { results } = await service.processBatch([statusEvent()], DRIVER);
+
+        expect(results[0]).toMatchObject({ outcome: 'failed', error: `The dispatch is already ${finalStatus}: its status cannot change.` });
+        expect(dispatches.updateStatus).not.toHaveBeenCalled();
+        expect(events.create).not.toHaveBeenCalled();
+    });
+
+    it('repeating the same final status is harmless (applied)', async () => {
+        const { service, dispatches } = build();
+        dispatches.getStatusName.mockResolvedValue('delivered');
+        dispatches.getStatusNameById.mockResolvedValue('delivered');
+
+        expect((await service.processBatch([statusEvent()], DRIVER)).results[0].outcome).toBe('applied');
+    });
+
+    it.each(['pending', 'in_transit', 'not_delivered'])('a %s dispatch can still change (not_delivered can be retried)', async (status) => {
+        const { service, dispatches } = build();
+        dispatches.getStatusName.mockResolvedValue(status);
+
+        expect((await service.processBatch([statusEvent()], DRIVER)).results[0].outcome).toBe('applied');
+    });
+});
+
+describe('SyncService — occurredAt must be plausible', () => {
+    const day = 86_400_000;
+    it.each([
+        ['in the year 2099', () => '2099-01-01T00:00:00.000Z'],
+        ['more than an hour in the future', () => new Date(Date.now() + 2 * 3_600_000).toISOString()],
+        ['more than 30 days old', () => new Date(Date.now() - 31 * day).toISOString()],
+        ['in 1900', () => '1900-01-01T00:00:00.000Z'],
+    ])('%s is failed (status change and incident)', async (_label, at) => {
+        const { service, events, incidents } = build();
+
+        const { results } = await service.processBatch([statusEvent({ occurredAt: at() }), incidentEvent({ clientEventId: ID1.replace('10', '13'), occurredAt: at() })], DRIVER);
+
+        expect(results.map((r) => r.outcome)).toEqual(['failed', 'failed']);
+        expect(results[0].error).toContain('occurredAt is not plausible');
+        expect(events.create).not.toHaveBeenCalled();
+        expect(incidents.create).not.toHaveBeenCalled();
+    });
+
+    it('a few minutes of clock skew, or an event from yesterday, is fine', async () => {
+        const { service } = build();
+        const results = (await service.processBatch([
+            statusEvent({ occurredAt: new Date(Date.now() + 5 * 60_000).toISOString() }),
+            statusEvent({ clientEventId: ID1.replace('10', '14'), occurredAt: new Date(Date.now() - day).toISOString() }),
+        ], DRIVER)).results;
+
+        expect(results.map((r) => r.outcome)).toEqual(['applied', 'applied']);
+    });
+
+    it('a retry of an event already saved stays already_processed even if its time is now old', async () => {
+        const { service, events } = build();
+        events.existsByClientEventId.mockResolvedValue(true);
+
+        expect((await service.processBatch([statusEvent({ occurredAt: '2020-01-01T00:00:00.000Z' })], DRIVER)).results[0].outcome).toBe('already_processed');
     });
 });
 

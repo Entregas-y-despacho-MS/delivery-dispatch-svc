@@ -15,12 +15,23 @@ import {
 import { DtoRepository, isUniqueViolation } from '../../../../shared/orm/index.js';
 import type { AuthUser } from '../../../../app/auth/strategies/jwt.strategy.js';
 import { RootAccountProtectedException } from '../../../../app/auth/exceptions/root-account-protected.exception.js';
+import { CannotModifyOwnAccountException } from '../../../../app/auth/exceptions/cannot-modify-own-account.exception.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
 import { FindOptions, MutationOptions } from '../../../../shared/dto/options.dto.js';
 import { hashPassword, comparePassword } from '../../../../shared/utils/crypto.util.js';
 import { escapeLike } from '../../../../shared/utils/like.util.js';
 import { RoleEnum, UserStatusEnum } from '../../../../shared/enums/index.js';
 import { SettingsService } from '../../../settings/services/settings.service.js';
+
+export interface AuthenticationSnapshot {
+    id:                number;
+    username:          string;
+    roleId:            number;
+    role:              RoleEnum;
+    active:            boolean;
+    requiresPwdChange: boolean;
+    passwordChangedAt: Date;
+}
 
 // How many previous passwords are checked for reuse (RF-A25, Escenario 3).
 const PASSWORD_HISTORY_SIZE = 3;
@@ -84,6 +95,23 @@ export class UsersService {
     findOneByUsername<T>(dto: new () => T, username: string, options?: FindOptions): Promise<T>;
     async findOneByUsername<T>(dto: new () => T, username: string, { throwException = true }: FindOptions = {}): Promise<T | null> {
         return this._findOne(dto, { username }, throwException);
+    }
+
+    /**
+     * What the JWT strategy needs to trust an access token: the user as it is NOW. The token itself may be
+     * up to 15 minutes old, but a user deactivated, deleted or moved to another role must not keep the old
+     * access. Returns null for a missing (or soft-deleted) user.
+     */
+    async findForAuthentication(id: number): Promise<AuthenticationSnapshot | null> {
+        const user = await this.rawRepo.findOne({
+            where:     { id },
+            relations: { role: true },
+            select:    { id: true, username: true, roleId: true, active: true, requiresPwdChange: true, passwordChangedAt: true, role: { id: true, name: true } },
+        });
+        return user ? {
+            id: user.id, username: user.username, roleId: user.roleId, role: user.role.name as RoleEnum,
+            active: user.active, requiresPwdChange: user.requiresPwdChange, passwordChangedAt: user.passwordChangedAt,
+        } : null;
     }
 
     findOneByEmail<T>(dto: new () => T, email: string, options: { throwException: false }): Promise<T | null>;
@@ -152,6 +180,17 @@ export class UsersService {
              WHERE user_id = $1`,
             [userId, now, maxAttempts, lockedUntil],
         );
+    }
+
+    /**
+     * Nobody can delete, deactivate or change the role of their own account: it is how the last
+     * administrator (or root) locks everyone out. Other edits of one's own account are fine.
+     */
+    assertNotSelfDestructive(actor: AuthUser, targetUserId: number, change: { remove?: boolean; active?: boolean; roleId?: number }): void {
+        if (actor.id !== targetUserId) return;
+        if (change.remove || change.active === false || (change.roleId !== undefined && change.roleId !== actor.roleId)) {
+            throw new CannotModifyOwnAccountException();
+        }
     }
 
     /**

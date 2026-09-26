@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { UsersService } from './users.service.js';
 import { PasswordTooShortException, PasswordRecentlyUsedException, ConflictingUserFiltersException, InvalidRoleException, UserAlreadyExistsException } from '../exceptions/index.js';
-import { RootAccountProtectedException } from '../../../../app/auth/exceptions/index.js';
+import { RootAccountProtectedException, CannotModifyOwnAccountException } from '../../../../app/auth/exceptions/index.js';
 import { QueryFailedError } from 'typeorm';
 import { CreateUserDto } from '../dto/create-user.dto.js';
 import { UpdateUserDto } from '../dto/update-user.dto.js';
@@ -473,5 +473,37 @@ describe('correo en minúsculas', () => {
 
         const where = rawRepo.findOne.mock.calls[0][0].where;
         expect(where.email).toMatchObject({ type: 'ilike', value: 'Ana@X.com' });
+    });
+});
+
+describe('UsersService.assertNotSelfDestructive — nobody locks themselves out', () => {
+    const { service } = buildService();
+    const me = { id: 9, username: 'ana', roleId: 2, role: 'admin', mustChangePassword: false } as any;
+
+    it('cannot delete, deactivate or change the role of the own account', () => {
+        expect(() => service.assertNotSelfDestructive(me, 9, { remove: true })).toThrow(CannotModifyOwnAccountException);
+        expect(() => service.assertNotSelfDestructive(me, 9, { active: false })).toThrow(CannotModifyOwnAccountException);
+        expect(() => service.assertNotSelfDestructive(me, 9, { roleId: 4 })).toThrow(CannotModifyOwnAccountException);
+    });
+
+    it('can edit the own account otherwise (name, keeping the same role, staying active)', () => {
+        expect(() => service.assertNotSelfDestructive(me, 9, {})).not.toThrow();
+        expect(() => service.assertNotSelfDestructive(me, 9, { active: true, roleId: 2 })).not.toThrow();
+    });
+
+    it('acts on other accounts freely', () => {
+        expect(() => service.assertNotSelfDestructive(me, 10, { remove: true, active: false, roleId: 4 })).not.toThrow();
+    });
+});
+
+describe('UsersService.findForAuthentication', () => {
+    it('returns the current state with the role name; null for a missing user', async () => {
+        const { service, rawRepo } = buildService();
+        rawRepo.findOne.mockResolvedValueOnce({ id: 7, username: 'ana', roleId: 3, active: true, requiresPwdChange: false, passwordChangedAt: new Date(0), role: { id: 3, name: 'coordinator' } });
+
+        expect(await service.findForAuthentication(7)).toEqual({ id: 7, username: 'ana', roleId: 3, role: 'coordinator', active: true, requiresPwdChange: false, passwordChangedAt: new Date(0) });
+
+        rawRepo.findOne.mockResolvedValueOnce(null);
+        expect(await service.findForAuthentication(8)).toBeNull();
     });
 });

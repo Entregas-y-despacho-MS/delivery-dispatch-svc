@@ -116,20 +116,42 @@ describe('AuthService — login / bloqueo temporal (RF-A21, ST-13.3)', () => {
         expect(usersService.setLockoutState).not.toHaveBeenCalled();
     });
 
-    it('cuenta ya bloqueada → ACCOUNT_LOCKED, sin siquiera comparar la contraseña', async () => {
+    it('cuenta bloqueada + contraseña CORRECTA → ACCOUNT_LOCKED', async () => {
         const user = buildAuthUser({
             passwordHash: await hashPassword('Passw0rd!'),
             lockedUntil:  new Date(Date.now() + 5 * 60_000),
         });
         const { service, usersService } = buildService({ user });
 
-        // Ni siquiera manda la contraseña correcta — si igual rechaza, confirma que el chequeo de
-        // bloqueo pasa antes que comparePassword.
         await expect(service.login({ username: user.username, password: 'Passw0rd!' } as any))
             .rejects.toThrow(AccountLockedException);
 
         expect(usersService.setLockoutState).not.toHaveBeenCalled();
         expect(usersService.setLastLogin).not.toHaveBeenCalled();
+    });
+
+    it('cuenta bloqueada + contraseña incorrecta → INVALID_CREDENTIALS genérico y NO suma otro intento (no revela que el usuario existe)', async () => {
+        const user = buildAuthUser({
+            passwordHash: await hashPassword('Passw0rd!'),
+            lockedUntil:  new Date(Date.now() + 5 * 60_000),
+        });
+        const { service, usersService } = buildService({ user });
+
+        await expect(service.login({ username: user.username, password: 'Incorrecta1!' } as any))
+            .rejects.toThrow(InvalidCredentialsException);
+
+        expect(usersService.registerFailedLogin).not.toHaveBeenCalled();
+    });
+
+    it('username inexistente o cuenta inactiva: también compara una contraseña (misma demora que una incorrecta)', async () => {
+        const bcrypt = (await import('bcrypt')).default;
+        const compare = vi.spyOn(bcrypt, 'compare');
+
+        await expect(buildService({ user: null }).service.login({ username: 'nadie', password: 'x' } as any)).rejects.toThrow(InvalidCredentialsException);
+        await expect(buildService({ user: buildAuthUser({ passwordHash: 'h', active: false }) }).service.login({ username: 'x', password: 'x' } as any)).rejects.toThrow(InvalidCredentialsException);
+
+        expect(compare).toHaveBeenCalledTimes(2);
+        compare.mockRestore();
     });
 
     it('respeta settings.max_failed_login_attempts configurado, no un valor fijo', async () => {
@@ -292,7 +314,7 @@ describe('AuthService.register — solo root puede dar el rol root', () => {
         const { service, usersService } = buildService();
         (usersService as any).assertCanManageRoot = vi.fn().mockRejectedValue(new Error('blocked'));
         (usersService as any).create = vi.fn();
-        const actor = { id: 2, username: 'admin', roleId: 2, role: RoleEnum.ADMIN };
+        const actor = { id: 2, username: 'admin', roleId: 2, role: RoleEnum.ADMIN, mustChangePassword: false };
 
         await expect(service.register({ roleId: 1 } as any, actor)).rejects.toThrow('blocked');
 

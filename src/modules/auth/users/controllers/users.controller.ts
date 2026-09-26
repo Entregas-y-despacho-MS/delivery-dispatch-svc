@@ -26,6 +26,7 @@ import { RoleEnum } from '../../../../shared/enums/index.js';
  *   USER_ALREADY_EXISTS   409 — A user with the given username or email already exists.
  *   PASSWORD_TOO_SHORT    400 — Password is shorter than settings.password_min_length.
  *   INVALID_ROLE          400 — The given roleId does not exist.
+ *   CANNOT_MODIFY_OWN_ACCOUNT 403 — Tried to delete/deactivate/change the role of one's own account.
  *   ROOT_ACCOUNT_PROTECTED 403 — An admin tried to create/edit/delete a root account or give the root role.
  *   CONFLICTING_USER_FILTERS 400 — The list was asked with both `active` and `status`.
  *   INVALID_TOKEN         401 — JWT is missing, malformed, or expired.
@@ -93,7 +94,7 @@ export class UsersController {
     @AdminOnly()
     @ApiOperation({
         summary:     'Update a user',
-        description: 'Partially updates a user: only the fields sent are changed. `email` can be cleared by sending `null`; every other field rejects `null`. `active: false` deactivates the account (the user can no longer log in) and `true` reactivates it. A new `password` resets the user\'s password (admin action: the password history is not checked, and the user\'s own sessions are not closed). A changed `username` or `email` must not belong to another user (409), and a new `roleId` must exist (400 INVALID_ROLE). Root accounts (and the root role) can only be managed by root: an admin gets 403 ROOT_ACCOUNT_PROTECTED. Requires admin role or root.',
+        description: 'Partially updates a user: only the fields sent are changed. `email` can be cleared by sending `null`; every other field rejects `null`. `active: false` deactivates the account (the user can no longer log in) and `true` reactivates it. A new `password` resets the user\'s password (admin action: the password history is not checked, and the user\'s own sessions are not closed). A changed `username` or `email` must not belong to another user (409), and a new `roleId` must exist (400 INVALID_ROLE). Root accounts (and the root role) can only be managed by root: an admin gets 403 ROOT_ACCOUNT_PROTECTED. You cannot deactivate your own account or change your own role (403 CANNOT_MODIFY_OWN_ACCOUNT). A deactivated, deleted or re-roled user loses the old access on their very next request, and a password change closes every access token issued before it. Requires admin role or root.',
     })
     @ApiIdParam('User')
     @ApiBadRequests({ validation: true, example: ['Email must be a valid email address.'], id: true, errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }, { code: 'INVALID_ROLE', message: 'The given role does not exist.' }] })
@@ -106,7 +107,8 @@ export class UsersController {
         @Body() dto: UpdateUserDto,
         @CurrentUser() actor: AuthUser,
     ): Promise<UserDto> {
-        await this.usersService.assertCanManageRoot(actor, { userId: id, roleId: dto.roleId });
+        await this.usersService.assertCanManageRoot(actor, { userId: id, roleId: dto.roleId }); // the more specific rule first
+        this.usersService.assertNotSelfDestructive(actor, id, { active: dto.active, roleId: dto.roleId });
         return await this.usersService.update(UserDto, id, dto);
     }
 
@@ -115,7 +117,7 @@ export class UsersController {
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({
         summary:     'Delete a user',
-        description: 'Soft-deletes the user: the record stays in the database but no longer appears in lists or lookups. To only block access, deactivate the user instead (PUT `active: false`). A root account can only be deleted by root (403 ROOT_ACCOUNT_PROTECTED for an admin). Requires admin role or root.',
+        description: 'Soft-deletes the user: the record stays in the database but no longer appears in lists or lookups. To only block access, deactivate the user instead (PUT `active: false`). A root account can only be deleted by root (403 ROOT_ACCOUNT_PROTECTED for an admin). You cannot delete your own account (403 CANNOT_MODIFY_OWN_ACCOUNT). Requires admin role or root.',
     })
     @ApiIdParam('User')
     @ApiBadRequests({ id: true })
@@ -124,6 +126,7 @@ export class UsersController {
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async remove(@Param('id', ParseIdPipe) id: number, @CurrentUser() actor: AuthUser): Promise<void> {
         await this.usersService.assertCanManageRoot(actor, { userId: id });
+        this.usersService.assertNotSelfDestructive(actor, id, { remove: true });
         return await this.usersService.remove(id);
     }
 }
