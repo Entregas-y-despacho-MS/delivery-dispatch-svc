@@ -1,5 +1,5 @@
 import {
-    Controller, Get, Post, Put, Delete,
+    Controller, Get, Post, Put, Patch, Delete,
     Body, Param, Query, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import {
@@ -10,6 +10,7 @@ import { UsersService } from '../services/users.service.js';
 import { UserDto } from '../dto/user.dto.js';
 import { CreateUserDto } from '../dto/create-user.dto.js';
 import { UpdateUserDto } from '../dto/update-user.dto.js';
+import { UpdateUserRoleDto } from '../dto/update-user-role.dto.js';
 import { FindAllUsersParamsDto } from '../dto/find-all-users-params.dto.js';
 import { CurrentUser } from '../../../../shared/decorators/current-user.decorator.js';
 import type { AuthUser } from '../../../../app/auth/strategies/jwt.strategy.js';
@@ -25,7 +26,7 @@ import { RoleEnum } from '../../../../shared/enums/index.js';
  *   USER_NOT_FOUND        404 — No user with the given ID exists or it was soft-deleted.
  *   USER_ALREADY_EXISTS   409 — A user with the given username or email already exists.
  *   PASSWORD_TOO_SHORT    400 — Password is shorter than settings.password_min_length.
- *   INVALID_ROLE          400 — The given roleId does not exist.
+ *   INVALID_ROLE          400 — The given roleId does not exist (PATCH /users/:id/role).
  *   CANNOT_MODIFY_OWN_ACCOUNT 403 — Tried to delete/deactivate/change the role of one's own account.
  *   ROOT_ACCOUNT_PROTECTED 403 — An admin tried to create/edit/delete a root account or give the root role.
  *   CONFLICTING_USER_FILTERS 400 — The list was asked with both `active` and `status`.
@@ -94,10 +95,10 @@ export class UsersController {
     @AdminOnly()
     @ApiOperation({
         summary:     'Update a user',
-        description: 'Partially updates a user: only the fields sent are changed. `email` can be cleared by sending `null`; every other field rejects `null`. `active: false` deactivates the account (the user can no longer log in) and `true` reactivates it. A new `password` resets the user\'s password (admin action: the password history is not checked, and the user\'s own sessions are not closed). A changed `username` or `email` must not belong to another user (409), and a new `roleId` must exist (400 INVALID_ROLE). Root accounts (and the root role) can only be managed by root: an admin gets 403 ROOT_ACCOUNT_PROTECTED. You cannot deactivate your own account or change your own role (403 CANNOT_MODIFY_OWN_ACCOUNT). A deactivated, deleted or re-roled user loses the old access on their very next request, and a password change closes every access token issued before it. Requires admin role or root.',
+        description: 'Partially updates a user: only the fields sent are changed (an empty body is a no-op). `email` can be cleared by sending `null`; every other field rejects `null`. `active: false` deactivates the account (the user can no longer log in) and `true` reactivates it. A new `password` resets the user\'s password (admin action: the password history is not checked, and the user\'s own sessions are not closed). A changed `username` or `email` must not belong to another user (409). To change the role use `PATCH /users/:id/role` instead — it is a separate endpoint because it also revokes the session (RF-A27). Root accounts can only be edited by root (403 ROOT_ACCOUNT_PROTECTED). You cannot deactivate your own account (403 CANNOT_MODIFY_OWN_ACCOUNT). A deactivated or deleted user loses access on their very next request, and a password change closes every access token issued before it. Requires admin role or root.',
     })
     @ApiIdParam('User')
-    @ApiBadRequests({ validation: true, example: ['Email must be a valid email address.'], id: true, errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }, { code: 'INVALID_ROLE', message: 'The given role does not exist.' }] })
+    @ApiBadRequests({ validation: true, example: ['Email must be a valid email address.'], id: true, errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }] })
     @ApiOkResponse({ type: UserDto })
     @ApiNotFound({ code: 'USER_NOT_FOUND', message: 'User not found.' })
     @ApiConflict({ code: 'USER_ALREADY_EXISTS', message: 'A user with this username or email already exists.' })
@@ -107,9 +108,30 @@ export class UsersController {
         @Body() dto: UpdateUserDto,
         @CurrentUser() actor: AuthUser,
     ): Promise<UserDto> {
-        await this.usersService.assertCanManageRoot(actor, { userId: id, roleId: dto.roleId }); // the more specific rule first
-        this.usersService.assertNotSelfDestructive(actor, id, { active: dto.active, roleId: dto.roleId });
+        await this.usersService.assertCanManageRoot(actor, { userId: id }); // the more specific rule first
+        this.usersService.assertNotSelfDestructive(actor, id, { active: dto.active });
         return await this.usersService.update(UserDto, id, dto);
+    }
+
+    @Patch(':id/role')
+    @AdminOnly()
+    @ApiOperation({
+        summary:     'Change a user\'s role',
+        description: 'RF-A27 — the only way to change a user\'s role (not part of PUT /users/:id). `roleId` is required, an ID from GET /roles (an unknown ID is 400 INVALID_ROLE). If it actually changes the role, the user\'s refresh token is revoked: they keep whatever access their current access token still allows (which already reflects the new role right away, see PUT /users/:id) but must log in again to get a fresh session. Sending the role the user already has is a no-op and does not revoke anything. Only root may give or take away the root role, and nobody may change their own role (403 ROOT_ACCOUNT_PROTECTED / CANNOT_MODIFY_OWN_ACCOUNT). Requires admin role or root.',
+    })
+    @ApiIdParam('User')
+    @ApiBadRequests({ validation: true, id: true, example: ['Role ID must be an integer.'], errors: [{ code: 'INVALID_ROLE', message: 'The given role does not exist.' }] })
+    @ApiOkResponse({ type: UserDto })
+    @ApiNotFound({ code: 'USER_NOT_FOUND', message: 'User not found.' })
+    @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+    async updateRole(
+        @Param('id', ParseIdPipe) id: number,
+        @Body() dto: UpdateUserRoleDto,
+        @CurrentUser() actor: AuthUser,
+    ): Promise<UserDto> {
+        await this.usersService.assertCanManageRoot(actor, { userId: id, roleId: dto.roleId });
+        this.usersService.assertNotSelfDestructive(actor, id, { roleId: dto.roleId });
+        return await this.usersService.updateRole(UserDto, id, dto.roleId);
     }
 
     @Delete(':id')

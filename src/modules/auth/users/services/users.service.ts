@@ -290,20 +290,50 @@ export class UsersService {
         }
 
         if (dto.password !== undefined) this.validatePasswordPolicy(dto.password);
-        if (dto.roleId   !== undefined) await this.assertRoleExists(dto.roleId, options);
 
         const payload: Record<string, any> = {};
         if (dto.fullName !== undefined) payload.fullName     = dto.fullName;
         if (dto.username !== undefined) payload.username     = dto.username;
         if (dto.email    !== undefined) payload.email        = dto.email;
-        if (dto.roleId   !== undefined) payload.roleId       = dto.roleId;
         if (dto.active   !== undefined) payload.active       = dto.active;
         if (dto.password !== undefined) {
             payload.passwordHash      = await hashPassword(dto.password);
             payload.passwordChangedAt = new Date();
         }
 
-        await this.saveHandlingDuplicate(() => repo.update(id, payload));
+        // update() with an empty payload throws in TypeORM — a PUT that only touches the role
+        // (now handled by updateRole()) is otherwise a no-op read.
+        if (Object.keys(payload).length > 0) {
+            await this.saveHandlingDuplicate(() => repo.update(id, payload));
+        }
+
+        const result = await new DtoRepository(repo).findOne({ dto: returnDto, where: { id } });
+        return result!;
+    }
+
+    /**
+     * RF-A27 — the only way to change a user's role. Kept separate from update() (not folded into
+     * the general PUT) so this is the one place that revokes the session: mixing "change the role"
+     * with "change anything else" made it easy for a role change to slip through PUT without the
+     * revocation this story explicitly requires.
+     *
+     * A no-op (the same role sent again) does not revoke anything — no reason to force a re-login
+     * for a change that didn't happen.
+     */
+    async updateRole<T>(returnDto: new () => T, id: number, roleId: number, options?: MutationOptions): Promise<T> {
+        const repo = options?.manager?.getRepository(User) ?? this.rawRepo;
+
+        const current = await this.findOneById(UserDto, id);
+        await this.assertRoleExists(roleId, options);
+
+        if (roleId !== current.role.id) {
+            // The role change and the session revocation are the same write (one round trip, and both
+            // share `options.manager`'s transaction if one is passed) — forcing a fresh login with the
+            // new role (RF-A27, Escenario 1). The access token itself already re-reads the role from the
+            // DB on every request (see JwtStrategy), so this closes the refresh path, not the only thing
+            // making the new role take effect.
+            await repo.update(id, { roleId, refreshTokenHash: null });
+        }
 
         const result = await new DtoRepository(repo).findOne({ dto: returnDto, where: { id } });
         return result!;

@@ -2,7 +2,7 @@
 // Todo mockeado (repos de TypeORM, SettingsService) — sin DB, sin red.
 import { describe, expect, it, vi } from 'vitest';
 import { UsersService } from './users.service.js';
-import { PasswordTooShortException, PasswordRecentlyUsedException, ConflictingUserFiltersException, InvalidRoleException, UserAlreadyExistsException } from '../exceptions/index.js';
+import { PasswordTooShortException, PasswordRecentlyUsedException, ConflictingUserFiltersException, InvalidRoleException, UserAlreadyExistsException, UserNotFoundException } from '../exceptions/index.js';
 import { RootAccountProtectedException, CannotModifyOwnAccountException } from '../../../../app/auth/exceptions/index.js';
 import { QueryFailedError } from 'typeorm';
 import { CreateUserDto } from '../dto/create-user.dto.js';
@@ -335,24 +335,81 @@ describe('UsersService — roleId inexistente (antes daba 500 por la FK)', () =>
         expect(roleRepo.existsBy).not.toHaveBeenCalled();
     });
 
-    it('update: un roleId que no existe → InvalidRoleException y no se actualiza nada', async () => {
+    it('update() nunca toca el rol ni consulta roles, exista o no un roleId colado en el DTO', async () => {
         const { service, rawRepo, roleRepo } = buildService();
         rawRepo.findOne.mockResolvedValue({ id: 5, username: 'ana', email: null });
-        roleRepo.existsBy.mockResolvedValue(false);
 
-        await expect(service.update(UserDto, 5, { roleId: 99 } as any)).rejects.toThrow(InvalidRoleException);
+        await service.update(UserDto, 5, { fullName: 'Ana B', roleId: 99 } as any);
+
+        expect(roleRepo.existsBy).not.toHaveBeenCalled();
+        expect(rawRepo.update).toHaveBeenCalledWith(5, { fullName: 'Ana B' }); // roleId nunca llega al payload
+    });
+
+    it('update() con un body vacío no escribe nada (antes escribía un UPDATE vacío igual)', async () => {
+        const { service, rawRepo } = buildService();
+        rawRepo.findOne.mockResolvedValue({ id: 5, username: 'ana', email: null });
+
+        await service.update(UserDto, 5, {} as any);
+
+        expect(rawRepo.update).not.toHaveBeenCalled();
+    });
+});
+
+describe('UsersService.updateRole (RF-A27) — el único lugar que cambia el rol', () => {
+    function withRoleMocks(over: { roleExists?: boolean; currentRoleId?: number } = {}) {
+        const built = buildService();
+        built.rawRepo.findOne.mockResolvedValue({ id: 5, role: { id: over.currentRoleId ?? 3 } });
+        built.roleRepo.existsBy.mockResolvedValue(over.roleExists ?? true);
+        return built;
+    }
+
+    it('un roleId que no existe → InvalidRoleException, sin actualizar ni revocar nada', async () => {
+        const { service, rawRepo } = withRoleMocks({ roleExists: false });
+
+        await expect(service.updateRole(UserDto, 5, 99)).rejects.toThrow(InvalidRoleException);
 
         expect(rawRepo.update).not.toHaveBeenCalled();
     });
 
-    it('update: sin roleId en el body no consulta roles', async () => {
-        const { service, rawRepo, roleRepo } = buildService();
-        rawRepo.findOne.mockResolvedValue({ id: 5, username: 'ana', email: null });
+    it('un rol distinto al actual: actualiza el rol y revoca el refresh token (fuerza a iniciar sesión de nuevo)', async () => {
+        const { service, rawRepo } = withRoleMocks({ currentRoleId: 3 });
 
-        await service.update(UserDto, 5, { fullName: 'Ana B' } as any);
+        await service.updateRole(UserDto, 5, 4);
+
+        expect(rawRepo.update).toHaveBeenCalledTimes(1);
+        expect(rawRepo.update).toHaveBeenCalledWith(5, { roleId: 4, refreshTokenHash: null });
+    });
+
+    it('el mismo rol que ya tenía: no escribe nada ni revoca la sesión (no-op)', async () => {
+        const { service, rawRepo } = withRoleMocks({ currentRoleId: 3 });
+
+        await service.updateRole(UserDto, 5, 3);
+
+        expect(rawRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('dentro de una transacción escribe (rol y revocación) a través del repo del manager', async () => {
+        // La lectura del estado "actual" usa el repo de la clase, igual que en update() — no es
+        // manager-aware en ningún método de este service; lo que sí respeta la transacción son las
+        // escrituras (repo.update), como en cualquier otro método con MutationOptions.
+        const { service, rawRepo } = withRoleMocks({ currentRoleId: 3 });
+        const managerRepo = { existsBy: vi.fn().mockResolvedValue(true), update: vi.fn(), findOne: vi.fn().mockResolvedValue({ id: 5, role: { id: 4 } }) };
+        const manager = { getRepository: vi.fn(() => managerRepo) };
+
+        await service.updateRole(UserDto, 5, 4, { manager } as any);
+
+        expect(managerRepo.update).toHaveBeenCalledWith(5, { roleId: 4, refreshTokenHash: null });
+        expect(rawRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('usuario inexistente → 404, sin consultar el rol ni escribir', async () => {
+        const { service, rawRepo, roleRepo } = buildService();
+        rawRepo.findOne.mockResolvedValue(null);
+
+        await expect(service.updateRole(UserDto, 999, 4)).rejects.toThrow(UserNotFoundException);
 
         expect(roleRepo.existsBy).not.toHaveBeenCalled();
-        expect(rawRepo.update).toHaveBeenCalledWith(5, { fullName: 'Ana B' });
+        expect(rawRepo.update).not.toHaveBeenCalled();
     });
 });
 

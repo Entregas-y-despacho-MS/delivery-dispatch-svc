@@ -77,20 +77,20 @@ describe('roleId inexistente y comodines de búsqueda (e2e)', () => {
             expect(res.body.role.name).toBe('driver');
         });
 
-        it('PUT /users/:id con un roleId que no existe → 400 y el usuario queda igual', async () => {
+        it('PATCH /users/:id/role con un roleId que no existe → 400 y el usuario queda igual', async () => {
             const [{ user_id, role_id }] = await dataSource.query(`SELECT user_id, role_id FROM users WHERE username = $1`, [`e2e_rs_supervisor_${run}`]);
 
-            const res = await request(app.getHttpServer()).put(api(`/users/${user_id}`)).set(auth('admin')).send({ roleId: 99999, fullName: 'No debe guardarse' });
+            const res = await request(app.getHttpServer()).patch(api(`/users/${user_id}/role`)).set(auth('admin')).send({ roleId: 99999 });
 
             expect(res.status).toBe(400);
             expect(res.body.error).toBe('INVALID_ROLE');
-            const [row] = await dataSource.query(`SELECT role_id, full_name FROM users WHERE user_id = $1`, [user_id]);
-            expect(row).toEqual({ role_id, full_name: 'E2E supervisor' });
+            const [row] = await dataSource.query(`SELECT role_id FROM users WHERE user_id = $1`, [user_id]);
+            expect(row).toEqual({ role_id });
         });
 
-        it('PUT /users/:id con un rol real lo cambia', async () => {
+        it('PATCH /users/:id/role con un rol real lo cambia', async () => {
             const [{ user_id }] = await dataSource.query(`SELECT user_id FROM users WHERE username = $1`, [`e2e_rs_supervisor_${run}`]);
-            const res = await request(app.getHttpServer()).put(api(`/users/${user_id}`)).set(auth('admin')).send({ roleId: roleIds.supervisor });
+            const res = await request(app.getHttpServer()).patch(api(`/users/${user_id}/role`)).set(auth('admin')).send({ roleId: roleIds.supervisor });
             expect(res.status).toBe(200);
         });
 

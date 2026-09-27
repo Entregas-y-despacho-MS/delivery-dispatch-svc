@@ -182,7 +182,7 @@ describe('Security hardening (e2e)', () => {
 
         it('cannot promote themselves (or anyone) to root', async () => {
             const adminId = (await ds.query(`SELECT user_id FROM users WHERE username = $1`, [`hd_base_admin_${run}`]))[0].user_id;
-            forbidden(await http().put(api(`/users/${adminId}`)).set(auth('admin')).send({ roleId: roles.root }));
+            forbidden(await http().patch(api(`/users/${adminId}/role`)).set(auth('admin')).send({ roleId: roles.root }));
             expect((await userRow(adminId)).role_id).toBe(roles.admin);
         });
 
@@ -210,7 +210,7 @@ describe('Security hardening (e2e)', () => {
         it('an admin still manages every other account normally', async () => {
             const created = await http().post(api('/users')).set(auth('admin')).send({ fullName: 'Driver', username: `hd_drv_${run}`, password: 'Passw0rd!', roleId: roles.driver });
             expect(created.status).toBe(201);
-            expect((await http().put(api(`/users/${created.body.id}`)).set(auth('admin')).send({ roleId: roles.supervisor })).status).toBe(200);
+            expect((await http().patch(api(`/users/${created.body.id}/role`)).set(auth('admin')).send({ roleId: roles.supervisor })).status).toBe(200);
             expect((await http().delete(api(`/users/${created.body.id}`)).set(auth('admin'))).status).toBe(204);
         });
 
@@ -417,7 +417,7 @@ describe('Security hardening (e2e)', () => {
             const token = (await login(u.username)).body.accessToken as string;
             expect((await http().get(api('/settings')).set({ Authorization: `Bearer ${token}` })).status).toBe(200);
 
-            await http().put(api(`/users/${u.id}`)).set(auth('admin')).send({ roleId: roles.driver }).expect(200);
+            await http().patch(api(`/users/${u.id}/role`)).set(auth('admin')).send({ roleId: roles.driver }).expect(200);
 
             expect((await http().get(api('/settings')).set({ Authorization: `Bearer ${token}` })).status).toBe(403);
         });
@@ -516,7 +516,7 @@ describe('Security hardening (e2e)', () => {
             for (const res of [
                 await http().delete(api(`/users/${u.id}`)).set(H),
                 await http().put(api(`/users/${u.id}`)).set(H).send({ active: false }),
-                await http().put(api(`/users/${u.id}`)).set(H).send({ roleId: roles.supervisor }),
+                await http().patch(api(`/users/${u.id}/role`)).set(H).send({ roleId: roles.supervisor }),
             ]) {
                 expect(res.status).toBe(403);
                 expect(res.body.error).toBe('CANNOT_MODIFY_OWN_ACCOUNT');

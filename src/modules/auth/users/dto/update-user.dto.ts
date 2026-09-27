@@ -1,7 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsEmail, IsInt, IsOptional, IsPositive, IsString, IsStrongPassword, Max, MaxLength } from 'class-validator';
-import { INT4_MAX } from '../../../../shared/constants/int4.js';
+import { IsBoolean, IsEmail, IsOptional, IsString, IsStrongPassword, MaxLength } from 'class-validator';
 import { normalizeEmail } from './create-user.dto.js';
 import { OptionalNotNull } from '../../../../shared/validators/optional-not-null.validator.js';
 import { STRONG_PASSWORD_OPTIONS, STRONG_PASSWORD_MESSAGE } from '../../../../shared/validators/password.validator.js';
@@ -34,13 +33,6 @@ export class UpdateUserDto {
     @IsStrongPassword(STRONG_PASSWORD_OPTIONS, { message: STRONG_PASSWORD_MESSAGE })
     @MaxLength(255)
     password?: string;
-
-    @ApiPropertyOptional({ type: 'integer', example: 2, description: 'New role, an ID from GET /roles (an unknown ID is a 400 INVALID_ROLE). null is rejected' })
-    @OptionalNotNull()
-    @IsInt({ message: 'Role ID must be an integer.' })
-    @IsPositive({ message: 'Role ID must be a positive number.' })
-    @Max(INT4_MAX, { message: 'Role ID is too large.' })
-    roleId?: number;
 
     @ApiPropertyOptional({ example: false, description: 'false deactivates the user (cannot log in) without deleting it; true reactivates. null is rejected' })
     @OptionalNotNull()
