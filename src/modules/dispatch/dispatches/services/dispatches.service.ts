@@ -60,4 +60,23 @@ export class DispatchesService {
         if (!(await this.existsById(id, options))) throw new DispatchNotFoundException();
         await repo.update(id, { dispatchStatusId });
     }
+
+    /**
+     * Overwrites the dispatch's last known position (RF-U11) — but only if `point` is actually newer
+     * than what is already stored. One conditional UPDATE, not a read-then-compare-then-write: two
+     * concurrent reports for the same dispatch (or an out-of-order point in a buffered batch) must
+     * never let an older point undo a newer one, and a two-step check has a race window this doesn't.
+     * Returns whether it actually wrote (false = the stored position was already at least as new —
+     * not an error, the caller decides what that means, e.g. `stale` in app/tracking).
+     */
+    async updateLocation(dispatchId: number, point: { latitude: number; longitude: number; recordedAt: Date }, options?: MutationOptions): Promise<boolean> {
+        const repo = options?.manager?.getRepository(Dispatch) ?? this.rawRepo;
+        const result = await repo.createQueryBuilder()
+            .update(Dispatch)
+            .set({ lastLatitude: point.latitude, lastLongitude: point.longitude, lastLocationAt: point.recordedAt })
+            .where('dispatch_id = :id', { id: dispatchId })
+            .andWhere('(last_location_at IS NULL OR last_location_at < :recordedAt)', { recordedAt: point.recordedAt })
+            .execute();
+        return (result.affected ?? 0) > 0;
+    }
 }

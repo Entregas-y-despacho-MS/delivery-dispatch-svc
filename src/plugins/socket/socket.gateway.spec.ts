@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { JwtService } from '@nestjs/jwt';
 import { SocketGateway } from './socket.gateway.js';
+import { SOCKET_CONNECTED_EVENT } from './events/socket-connected.event.js';
 
 const SECRET = 'test-secret';
 const jwt = new JwtService({});
@@ -10,10 +11,11 @@ const config = { getOrThrow: vi.fn(() => SECRET) };
 const token = (payload: object = { sub: 7, username: 'u', roleId: 1, role: 'admin' }, secret = SECRET, opts: object = {}) => jwt.sign(payload, { secret, ...opts });
 
 function connect(handshake: { auth?: any; headers?: any; query?: any }) {
-    const gateway = new SocketGateway(jwt, config as any);
+    const eventEmitter = { emit: vi.fn() };
+    const gateway = new SocketGateway(jwt, config as any, eventEmitter as any);
     const client = { id: 'sock-1', handshake: { auth: {}, headers: {}, query: {}, ...handshake }, disconnect: vi.fn() };
     gateway.handleConnection(client as any);
-    return { gateway, client };
+    return { gateway, client, eventEmitter };
 }
 
 describe('SocketGateway — authenticated connections', () => {
@@ -63,5 +65,18 @@ describe('SocketGateway — authenticated connections', () => {
         const { gateway, client } = connect({ auth: { token: token() } });
         gateway.handleDisconnect(client as any);
         expect(gateway.getClients().size).toBe(0);
+    });
+});
+
+describe('SocketGateway — announces the connection generically (SOCKET_CONNECTED_EVENT)', () => {
+    it('emits socketId, userId and role — but decides nothing about rooms itself (that is app/tracking\'s job)', () => {
+        const { eventEmitter } = connect({ auth: { token: token({ sub: 7, username: 'u', roleId: 3, role: 'coordinator' }) } });
+
+        expect(eventEmitter.emit).toHaveBeenCalledWith(SOCKET_CONNECTED_EVENT, { socketId: 'sock-1', userId: 7, role: 'coordinator' });
+    });
+
+    it('a rejected connection never emits the event', () => {
+        const { eventEmitter } = connect({});
+        expect(eventEmitter.emit).not.toHaveBeenCalled();
     });
 });

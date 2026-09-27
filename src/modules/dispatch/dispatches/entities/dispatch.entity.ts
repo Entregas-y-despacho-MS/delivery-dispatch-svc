@@ -1,5 +1,6 @@
 import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
 import { BaseCreatedUpdated } from '../../../../database/entities/base.entity.js';
+import { numericTransformer } from '../../../../shared/orm/index.js';
 import { DispatchType } from '../../dispatch-types/entities/dispatch-type.entity.js';
 import { DispatchStatus } from '../../dispatch-statuses/entities/dispatch-status.entity.js';
 import { DeliveryZone } from '../../../catalog/delivery-zones/entities/delivery-zone.entity.js';
@@ -88,11 +89,14 @@ export class Dispatch extends BaseCreatedUpdated {
     @Column({ name: 'tracking_token_expires_at', type: 'timestamptz', nullable: true })
     trackingTokenExpiresAt: Date | null;
 
-    @Column({ name: 'last_latitude', type: 'numeric', precision: 9, scale: 6, nullable: true })
-    lastLatitude: string | null;
+    // Written by app/tracking (RF-U11) — numericTransformer so the API round-trips a plain number,
+    // not the "1.234560" string pg returns for NUMERIC. Only these two fields get it here: the rest
+    // of this entity's NUMERIC columns predate the convention (see ST-22.1) and are out of this ticket's scope.
+    @Column({ name: 'last_latitude', type: 'numeric', precision: 9, scale: 6, nullable: true, transformer: numericTransformer })
+    lastLatitude: number | null;
 
-    @Column({ name: 'last_longitude', type: 'numeric', precision: 9, scale: 6, nullable: true })
-    lastLongitude: string | null;
+    @Column({ name: 'last_longitude', type: 'numeric', precision: 9, scale: 6, nullable: true, transformer: numericTransformer })
+    lastLongitude: number | null;
 
     @Column({ name: 'last_location_at', type: 'timestamptz', nullable: true })
     lastLocationAt: Date | null;

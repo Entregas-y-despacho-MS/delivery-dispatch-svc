@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { APP_PIPE } from '@nestjs/core';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { NoNullBytesPipe } from './shared/pipes/index.js';
 import { AppConfigModule } from './config/config.module.js';
 import { HealthModule } from './app/health/health.module.js';
@@ -14,6 +15,7 @@ import { IncidentReasonsModule } from './modules/catalog/incident-reasons/incide
 import { RescheduleReasonsModule } from './modules/catalog/reschedule-reasons/reschedule-reasons.module.js';
 import { AuthModule } from './app/auth/auth.module.js';
 import { SyncModule } from './app/sync/sync.module.js';
+import { TrackingModule } from './app/tracking/tracking.module.js';
 import { MailerModule } from './plugins/mailer/mailer.module.js';
 import { SocketModule } from './plugins/socket/socket.module.js';
 import { PdfModule } from './plugins/pdf/pdf.module.js';
@@ -23,6 +25,10 @@ import { OsrmModule } from './plugins/osrm/osrm.module.js';
 
 @Module({
     imports: [
+        // Global, registered once here — see plugins/socket/socket.module.ts for why it isn't
+        // re-registered there too. Used to decouple the socket plugin (generic transport) from the
+        // business modules that react to a connection (e.g. app/tracking's 'dispatch-board' room).
+        EventEmitterModule.forRoot(),
         AppConfigModule,
         HealthModule,
         DatabaseModule,
@@ -36,6 +42,7 @@ import { OsrmModule } from './plugins/osrm/osrm.module.js';
         RescheduleReasonsModule,
         AuthModule,
         SyncModule,
+        TrackingModule,
         MailerModule.register(),
         SocketModule,
         PdfModule,

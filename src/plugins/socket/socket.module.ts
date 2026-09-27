@@ -9,6 +9,9 @@ import { SocketService } from './socket.service.js';
  *   1. Borra plugins/socket/
  *   2. Quita SocketModule del AppModule
  *   3. Elimina WEBSOCKET_NAMESPACE de config/env.validation.ts
+ *   4. `EventEmitterModule.forRoot()` (AppModule) se queda si algún otro módulo lo sigue usando
+ *      (ver app/tracking) — no es exclusivo de este plugin, es la única llamada a `.forRoot()` de
+ *      toda la app (no se repite acá para no registrarlo dos veces).
  */
 @Global()
 @Module({
