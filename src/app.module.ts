@@ -10,6 +10,7 @@ import { RolesModule } from './modules/auth/roles/roles.module.js';
 import { DeliveryZonesModule } from './modules/catalog/delivery-zones/delivery-zones.module.js';
 import { VehiclesModule } from './modules/fleet/vehicles/vehicles.module.js';
 import { ServiceLevelsModule } from './modules/catalog/service-levels/service-levels.module.js';
+import { IncidentReasonsModule } from './modules/catalog/incident-reasons/incident-reasons.module.js';
 import { AuthModule } from './app/auth/auth.module.js';
 import { SyncModule } from './app/sync/sync.module.js';
 import { MailerModule } from './plugins/mailer/mailer.module.js';
@@ -30,6 +31,7 @@ import { OsrmModule } from './plugins/osrm/osrm.module.js';
         DeliveryZonesModule,
         VehiclesModule,
         ServiceLevelsModule,
+        IncidentReasonsModule,
         AuthModule,
         SyncModule,
         MailerModule.register(),
