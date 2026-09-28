@@ -49,9 +49,3 @@ src/
 ```bash
 docker compose up --build
 ```
-
-## Working with Claude Code
-This project ships with a `.claude/` folder tailored to the plugins you selected:
-- `.claude/rules/` — the conventions this codebase follows
-- `.claude/commands/` — slash commands (`/nestjs/exception`, `/nestjs/plugin`, `/nestjs/module`, `/db/map`)
-- `.claude/context/` — project journal; log decisions here as the project evolves past this starting point
