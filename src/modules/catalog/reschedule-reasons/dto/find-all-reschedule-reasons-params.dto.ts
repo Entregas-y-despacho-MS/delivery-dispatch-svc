@@ -6,13 +6,14 @@ import { RescheduleReasonCategoryEnum } from '../../../../shared/enums/index.js'
 import { transformToBoolean } from '../../../../shared/utils/transformers.util.js';
 
 export enum RescheduleReasonSortBy {
+    CODE       = 'code',
     NAME       = 'name',
     CATEGORY   = 'category',
     CREATED_AT = 'createdAt',
 }
 
 export class FindAllRescheduleReasonsParamsDto extends PaginationParamsDto {
-    @ApiPropertyOptional({ maxLength: 100, description: 'E.g. client. Text contained in the name or the description (case-insensitive; % and _ are matched literally)' })
+    @ApiPropertyOptional({ maxLength: 100, description: 'E.g. client. Text contained in the code, the name or the description (case-insensitive; % and _ are matched literally)' })
     @IsOptional()
     @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
     @IsString()
@@ -32,7 +33,7 @@ export class FindAllRescheduleReasonsParamsDto extends PaginationParamsDto {
 
     @ApiPropertyOptional({ enum: RescheduleReasonSortBy, default: RescheduleReasonSortBy.NAME, description: 'Field to sort by. Default: name' })
     @IsOptional()
-    @IsIn(Object.values(RescheduleReasonSortBy), { message: "The 'sortBy' parameter must be one of: name, category, createdAt." })
+    @IsIn(Object.values(RescheduleReasonSortBy), { message: "The 'sortBy' parameter must be one of: code, name, category, createdAt." })
     sortBy?: RescheduleReasonSortBy;
 
     @ApiPropertyOptional({ enum: ['asc', 'desc'], default: 'asc', description: 'Sort direction. Default: asc' })

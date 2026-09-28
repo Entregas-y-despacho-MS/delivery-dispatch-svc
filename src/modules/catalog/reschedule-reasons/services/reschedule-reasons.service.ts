@@ -6,7 +6,7 @@ import { RescheduleReasonDto } from '../dto/reschedule-reason.dto.js';
 import { CreateRescheduleReasonDto } from '../dto/create-reschedule-reason.dto.js';
 import { UpdateRescheduleReasonDto } from '../dto/update-reschedule-reason.dto.js';
 import { FindAllRescheduleReasonsParamsDto } from '../dto/find-all-reschedule-reasons-params.dto.js';
-import { RescheduleReasonNotFoundException, RescheduleReasonNameAlreadyExistsException } from '../exceptions/index.js';
+import { RescheduleReasonNotFoundException, RescheduleReasonCodeAlreadyExistsException } from '../exceptions/index.js';
 import { DtoRepository, isUniqueViolation } from '../../../../shared/orm/index.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
 import { FindOptions, MutationOptions } from '../../../../shared/dto/options.dto.js';
@@ -14,12 +14,12 @@ import { escapeLike } from '../../../../shared/utils/like.util.js';
 
 /**
  * RF-A33 — catalog of reschedule/reassignment reasons: alta/edición by the dispatch coordinator and
- * the operations supervisor (a name, an optional description, and the category a reason is
- * classified under), and the read side the reschedule/reassignment modal of the operations panel
- * uses. No delete: the way to retire a reason is disabling it (`active: false`), which only stops it
- * from being assigned to new reschedules — the story has no reject-on-delete scenario (unlike
- * service_levels), and no delete scenario at all (unlike incident_reasons, which at least has one
- * for disabling — this one only has alta and duplicate prevention).
+ * the operations supervisor (a unique code, a name, an optional description, and the category a
+ * reason is classified under), and the read side the reschedule/reassignment modal of the operations
+ * panel uses. No delete: the way to retire a reason is disabling it (`active: false`), which only
+ * stops it from being assigned to new reschedules — the story has no reject-on-delete scenario
+ * (unlike service_levels), and no delete scenario at all (unlike incident_reasons, which at least
+ * has one for disabling — this one only has alta and duplicate prevention).
  */
 @Injectable()
 export class RescheduleReasonsService {
@@ -45,6 +45,7 @@ export class RescheduleReasonsService {
         const search = params.search?.trim();
         const where: FindOptionsWhere<RescheduleReason> | FindOptionsWhere<RescheduleReason>[] = search
             ? [
+                { ...base, code: ILike(`%${escapeLike(search)}%`) },
                 { ...base, name: ILike(`%${escapeLike(search)}%`) },
                 { ...base, description: ILike(`%${escapeLike(search)}%`) },
             ]
@@ -77,11 +78,13 @@ export class RescheduleReasonsService {
     async create<T>(returnDto: new () => T, dto: CreateRescheduleReasonDto, options?: MutationOptions): Promise<T> {
         const repo = options?.manager?.getRepository(RescheduleReason) ?? this.rawRepo;
 
-        // The DB's partial unique index is the real guard (see saveHandlingDuplicate); this check
-        // just gives the common case a cheap early exit.
-        if (await repo.existsBy({ name: dto.name })) throw new RescheduleReasonNameAlreadyExistsException();
+        // The DB's partial unique indexes are the real guard (see saveHandlingDuplicate); these
+        // checks just give the common case a cheap early exit.
+        if (await repo.existsBy({ code: dto.code })) throw new RescheduleReasonCodeAlreadyExistsException();
+        if (await repo.existsBy({ name: dto.name })) throw new RescheduleReasonCodeAlreadyExistsException();
 
         const reason           = repo.create();
+        reason.code             = dto.code;
         reason.name             = dto.name;
         reason.description      = dto.description || null;
         reason.category         = dto.category;
@@ -98,11 +101,15 @@ export class RescheduleReasonsService {
 
         const current = await this.findOneById(RescheduleReasonDto, id);
 
+        if (dto.code !== undefined && dto.code !== current.code) {
+            if (await repo.existsBy({ code: dto.code })) throw new RescheduleReasonCodeAlreadyExistsException();
+        }
         if (dto.name !== undefined && dto.name !== current.name) {
-            if (await repo.existsBy({ name: dto.name })) throw new RescheduleReasonNameAlreadyExistsException();
+            if (await repo.existsBy({ name: dto.name })) throw new RescheduleReasonCodeAlreadyExistsException();
         }
 
         const payload: Record<string, any> = {};
+        if (dto.code        !== undefined) payload.code        = dto.code;
         if (dto.name        !== undefined) payload.name        = dto.name;
         if (dto.description !== undefined) payload.description = dto.description || null; // '' or null clears it
         if (dto.category    !== undefined) payload.category    = dto.category;
@@ -119,12 +126,12 @@ export class RescheduleReasonsService {
 
     // ── Private implementation ────────────────────────────────────────────────
 
-    /** Two concurrent requests with the same name can both pass the pre-check — map the index error to the same 409. */
+    /** Two concurrent requests with the same name or code can both pass the pre-checks — map the index error to the same 409. */
     private async saveHandlingDuplicate<R>(write: () => Promise<R>): Promise<R> {
         try {
             return await write();
         } catch (err) {
-            if (isUniqueViolation(err)) throw new RescheduleReasonNameAlreadyExistsException();
+            if (isUniqueViolation(err)) throw new RescheduleReasonCodeAlreadyExistsException();
             throw err;
         }
     }

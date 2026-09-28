@@ -1,16 +1,16 @@
-// RF-A33 — RescheduleReasonsService: filtros/orden del listado, nombre único y actualización
-// parcial. Todo mockeado: sin DB ni red. (El comportamiento real contra Postgres —incl. la carrera
-// de altas simultáneas— se cubre en test/reschedule-reasons.e2e-spec.ts.)
+// RF-A33 — RescheduleReasonsService: filtros/orden del listado, unicidad de código/nombre y
+// actualización parcial. Todo mockeado: sin DB ni red. (El comportamiento real contra Postgres
+// —incl. la carrera de altas simultáneas— se cubre en test/reschedule-reasons.e2e-spec.ts.)
 import { describe, expect, it, vi } from 'vitest';
 import { QueryFailedError } from 'typeorm';
 import { plainToInstance } from 'class-transformer';
 import { RescheduleReasonsService } from './reschedule-reasons.service.js';
 import { RescheduleReasonDto } from '../dto/reschedule-reason.dto.js';
 import { FindAllRescheduleReasonsParamsDto } from '../dto/find-all-reschedule-reasons-params.dto.js';
-import { RescheduleReasonNotFoundException, RescheduleReasonNameAlreadyExistsException } from '../exceptions/index.js';
+import { RescheduleReasonNotFoundException, RescheduleReasonCodeAlreadyExistsException } from '../exceptions/index.js';
 import { RescheduleReasonCategoryEnum } from '../../../../shared/enums/index.js';
 
-const ROW = { id: 1, name: 'Solicitud expresa del cliente', description: null, category: 'client', active: true, createdAt: new Date('2026-01-01T00:00:00Z') };
+const ROW = { id: 1, code: 'RES-CLI-EXP', name: 'Solicitud expresa del cliente', description: null, category: 'client', active: true, createdAt: new Date('2026-01-01T00:00:00Z') };
 
 function buildService() {
     const rawRepo = {
@@ -29,6 +29,7 @@ const duplicateError = () => new QueryFailedError('INSERT ...', [], Object.assig
 const otherDbError   = () => new QueryFailedError('INSERT ...', [], Object.assign(new Error('null'), { code: '23502' }));
 const branches = (where: any) => (Array.isArray(where) ? where : [where]);
 const op = (f: any) => ({ type: f.type, value: f.value });
+const validCreate = (over: object = {}) => ({ code: 'RES-X', name: 'X', category: RescheduleReasonCategoryEnum.CLIENT, ...over });
 
 // ── listado, orden y filtros ───────────────────────────────────────────────────
 describe('RescheduleReasonsService.findAll — orden y filtros', () => {
@@ -43,6 +44,7 @@ describe('RescheduleReasonsService.findAll — orden y filtros', () => {
     });
 
     it('sortBy/sortOrder cambian el campo y la dirección, siempre con id ASC al final', async () => {
+        expect((await run({ sortBy: 'code' })).options.order).toEqual({ code: 'ASC', id: 'ASC' });
         expect((await run({ sortBy: 'category' })).options.order).toEqual({ category: 'ASC', id: 'ASC' });
         expect((await run({ sortBy: 'createdAt', sortOrder: 'desc' })).options.order).toEqual({ createdAt: 'DESC', id: 'ASC' });
     });
@@ -58,15 +60,16 @@ describe('RescheduleReasonsService.findAll — orden y filtros', () => {
         expect((await run({ active: '', category: 'operations' })).options.where).toEqual({ category: 'operations' });
     });
 
-    it('search busca en nombre o descripción (2 ramas del OR) con ILIKE contiene, sin distinguir mayúsculas', async () => {
+    it('search busca en código, nombre o descripción (3 ramas del OR) con ILIKE contiene, sin distinguir mayúsculas', async () => {
         const list = branches((await run({ search: 'client' })).options.where);
-        expect(list).toHaveLength(2);
-        expect(op(list[0].name)).toEqual({ type: 'ilike', value: '%client%' });
-        expect(op(list[1].description)).toEqual({ type: 'ilike', value: '%client%' });
+        expect(list).toHaveLength(3);
+        expect(op(list[0].code)).toEqual({ type: 'ilike', value: '%client%' });
+        expect(op(list[1].name)).toEqual({ type: 'ilike', value: '%client%' });
+        expect(op(list[2].description)).toEqual({ type: 'ilike', value: '%client%' });
     });
 
     it('search escapa los comodines: "50%" se busca literalmente', async () => {
-        expect(op(branches((await run({ search: '50%' })).options.where)[0].name).value).toBe('%50\\%%');
+        expect(op(branches((await run({ search: '50%' })).options.where)[0].code).value).toBe('%50\\%%');
     });
 
     it('un search vacío o de solo espacios se ignora', async () => {
@@ -97,37 +100,47 @@ describe('RescheduleReasonsService.create', () => {
         const managerRepo = { existsBy: vi.fn().mockResolvedValue(false), create: vi.fn(() => ({})), save: vi.fn(async (e: any) => ({ id: 9, ...e })), findOne: vi.fn().mockResolvedValue(ROW) };
         const manager = { getRepository: vi.fn(() => managerRepo) };
 
-        await service.create(RescheduleReasonDto, { name: 'X', category: RescheduleReasonCategoryEnum.OPERATIONS }, { manager } as any);
+        await service.create(RescheduleReasonDto, validCreate({ category: RescheduleReasonCategoryEnum.OPERATIONS }), { manager } as any);
 
-        expect(managerRepo.save).toHaveBeenCalledWith(expect.objectContaining({ active: true, name: 'X', category: RescheduleReasonCategoryEnum.OPERATIONS }));
+        expect(managerRepo.save).toHaveBeenCalledWith(expect.objectContaining({ active: true, code: 'RES-X', name: 'X', category: RescheduleReasonCategoryEnum.OPERATIONS }));
         expect(rawRepo.save).not.toHaveBeenCalled();
     });
 
     it('description opcional: omitida o vacía queda null', async () => {
         const { service, rawRepo } = buildService();
 
-        await service.create(RescheduleReasonDto, { name: 'X', category: RescheduleReasonCategoryEnum.CLIENT });
+        await service.create(RescheduleReasonDto, validCreate());
         expect(rawRepo.save).toHaveBeenCalledWith(expect.objectContaining({ description: null }));
 
-        await service.create(RescheduleReasonDto, { name: 'Y', description: '', category: RescheduleReasonCategoryEnum.CLIENT });
+        await service.create(RescheduleReasonDto, validCreate({ code: 'RES-Y', name: 'Y', description: '' }));
         expect(rawRepo.save).toHaveBeenLastCalledWith(expect.objectContaining({ description: null }));
     });
 
     it('nombre repetido (chequeo previo) → 409, sin llegar a guardar', async () => {
         const { service, rawRepo } = buildService();
-        rawRepo.existsBy.mockResolvedValue(true);
+        rawRepo.existsBy.mockImplementation(async ({ name }: any) => name === ROW.name);
 
-        await expect(service.create(RescheduleReasonDto, { name: 'Solicitud expresa del cliente', category: RescheduleReasonCategoryEnum.CLIENT }))
-            .rejects.toThrow(RescheduleReasonNameAlreadyExistsException);
+        await expect(service.create(RescheduleReasonDto, validCreate({ code: 'RES-NEW', name: ROW.name })))
+            .rejects.toThrow(RescheduleReasonCodeAlreadyExistsException);
         expect(rawRepo.save).not.toHaveBeenCalled();
     });
 
-    it('nombre repetido (carrera — el índice único de la base) → el mismo 409, no un 500', async () => {
+    it('código repetido (chequeo previo) → 409, sin llegar a guardar ni a chequear el nombre', async () => {
+        const { service, rawRepo } = buildService();
+        rawRepo.existsBy.mockResolvedValue(true); // el primer existsBy (code) ya da true
+
+        await expect(service.create(RescheduleReasonDto, validCreate({ code: ROW.code })))
+            .rejects.toThrow(RescheduleReasonCodeAlreadyExistsException);
+        expect(rawRepo.existsBy).toHaveBeenCalledTimes(1); // no llegó a chequear name
+        expect(rawRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('nombre o código repetido (carrera — el índice único de la base) → el mismo 409, no un 500', async () => {
         const { service, rawRepo } = buildService();
         rawRepo.save.mockRejectedValue(duplicateError());
 
-        await expect(service.create(RescheduleReasonDto, { name: 'X', category: RescheduleReasonCategoryEnum.CLIENT }))
-            .rejects.toThrow(RescheduleReasonNameAlreadyExistsException);
+        await expect(service.create(RescheduleReasonDto, validCreate()))
+            .rejects.toThrow(RescheduleReasonCodeAlreadyExistsException);
     });
 
     it('otro error de la base se propaga tal cual (no se lo mapea a 409)', async () => {
@@ -135,7 +148,7 @@ describe('RescheduleReasonsService.create', () => {
         const failure = otherDbError();
         rawRepo.save.mockRejectedValue(failure);
 
-        await expect(service.create(RescheduleReasonDto, { name: 'X', category: RescheduleReasonCategoryEnum.CLIENT })).rejects.toBe(failure);
+        await expect(service.create(RescheduleReasonDto, validCreate())).rejects.toBe(failure);
     });
 });
 
@@ -171,10 +184,21 @@ describe('RescheduleReasonsService.update', () => {
         const { service, rawRepo } = buildService();
         rawRepo.existsBy.mockResolvedValue(true);
 
-        await expect(service.update(RescheduleReasonDto, 1, { name: 'Otro' })).rejects.toThrow(RescheduleReasonNameAlreadyExistsException);
+        await expect(service.update(RescheduleReasonDto, 1, { name: 'Otro' })).rejects.toThrow(RescheduleReasonCodeAlreadyExistsException);
 
         rawRepo.existsBy.mockClear();
         await service.update(RescheduleReasonDto, 1, { name: ROW.name });
+        expect(rawRepo.existsBy).not.toHaveBeenCalled();
+    });
+
+    it('cambiar el código a uno ya usado por OTRO motivo → 409; al mismo código propio no se rechequea', async () => {
+        const { service, rawRepo } = buildService();
+        rawRepo.existsBy.mockResolvedValue(true);
+
+        await expect(service.update(RescheduleReasonDto, 1, { code: 'RES-OTRO' })).rejects.toThrow(RescheduleReasonCodeAlreadyExistsException);
+
+        rawRepo.existsBy.mockClear();
+        await service.update(RescheduleReasonDto, 1, { code: ROW.code });
         expect(rawRepo.existsBy).not.toHaveBeenCalled();
     });
 
@@ -198,7 +222,7 @@ describe('RescheduleReasonsService.update', () => {
         const { service, rawRepo } = buildService();
         rawRepo.update.mockRejectedValue(duplicateError());
 
-        await expect(service.update(RescheduleReasonDto, 1, { name: 'Racy' })).rejects.toThrow(RescheduleReasonNameAlreadyExistsException);
+        await expect(service.update(RescheduleReasonDto, 1, { name: 'Racy' })).rejects.toThrow(RescheduleReasonCodeAlreadyExistsException);
     });
 });
 

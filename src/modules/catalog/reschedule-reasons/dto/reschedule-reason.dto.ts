@@ -8,6 +8,10 @@ export class RescheduleReasonDto {
     id!: number;
 
     @DtoField()
+    @ApiProperty({ example: 'RES-CLI-EXP', description: 'Unique reference code. Must not belong to another reason' })
+    code!: string;
+
+    @DtoField()
     @ApiProperty({ example: 'Solicitud expresa del cliente', description: 'Display name shown in the reschedule/reassignment modal of the operations panel. Must not belong to another reason' })
     name!: string;
 
@@ -22,6 +26,11 @@ export class RescheduleReasonDto {
     @DtoField()
     @ApiProperty({ example: true, description: 'false = disabled: cannot be assigned to new reschedules/reassignments. Reschedules already logged with it are not affected' })
     active!: boolean;
+
+    // Not a @DtoField — there is no such DB column, this is computed (see the controller) from
+    // `category` and attached after the DTO is built, never selected from the database.
+    @ApiProperty({ example: false, description: 'Computed, read-only: true only when `category` is `client` (RF-A33, Escenario 2) — a reschedule using this reason does not count against the team\'s internal punctuality metric. Not accepted on create/update, only category is' })
+    affectsSla!: boolean;
 
     @DtoField()
     @ApiProperty({ type: String, format: 'date-time', example: '2024-01-01T00:00:00.000Z', description: 'Creation timestamp (UTC)' })

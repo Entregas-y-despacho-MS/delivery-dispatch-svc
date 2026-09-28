@@ -10,13 +10,31 @@ import { UpdateRescheduleReasonDto } from './update-reschedule-reason.dto.js';
 import { FindAllRescheduleReasonsParamsDto } from './find-all-reschedule-reasons-params.dto.js';
 import { RescheduleReasonCategoryEnum } from '../../../../shared/enums/index.js';
 
-const BASE = { name: 'Solicitud expresa del cliente', description: 'El cliente pidió mover la entrega', category: RescheduleReasonCategoryEnum.CLIENT };
+const BASE = { code: 'RES-CLI-EXP', name: 'Solicitud expresa del cliente', description: 'El cliente pidió mover la entrega', category: RescheduleReasonCategoryEnum.CLIENT };
 const OPTIONS = { whitelist: true, forbidNonWhitelisted: true };
 
 async function errorsOf<T extends object>(cls: new () => T, plain: object): Promise<Record<string, string[]>> {
     const errors = await validate(plainToInstance(cls, plain), OPTIONS);
     return Object.fromEntries(errors.map((e) => [e.property, Object.keys(e.constraints ?? {})]));
 }
+
+// ── code ────────────────────────────────────────────────────────────────────────
+describe('CreateRescheduleReasonDto — code', () => {
+    it('se recorta y se pasa a mayúsculas', () => {
+        expect(plainToInstance(CreateRescheduleReasonDto, { ...BASE, code: '  res-cli-exp  ' }).code).toBe('RES-CLI-EXP');
+    });
+
+    it.each(['', '   ', null, undefined, 123, true, [], {}])('rechaza code = %j', async (code) => {
+        const plain: Record<string, unknown> = { ...BASE, code };
+        if (code === undefined) delete plain.code;
+        expect(Object.keys(await errorsOf(CreateRescheduleReasonDto, plain))).toEqual(['code']);
+    });
+
+    it('rechaza más de 30 caracteres, acepta exactamente 30', async () => {
+        expect(Object.keys(await errorsOf(CreateRescheduleReasonDto, { ...BASE, code: 'A'.repeat(31) }))).toEqual(['code']);
+        expect(await errorsOf(CreateRescheduleReasonDto, { ...BASE, code: 'A'.repeat(30) })).toEqual({});
+    });
+});
 
 // ── name ────────────────────────────────────────────────────────────────────────
 describe('CreateRescheduleReasonDto — name', () => {
@@ -25,7 +43,7 @@ describe('CreateRescheduleReasonDto — name', () => {
     });
 
     it('el otro ejemplo de la historia: "Avería mecánica en ruta", fuerza_mayor', async () => {
-        expect(await errorsOf(CreateRescheduleReasonDto, { name: 'Avería mecánica en ruta', category: RescheduleReasonCategoryEnum.FORCE_MAJEURE })).toEqual({});
+        expect(await errorsOf(CreateRescheduleReasonDto, { code: 'RES-FM-AVE', name: 'Avería mecánica en ruta', category: RescheduleReasonCategoryEnum.FORCE_MAJEURE })).toEqual({});
     });
 
     it('se recorta', () => {
@@ -92,7 +110,7 @@ describe('UpdateRescheduleReasonDto', () => {
         expect(await errorsOf(UpdateRescheduleReasonDto, {})).toEqual({});
     });
 
-    it.each(['name', 'category', 'active'])('null se rechaza en %s (NOT NULL)', async (field) => {
+    it.each(['code', 'name', 'category', 'active'])('null se rechaza en %s (NOT NULL)', async (field) => {
         expect(Object.keys(await errorsOf(UpdateRescheduleReasonDto, { [field]: null }))).toEqual([field]);
     });
 
@@ -103,6 +121,11 @@ describe('UpdateRescheduleReasonDto', () => {
 
     it('name vacío también se rechaza (no solo null)', async () => {
         expect(Object.keys(await errorsOf(UpdateRescheduleReasonDto, { name: '   ' }))).toEqual(['name']);
+    });
+
+    it('code vacío también se rechaza (no solo null), y se recorta/mayúscula cuando es válido', async () => {
+        expect(Object.keys(await errorsOf(UpdateRescheduleReasonDto, { code: '   ' }))).toEqual(['code']);
+        expect(plainToInstance(UpdateRescheduleReasonDto, { code: '  res-new  ' }).code).toBe('RES-NEW');
     });
 
     it('active debe ser un booleano de verdad, no la cadena "false"', async () => {
@@ -136,8 +159,8 @@ describe('FindAllRescheduleReasonsParamsDto', () => {
         expect(Object.keys(await errorsOf(FindAllRescheduleReasonsParamsDto, { search: 'a'.repeat(101) }))).toEqual(['search']);
     });
 
-    it('sortBy solo acepta name, category o createdAt', async () => {
-        for (const sortBy of ['name', 'category', 'createdAt']) expect(await errorsOf(FindAllRescheduleReasonsParamsDto, { sortBy })).toEqual({});
+    it('sortBy solo acepta code, name, category o createdAt', async () => {
+        for (const sortBy of ['code', 'name', 'category', 'createdAt']) expect(await errorsOf(FindAllRescheduleReasonsParamsDto, { sortBy })).toEqual({});
         expect(Object.keys(await errorsOf(FindAllRescheduleReasonsParamsDto, { sortBy: 'active' }))).toEqual(['sortBy']);
     });
 

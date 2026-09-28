@@ -5,8 +5,17 @@ import { OptionalNotNull } from '../../../../shared/validators/optional-not-null
 import { RescheduleReasonCategoryEnum } from '../../../../shared/enums/index.js';
 
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
+const normalizeCode = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toUpperCase() : value);
 
 export class UpdateRescheduleReasonDto {
+    @ApiPropertyOptional({ example: 'RES-CLI-EXP', maxLength: 30, description: 'New reference code. Trimmed and uppercased before validation; must not belong to another reason. null is rejected' })
+    @OptionalNotNull()
+    @Transform(normalizeCode)
+    @IsString()
+    @IsNotEmpty({ message: 'Code must not be empty.' })
+    @MaxLength(30, { message: 'Code must not exceed 30 characters.' })
+    code?: string;
+
     @ApiPropertyOptional({ example: 'Solicitud expresa del cliente', maxLength: 150, description: 'New display name. Must not belong to another reason. null is rejected' })
     @OptionalNotNull()
     @Transform(trim)

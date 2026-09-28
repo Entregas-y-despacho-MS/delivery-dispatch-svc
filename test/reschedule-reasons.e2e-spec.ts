@@ -28,6 +28,12 @@ describe('Motivos de reprogramación/reasignación (e2e, RF-A33)', () => {
     const tag = `RR-${run}`;
     let seq = 0;
     const nextName = () => `${tag} ${++seq}`;
+    // Cada created()/validBody() necesita un code Y un name únicos por separado (dos índices únicos
+    // distintos) — cada uno incrementa `seq` independientemente, así ningún valor se repite nunca,
+    // sin importar cuál de los dos lo esté usando (mismo bug ya encontrado antes en incident-reasons:
+    // reusar el mismo valor para ambos campos hacía que una colisión de nombre se reportara como si
+    // fuera de código, o viceversa).
+    const nextCode = () => `${tag}-C${++seq}`.replace(/[^A-Z0-9-]/gi, '');
 
     const auth = (role: string) => ({ Authorization: `Bearer ${tokens[role]}` });
     const url = (path = '') => `/${apiPrefix}/reschedule-reasons${path}`;
@@ -36,12 +42,13 @@ describe('Motivos de reprogramación/reasignación (e2e, RF-A33)', () => {
     const get = (id: number, role = 'coordinator') => request(app.getHttpServer()).get(url(`/${id}`)).set(auth(role));
     const list = (qs = '', role = 'coordinator') => request(app.getHttpServer()).get(url(`?${qs}`)).set(auth(role));
     const listTag = (qs = '') => list(`search=${encodeURIComponent(tag)}&limit=100${qs ? '&' + qs : ''}`);
-    const validBody = (extra: object = {}) => ({ name: nextName(), description: 'Detalle de prueba', category: 'client', ...extra });
+    const validBody = (extra: object = {}) => ({ code: nextCode(), name: nextName(), description: 'Detalle de prueba', category: 'client', ...extra });
     const created = async (extra: object = {}) => (await post(validBody(extra))).body as any;
     const ids = (res: request.Response) => res.body.data.map((r: any) => r.id);
 
     const row = async (id: number) => (await dataSource.query(`SELECT * FROM reschedule_reasons WHERE reschedule_reason_id = $1`, [id]))[0];
     const countByName = async (name: string) => (await dataSource.query(`SELECT count(*)::int AS c FROM reschedule_reasons WHERE name = $1`, [name]))[0].c as number;
+    const countByCode = async (code: string) => (await dataSource.query(`SELECT count(*)::int AS c FROM reschedule_reasons WHERE code = $1`, [code]))[0].c as number;
 
     beforeAll(async () => {
         const moduleRef: TestingModule = await Test.createTestingModule({ imports: [AppModule] }).compile();
@@ -113,32 +120,34 @@ describe('Motivos de reprogramación/reasignación (e2e, RF-A33)', () => {
     // ── Escenario 1 ────────────────────────────────────────────────────────────
     describe('Escenario 1 — registro de motivo de reprogramación/reasignación', () => {
         it('el primer ejemplo de la historia: "Solicitud expresa del cliente", categoría client → 201 y habilitado', async () => {
-            const body = { name: `${tag} Solicitud expresa del cliente`, description: 'El cliente pidió mover la entrega', category: 'client' };
+            const body = { code: nextCode(), name: `${tag} Solicitud expresa del cliente`, description: 'El cliente pidió mover la entrega', category: 'client' };
             const res = await post(body);
 
             expect(res.status).toBe(201);
-            expect(res.body).toMatchObject({ ...body, active: true });
-            expect(Object.keys(res.body).sort()).toEqual(['active', 'category', 'createdAt', 'description', 'id', 'name']);
+            expect(res.body).toMatchObject({ ...body, active: true, affectsSla: true });
+            expect(Object.keys(res.body).sort()).toEqual(['active', 'affectsSla', 'category', 'code', 'createdAt', 'description', 'id', 'name']);
             expect(await row(res.body.id)).toMatchObject({
-                name: body.name, description: body.description, category: 'client', active: true, deleted_at: null,
+                code: body.code, name: body.name, description: body.description, category: 'client', active: true, deleted_at: null,
             });
         });
 
         it('el segundo ejemplo de la historia: "Avería mecánica en ruta", force_majeure', async () => {
-            const res = await post({ name: `${tag} Avería mecánica en ruta`, category: 'force_majeure' });
+            const res = await post({ code: nextCode(), name: `${tag} Avería mecánica en ruta`, category: 'force_majeure' });
             expect(res.status).toBe(201);
             expect(res.body.category).toBe('force_majeure');
             expect(res.body.description).toBeNull();
+            expect(res.body.affectsSla).toBe(false); // solo `client` afecta la métrica de SLA
         });
 
-        it('descripción opcional: omitida o vacía queda null; el nombre y la descripción se recortan', async () => {
-            const omitted = await post({ name: nextName(), category: 'operations' });
+        it('descripción opcional: omitida o vacía queda null; el nombre, el código y la descripción se recortan', async () => {
+            const omitted = await post({ code: nextCode(), name: nextName(), category: 'operations' });
             expect(omitted.body.description).toBeNull();
             const blank = await post(validBody({ description: '   ' }));
             expect(blank.body.description).toBeNull();
             const name = nextName();
-            const trimmed = await post({ name: `  ${name}  `, description: '  hola  ', category: 'operations' });
-            expect(trimmed.body).toMatchObject({ name, description: 'hola' });
+            const code = nextCode();
+            const trimmed = await post({ code: `  ${code.toLowerCase()}  `, name: `  ${name}  `, description: '  hola  ', category: 'operations' });
+            expect(trimmed.body).toMatchObject({ code, name, description: 'hola' });
         });
 
         it('queda disponible de inmediato: aparece por id y en el listado', async () => {
@@ -161,6 +170,18 @@ describe('Motivos de reprogramación/reasignación (e2e, RF-A33)', () => {
                 expect(res.category).toBe(category);
                 expect((await row(res.id)).category).toBe(category);
             }
+        });
+
+        it('affectsSla es true solo para client — computado, no se guarda en la base', async () => {
+            const client = await created({ category: 'client' });
+            const operations = await created({ category: 'operations' });
+            const forceMajeure = await created({ category: 'force_majeure' });
+
+            expect(client.affectsSla).toBe(true);
+            expect(operations.affectsSla).toBe(false);
+            expect(forceMajeure.affectsSla).toBe(false);
+            // No es una columna propia: no aparece en la fila cruda de la base.
+            expect(await row(client.id)).not.toHaveProperty('affects_sla');
         });
 
         it('una categoría fuera de las 3 válidas se rechaza (sin mayúsculas, sin espacios, sin sinónimos) y no se guarda nada', async () => {
@@ -187,15 +208,25 @@ describe('Motivos de reprogramación/reasignación (e2e, RF-A33)', () => {
     });
 
     // ── Escenario 3 ────────────────────────────────────────────────────────────
-    describe('Escenario 3 — prevención de duplicidad', () => {
-        it('409 RESCHEDULE_REASON_NAME_ALREADY_EXISTS con el mismo nombre, también con espacios alrededor', async () => {
+    describe('Escenario 3 — prevención de duplicidad (nombre o código)', () => {
+        it('409 RESCHEDULE_REASON_CODE_ALREADY_EXISTS con el mismo nombre, también con espacios alrededor', async () => {
             const first = await created();
             for (const name of [first.name, `  ${first.name}  `]) {
                 const res = await post(validBody({ name }));
                 expect(res.status).toBe(409);
-                expect(res.body.error).toBe('RESCHEDULE_REASON_NAME_ALREADY_EXISTS');
+                expect(res.body.error).toBe('RESCHEDULE_REASON_CODE_ALREADY_EXISTS');
             }
             expect(await countByName(first.name)).toBe(1);
+        });
+
+        it('409 con el mismo código, también con espacios/mayúsculas distintas (se normaliza antes de comparar)', async () => {
+            const first = await created();
+            for (const code of [first.code, `  ${first.code.toLowerCase()}  `]) {
+                const res = await post(validBody({ code }));
+                expect(res.status).toBe(409);
+                expect(res.body.error).toBe('RESCHEDULE_REASON_CODE_ALREADY_EXISTS');
+            }
+            expect(await countByCode(first.code)).toBe(1);
         });
 
         it('altas simultáneas con el mismo nombre: exactamente una gana, el resto 409, ningún 500', async () => {
@@ -207,26 +238,58 @@ describe('Motivos de reprogramación/reasignación (e2e, RF-A33)', () => {
             expect(await countByName(body.name)).toBe(1);
         });
 
+        it('altas simultáneas con el mismo código (nombres distintos): exactamente una gana, el resto 409, ningún 500', async () => {
+            const code = nextCode();
+            const bodies = Array.from({ length: 6 }, () => ({ ...validBody(), code }));
+            const statuses = (await Promise.all(bodies.map((b) => post(b)))).map((r) => r.status);
+
+            expect(statuses.filter((s) => s === 201)).toHaveLength(1);
+            expect(statuses.filter((s) => s === 409)).toHaveLength(5);
+            expect(await countByCode(code)).toBe(1);
+        });
+
         it('renombrar a un nombre de otro motivo también da 409', async () => {
             const a = await created();
             const b = await created();
             const res = await put(b.id, { name: a.name });
             expect(res.status).toBe(409);
-            expect(res.body.error).toBe('RESCHEDULE_REASON_NAME_ALREADY_EXISTS');
+            expect(res.body.error).toBe('RESCHEDULE_REASON_CODE_ALREADY_EXISTS');
         });
 
-        it('desactivar un motivo no libera su nombre (no hay endpoint de borrado en este catálogo)', async () => {
+        it('cambiar el código a uno de otro motivo también da 409; al propio código no se rechequea (200)', async () => {
+            const a = await created();
+            const b = await created();
+            const clash = await put(b.id, { code: a.code });
+            expect(clash.status).toBe(409);
+            expect(clash.body.error).toBe('RESCHEDULE_REASON_CODE_ALREADY_EXISTS');
+
+            const noop = await put(b.id, { code: b.code });
+            expect(noop.status).toBe(200);
+        });
+
+        it('cambiar el código a uno nuevo (sin colisión) se guarda de verdad', async () => {
+            const reason = await created();
+            const newCode = nextCode();
+
+            const res = await put(reason.id, { code: newCode });
+
+            expect(res.status).toBe(200);
+            expect(res.body.code).toBe(newCode);
+            expect((await row(reason.id)).code).toBe(newCode);
+        });
+
+        it('desactivar un motivo no libera ni su nombre ni su código (no hay endpoint de borrado en este catálogo)', async () => {
             const first = await created();
             await put(first.id, { active: false });
-            const res = await post(validBody({ name: first.name }));
-            expect(res.status).toBe(409);
+            expect((await post(validBody({ name: first.name }))).status).toBe(409);
+            expect((await post(validBody({ code: first.code }))).status).toBe(409);
         });
     });
 
     // ── Validación de campos ───────────────────────────────────────────────────
     describe('validación', () => {
-        it('name y category son obligatorios', async () => {
-            for (const field of ['name', 'category']) {
+        it('code, name y category son obligatorios', async () => {
+            for (const field of ['code', 'name', 'category']) {
                 const body: Record<string, unknown> = validBody();
                 delete body[field];
                 expect((await post(body)).status, field).toBe(400);
@@ -238,18 +301,24 @@ describe('Motivos de reprogramación/reasignación (e2e, RF-A33)', () => {
             expect((await post(validBody({ name: '   ' }))).status).toBe(400);
         });
 
-        it('name sobre 150 caracteres y description sobre 255 se rechazan', async () => {
+        it('code vacío o de solo espacios se rechaza', async () => {
+            expect((await post(validBody({ code: '' }))).status).toBe(400);
+            expect((await post(validBody({ code: '   ' }))).status).toBe(400);
+        });
+
+        it('name sobre 150, code sobre 30 y description sobre 255 se rechazan', async () => {
             expect((await post(validBody({ name: 'A'.repeat(151) }))).status).toBe(400);
+            expect((await post(validBody({ code: 'A'.repeat(31) }))).status).toBe(400);
             expect((await post(validBody({ description: 'A'.repeat(256) }))).status).toBe(400);
         });
 
-        it('editar: null se rechaza en name/category/active; description sí acepta null', async () => {
+        it('editar: null se rechaza en code/name/category/active; description sí acepta null', async () => {
             const reason = await created();
-            for (const field of ['name', 'category', 'active']) {
+            for (const field of ['code', 'name', 'category', 'active']) {
                 expect((await put(reason.id, { [field]: null })).status, field).toBe(400);
             }
             expect((await put(reason.id, { description: null })).status).toBe(200);
-            expect(await row(reason.id)).toMatchObject({ name: reason.name, category: reason.category, active: true });
+            expect(await row(reason.id)).toMatchObject({ code: reason.code, name: reason.name, category: reason.category, active: true });
         });
 
         it('un cambio válido junto con uno inválido no se aplica a medias', async () => {
@@ -281,6 +350,14 @@ describe('Motivos de reprogramación/reasignación (e2e, RF-A33)', () => {
             }
         });
 
+        it('search también encuentra por código, sin distinguir mayúsculas', async () => {
+            const code = `${tag}-PERDIDO`;
+            const reason = await created({ code });
+            for (const term of [code, code.toLowerCase()]) {
+                expect(ids(await list(`search=${encodeURIComponent(term)}&limit=100`)), term).toContain(reason.id);
+            }
+        });
+
         it('los comodines % y _ se buscan literalmente', async () => {
             const pct = await created({ name: `${tag} Desc 50% off` });
             await created({ name: `${tag} Desc 500 off` });
@@ -298,17 +375,25 @@ describe('Motivos de reprogramación/reasignación (e2e, RF-A33)', () => {
             expect((await list(`search=${encodeURIComponent(t)}&limit=100`)).body.data.map((r: any) => r.id).sort()).toEqual([on.id, off.id].sort());
         });
 
-        it('la búsqueda no se salta el filtro active en NINGUNA rama del OR (ni nombre ni descripción)', async () => {
+        it('la búsqueda no se salta el filtro active en NINGUNA rama del OR (ni código, ni nombre, ni descripción)', async () => {
             const t = `${tag} NoSaltar`;
-            // El texto buscado está en el NOMBRE del habilitado y solo en la DESCRIPCIÓN del
-            // deshabilitado: así cada rama del OR (nombre / descripción) tiene algo que filtrar, y si
-            // el filtro active se saltara en cualquiera de las dos, el deshabilitado aparecería igual.
-            const on  = await created({ name: `${t} on`, description: 'sin el texto' });
-            const off = await created({ name: `${tag} otro nombre ${++seq}`, description: `descripción con ${t}` });
-            await put(off.id, { active: false });
+            // El texto buscado está SOLO en el CÓDIGO del primero, SOLO en el NOMBRE del segundo, y
+            // SOLO en la DESCRIPCIÓN del tercero — así las 3 ramas del OR (código / nombre /
+            // descripción) tienen algo que filtrar, y si el filtro active se saltara en cualquiera de
+            // las tres, el ítem deshabilitado de esa rama aparecería igual.
+            const byCode = await created({ code: `${t}CODE`, name: `${tag} otro nombre ${++seq}` });
+            const byName = await created({ name: `${t} on` });
+            const byDescription = await created({ name: `${tag} otro nombre ${++seq}`, description: `descripción con ${t}` });
+            await put(byCode.id, { active: false });
+            await put(byDescription.id, { active: false });
 
-            expect(ids(await list(`search=${encodeURIComponent(t)}&active=true&limit=100`))).toEqual([on.id]);
-            expect(ids(await list(`search=${encodeURIComponent(t)}&active=false&limit=100`))).toEqual([off.id]);
+            const enabledOnly = ids(await list(`search=${encodeURIComponent(t)}&active=true&limit=100`));
+            expect(enabledOnly).toContain(byName.id);
+            expect(enabledOnly).not.toContain(byCode.id);
+            expect(enabledOnly).not.toContain(byDescription.id);
+
+            const disabledOnly = ids(await list(`search=${encodeURIComponent(t)}&active=false&limit=100`));
+            expect(disabledOnly.sort()).toEqual([byCode.id, byDescription.id].sort());
         });
 
         it('un active vacío (?active=) no filtra y no rompe', async () => {
@@ -326,11 +411,12 @@ describe('Motivos de reprogramación/reasignación (e2e, RF-A33)', () => {
             expect((await list(`search=${encodeURIComponent('zzz-no-existe-' + run)}`)).body).toMatchObject({ data: [], meta: { total: 0, pages: 0 } });
         });
 
-        it('ordena por nombre por defecto; sortBy=category y sortOrder=desc también funcionan', async () => {
+        it('ordena por nombre por defecto; sortBy=code, sortBy=category y sortOrder=desc también funcionan', async () => {
             const t = `${tag} Orden`;
-            const b = await created({ name: `${t} B`, category: 'operations' });
-            const a = await created({ name: `${t} A`, category: 'client' });
+            const b = await created({ name: `${t} B`, code: `${t}-B`, category: 'operations' });
+            const a = await created({ name: `${t} A`, code: `${t}-A`, category: 'client' });
             expect(ids(await list(`search=${encodeURIComponent(t)}&limit=100`))).toEqual([a.id, b.id]);
+            expect(ids(await list(`search=${encodeURIComponent(t)}&sortBy=code&limit=100`))).toEqual([a.id, b.id]);
             expect(ids(await list(`search=${encodeURIComponent(t)}&sortBy=category&limit=100`))).toEqual([a.id, b.id]);
             expect(ids(await list(`search=${encodeURIComponent(t)}&sortBy=name&sortOrder=desc&limit=100`))).toEqual([b.id, a.id]);
         });

@@ -11,6 +11,9 @@ export class RescheduleReason extends BaseEntitySoftDelete {
     @PrimaryGeneratedColumn({ name: 'reschedule_reason_id' })
     id: number;
 
+    @Column({ name: 'code', type: 'varchar', length: 30 })
+    code: string;
+
     @Column({ name: 'name', type: 'varchar', length: 150 })
     name: string;
 
