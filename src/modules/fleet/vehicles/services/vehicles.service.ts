@@ -64,6 +64,11 @@ export class VehiclesService {
         return this._findOne(dto, { id }, throwException);
     }
 
+    async existsById(id: number, options?: MutationOptions): Promise<boolean> {
+        const repo = options?.manager?.getRepository(Vehicle) ?? this.rawRepo;
+        return repo.existsBy({ id });
+    }
+
     // ── Mutations ─────────────────────────────────────────────────────────────
 
     async create<T>(returnDto: new () => T, dto: CreateVehicleDto, options?: MutationOptions): Promise<T> {
@@ -120,6 +125,22 @@ export class VehiclesService {
 
         const result = await new DtoRepository(repo).findOne({ dto: returnDto, where: { id } });
         return result!;
+    }
+
+    /**
+     * Looks up the vehicle_status by name and sets it directly — used by RF-A34's incident
+     * trigger (VehicleMaintenancesService.create()), and by anything else that needs to move a
+     * vehicle to a status by name rather than by id. Throws VehicleNotFoundException if the
+     * vehicle doesn't exist.
+     */
+    async setStatusByName(id: number, statusName: VehicleStatusEnum, options?: MutationOptions): Promise<void> {
+        const repo       = options?.manager?.getRepository(Vehicle) ?? this.rawRepo;
+        const statusRepo = options?.manager?.getRepository(VehicleStatus) ?? this.statusRepo;
+
+        if (!(await repo.existsBy({ id }))) throw new VehicleNotFoundException();
+
+        const status = await statusRepo.findOneByOrFail({ name: statusName });
+        await repo.update(id, { vehicleStatusId: status.id });
     }
 
     async remove(id: number, options?: MutationOptions): Promise<void> {
