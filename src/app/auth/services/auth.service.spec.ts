@@ -309,6 +309,43 @@ describe('AuthService — refresh token: se guarda la huella completa, no un bcr
     });
 });
 
+describe('AuthService.logout (RF-U08, ST-34.3) — revoca la sesión en PostgreSQL', () => {
+    it('revoca el refresh token del usuario (setRefreshToken a null)', async () => {
+        const { service, usersService } = buildService();
+
+        await service.logout(7);
+
+        expect(usersService.setRefreshToken).toHaveBeenCalledWith(7, null);
+        expect(usersService.setRefreshToken).toHaveBeenCalledTimes(1);
+    });
+
+    it('no toca nada más (ni contraseña, ni bloqueo, ni último login) — logout es solo la sesión', async () => {
+        const { service, usersService } = buildService();
+
+        await service.logout(7);
+
+        expect(usersService.setLockoutState).not.toHaveBeenCalled();
+        expect(usersService.setLastLogin).not.toHaveBeenCalled();
+    });
+
+    it('llamarlo dos veces seguidas (doble tap) no rompe nada — es idempotente', async () => {
+        const { service, usersService } = buildService();
+
+        await service.logout(7);
+        await service.logout(7);
+
+        expect(usersService.setRefreshToken).toHaveBeenCalledTimes(2);
+        expect(usersService.setRefreshToken).toHaveBeenNthCalledWith(1, 7, null);
+        expect(usersService.setRefreshToken).toHaveBeenNthCalledWith(2, 7, null);
+    });
+
+    it('no devuelve nada (void) — el controller responde 204 sin body', async () => {
+        const { service } = buildService();
+
+        expect(await service.logout(7)).toBeUndefined();
+    });
+});
+
 describe('AuthService.register — solo root puede dar el rol root', () => {
     it('comprueba al que llama antes de crear la cuenta', async () => {
         const { service, usersService } = buildService();
