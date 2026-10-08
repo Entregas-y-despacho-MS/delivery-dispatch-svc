@@ -19,6 +19,7 @@ const RULES: Record<string, Rule> = {
     account_lockout_minutes:       { kind: 'int', min: 1, max: MINUTES_PER_WEEK, unit: 'minutes' },
     password_reset_expiry_minutes: { kind: 'int', min: 1, max: 1440, unit: 'minutes' },
     session_inactivity_minutes:    { kind: 'int', min: 1, max: MINUTES_PER_WEEK, unit: 'minutes' },
+    order_reservation_ttl_minutes: { kind: 'int', min: 1, max: 1440, unit: 'minutes' },
 };
 
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
