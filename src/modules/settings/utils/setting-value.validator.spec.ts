@@ -5,6 +5,7 @@ describe('validateSettingValue', () => {
     it.each([
         ['max_failed_login_attempts', '1'], ['max_failed_login_attempts', '5'], ['max_failed_login_attempts', '100'],
         ['session_inactivity_minutes', '30'], ['session_inactivity_minutes', '10080'],
+        ['order_reservation_ttl_minutes', '1'], ['order_reservation_ttl_minutes', '15'], ['order_reservation_ttl_minutes', '1440'],
         ['password_min_length', '8'], ['password_min_length', '128'],
         ['sla_alert_threshold_pct', '90'], ['otp_code_length', '6'],
         ['delivery_window_start', '08:00'], ['delivery_window_end', '23:59'], ['delivery_window_start', '00:00'],
@@ -16,6 +17,7 @@ describe('validateSettingValue', () => {
     it.each([
         ['max_failed_login_attempts', '0'], ['max_failed_login_attempts', '101'], ['max_failed_login_attempts', 'abc'],
         ['session_inactivity_minutes', '-5'], ['session_inactivity_minutes', '0'], ['session_inactivity_minutes', '10081'],
+        ['order_reservation_ttl_minutes', '0'], ['order_reservation_ttl_minutes', '1441'], ['order_reservation_ttl_minutes', 'abc'],
         ['password_min_length', '7'], ['password_min_length', '0'], ['password_min_length', '129'],
         ['sla_alert_threshold_pct', '101'], ['sla_alert_threshold_pct', '0'],
         ['otp_code_length', '3'], ['otp_code_length', '11'],

@@ -13,6 +13,7 @@ import { VehiclesModule } from './modules/fleet/vehicles/vehicles.module.js';
 import { ServiceLevelsModule } from './modules/catalog/service-levels/service-levels.module.js';
 import { IncidentReasonsModule } from './modules/catalog/incident-reasons/incident-reasons.module.js';
 import { RescheduleReasonsModule } from './modules/catalog/reschedule-reasons/reschedule-reasons.module.js';
+import { WarehousesModule } from './modules/catalog/warehouses/warehouses.module.js';
 import { VehicleIncidentTypesModule } from './modules/fleet/vehicle-incident-types/vehicle-incident-types.module.js';
 import { VehicleMaintenancesModule } from './modules/fleet/vehicle-maintenances/vehicle-maintenances.module.js';
 import { AuthModule } from './app/auth/auth.module.js';
@@ -24,6 +25,8 @@ import { PdfModule } from './plugins/pdf/pdf.module.js';
 import { StorageModule } from './plugins/storage/storage.module.js';
 import { PushModule } from './plugins/push/push.module.js';
 import { OsrmModule } from './plugins/osrm/osrm.module.js';
+import { PendingOrdersModule } from './modules/dispatch/pending-orders/pending-orders.module.js';
+import { DispatchReservationsModule } from './modules/dispatch/dispatch-reservations/dispatch-reservations.module.js';
 
 @Module({
     imports: [
@@ -42,6 +45,7 @@ import { OsrmModule } from './plugins/osrm/osrm.module.js';
         ServiceLevelsModule,
         IncidentReasonsModule,
         RescheduleReasonsModule,
+        WarehousesModule,
         VehicleIncidentTypesModule,
         VehicleMaintenancesModule,
         AuthModule,
@@ -53,6 +57,8 @@ import { OsrmModule } from './plugins/osrm/osrm.module.js';
         StorageModule.register(),
         PushModule.register(),
         OsrmModule,
+        PendingOrdersModule,
+        DispatchReservationsModule,
     ],
     providers: [
         // Rejects NUL characters in body/query/params (Postgres cannot store them: it was a 500).
