@@ -8,9 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- `GET /pending-orders`: inbox of orders waiting to be planned (`pending` plus `rescheduled` for today) with zone, shift, priority and fuzzy search filters, sorting, `{ data, total, page, limit }` pagination, package weight and volume (ST-48.2, RF-A40).
-- Soft reservation of orders while a coordinator plans a route: `POST /dispatch-reservations`, `/renew` and `/release`; expires on its own after `order_reservation_ttl_minutes` (ST-48.2).
-- `DispatchStatusEnum` now lists every status of `dispatch_statuses`.
+- `GET /dispatches/my-assignments` (driver role): the driver's stops for a shift date (default: today in America/La_Paz), ordered by visit order, with `lastModifiedAt` for change detection in the mobile app (RF-U02, ST-28.4).
 
 ## [0.1.0] - 2026-10-06
 First tagged milestone — end of Sprint 1. The API is still under active development; breaking
