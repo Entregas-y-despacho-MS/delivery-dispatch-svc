@@ -13,6 +13,7 @@ import { VehiclesModule } from './modules/fleet/vehicles/vehicles.module.js';
 import { ServiceLevelsModule } from './modules/catalog/service-levels/service-levels.module.js';
 import { IncidentReasonsModule } from './modules/catalog/incident-reasons/incident-reasons.module.js';
 import { RescheduleReasonsModule } from './modules/catalog/reschedule-reasons/reschedule-reasons.module.js';
+import { WarehousesModule } from './modules/catalog/warehouses/warehouses.module.js';
 import { VehicleIncidentTypesModule } from './modules/fleet/vehicle-incident-types/vehicle-incident-types.module.js';
 import { VehicleMaintenancesModule } from './modules/fleet/vehicle-maintenances/vehicle-maintenances.module.js';
 import { AuthModule } from './app/auth/auth.module.js';
@@ -42,6 +43,7 @@ import { OsrmModule } from './plugins/osrm/osrm.module.js';
         ServiceLevelsModule,
         IncidentReasonsModule,
         RescheduleReasonsModule,
+        WarehousesModule,
         VehicleIncidentTypesModule,
         VehicleMaintenancesModule,
         AuthModule,
