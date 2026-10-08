@@ -1,6 +1,7 @@
 // Roles listing (read-only catalog): filters, sorting, pagination, user counts and permissions,
 // against a real database. Self-cleaning (unique run tag); counts are asserted as deltas, so it is safe
-// to run against a database that already has users.
+// to run against a database that already has users. The user-count tests use throwaway roles, so users that
+// other test files create for the real roles (supervisor, driver...) can never change what they count.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
@@ -25,7 +26,7 @@ describe('Roles (e2e)', () => {
     const auth = (who: string) => ({ Authorization: `Bearer ${tokens[who]}` });
     const list = (qs = '', who = 'admin') => request(app.getHttpServer()).get(api(qs ? `?${qs}` : '')).set(auth(who));
     const names = (res: request.Response) => res.body.data.map((r: any) => r.name);
-    const counts = async (name: string) => (await list(`name=${name}`)).body.data[0] as { userCount: number; activeUserCount: number };
+    const counts = async (name: string) => (await list(NAMES.includes(name) ? `name=${name}` : `search=${name}`)).body.data[0] as { userCount: number; activeUserCount: number };
     const mkUser = (role: string, tag: string, opts: { active?: boolean; deleted?: boolean } = {}) => ds.query(
         `INSERT INTO users (role_id, full_name, username, password_hash, requires_pwd_change, active, deleted_at) VALUES ($1,$2,$3,$4,false,$5,$6) RETURNING user_id`,
         [roleId[role], `RL ${tag}`, `rl_${tag}_${run}`, 'x', opts.active ?? true, opts.deleted ? new Date() : null],
@@ -111,28 +112,41 @@ describe('Roles (e2e)', () => {
     });
 
     describe('user counts', () => {
-        it('count the users of each role, excluding deleted ones; active ones are counted apart', async () => {
-            const before = await counts('supervisor');
-            await mkUser('supervisor', 'c1');
-            await mkUser('supervisor', 'c2');
-            await mkUser('supervisor', 'c3', { active: false });
-            await mkUser('supervisor', 'c4', { deleted: true });
+        // Two throwaway roles: the counts only see the users this test creates for them.
+        const cntA = `rl_cnt_a_${run}`;
+        const cntB = `rl_cnt_b_${run}`;
 
-            const after = await counts('supervisor');
+        beforeAll(async () => {
+            for (const name of [cntA, cntB]) roleId[name] = (await ds.query(`INSERT INTO roles (name) VALUES ($1) RETURNING role_id`, [name]))[0].role_id;
+        });
+
+        afterAll(async () => {
+            await ds.query(`DELETE FROM users WHERE role_id = ANY($1)`, [[roleId[cntA], roleId[cntB]]]);
+            await ds.query(`DELETE FROM roles WHERE role_id = ANY($1)`, [[roleId[cntA], roleId[cntB]]]);
+        });
+
+        it('count the users of each role, excluding deleted ones; active ones are counted apart', async () => {
+            const before = await counts(cntA);
+            await mkUser(cntA, 'c1');
+            await mkUser(cntA, 'c2');
+            await mkUser(cntA, 'c3', { active: false });
+            await mkUser(cntA, 'c4', { deleted: true });
+
+            const after = await counts(cntA);
 
             expect(after.userCount - before.userCount).toBe(3);        // 2 active + 1 inactive; the deleted one is not counted
             expect(after.activeUserCount - before.activeUserCount).toBe(2);
         });
 
         it('other roles are not affected, and the same counts come from GET /roles/:id', async () => {
-            const driverBefore = await counts('driver');
-            await mkUser('supervisor', 'c5');
+            const otherRoleBefore = await counts(cntB);
+            await mkUser(cntA, 'c5');
 
-            expect(await counts('driver')).toEqual(driverBefore);
-            const one = (await request(app.getHttpServer()).get(api(`/${roleId.supervisor}`)).set(auth('admin'))).body;
-            const fromList = await counts('supervisor');
+            expect(await counts(cntB)).toEqual(otherRoleBefore);
+            const one = (await request(app.getHttpServer()).get(api(`/${roleId[cntA]}`)).set(auth('admin'))).body;
+            const fromList = await counts(cntA);
             expect([one.userCount, one.activeUserCount]).toEqual([fromList.userCount, fromList.activeUserCount]);
-            expect(one).toMatchObject({ id: roleId.supervisor, name: 'supervisor' });
+            expect(one).toMatchObject({ id: roleId[cntA], name: cntA });
         });
 
         it('a role nobody has is 0 / 0 (not missing)', async () => {
