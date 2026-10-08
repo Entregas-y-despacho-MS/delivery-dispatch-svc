@@ -1,6 +1,7 @@
 // ST-23.3 — DispatchesService: la consulta de "despachos activos" que protege el borrado de niveles
 // de servicio (RF-A31, Escenario 3). Todo mockeado: sin DB ni red.
 // ST-77.3 — updateLocation (RF-U11): el UPDATE condicional que solo escribe si el punto es más nuevo.
+// ST-28.4 — findDriverAssignments (RF-U02): las paradas del repartidor para un día, en orden de visita.
 import { describe, expect, it, vi } from 'vitest';
 import { DispatchesService } from './dispatches.service.js';
 import { DispatchNotFoundException } from '../exceptions/index.js';
@@ -21,6 +22,7 @@ function buildService() {
         exists:           vi.fn().mockResolvedValue(false),
         existsBy:         vi.fn().mockResolvedValue(true),
         update:           vi.fn(),
+        find:             vi.fn().mockResolvedValue([]),
         createQueryBuilder: vi.fn(() => makeQueryBuilder(1)),
     };
     const service = new DispatchesService(rawRepo as any);
@@ -126,5 +128,77 @@ describe('DispatchesService.updateLocation', () => {
 
         expect(txRepo.createQueryBuilder).toHaveBeenCalledTimes(1);
         expect(rawRepo.createQueryBuilder).not.toHaveBeenCalled();
+    });
+});
+
+// Una fila tal como la devuelve TypeORM: NUMERIC llega como string, las relaciones anidadas.
+function stopRow(overrides: Record<string, unknown> = {}) {
+    return {
+        id: 1, sequenceOrder: 1, sourceOrderRef: 'SO-1', priority: 'normal', deliveryAddress: 'Av. Arce 100',
+        deliveryLatitude: '-16.500000', deliveryLongitude: '-68.150000', contactName: 'Maria', contactPhone: '+59170000000',
+        paymentStatusLabel: 'Prepaid', packageContents: null, estimatedWeightKg: '12.50',
+        scheduledWindowStart: new Date('2026-10-14T14:00:00Z'), scheduledWindowEnd: new Date('2026-10-14T16:00:00Z'),
+        dispatchStatus: { id: 2, name: 'in_transit' }, serviceLevel: { id: 1, name: 'express' },
+        updatedAt: new Date('2026-10-14T10:00:00Z'),
+        ...overrides,
+    };
+}
+
+describe('DispatchesService.findDriverAssignments', () => {
+    it('filtra por la ruta de ESE repartidor en ESE día y ordena por parada, con las paradas sin número al final', async () => {
+        const { service, rawRepo } = buildService();
+
+        await service.findDriverAssignments(9, '2026-10-14');
+
+        expect(rawRepo.find).toHaveBeenCalledTimes(1);
+        const [{ where, order }] = rawRepo.find.mock.calls[0];
+        expect(where).toEqual({ routeBatch: { driverId: 9, shiftDate: '2026-10-14' } });
+        expect(order).toEqual({ sequenceOrder: { direction: 'ASC', nulls: 'LAST' }, id: 'ASC' });
+    });
+
+    it('un repartidor sin ruta recibe una lista vacía y lastModifiedAt nulo, no un error', async () => {
+        const { service } = buildService();
+
+        expect(await service.findDriverAssignments(9, '2026-10-14')).toEqual({ date: '2026-10-14', lastModifiedAt: null, data: [] });
+    });
+
+    it('devuelve coordenadas y peso como números (pg los entrega como string) y no filtra campos internos', async () => {
+        const { service, rawRepo } = buildService();
+        rawRepo.find.mockResolvedValue([stopRow({ trackingToken: 'secret', routeBatchId: 5 })]);
+
+        const { data } = await service.findDriverAssignments(9, '2026-10-14');
+
+        expect(data[0].deliveryLatitude).toBe(-16.5);
+        expect(data[0].deliveryLongitude).toBe(-68.15);
+        expect(data[0].estimatedWeightKg).toBe(12.5);
+        expect(data[0]).not.toHaveProperty('trackingToken');
+        expect(data[0]).not.toHaveProperty('routeBatchId');
+        expect(data[0].dispatchStatus).toEqual({ id: 2, name: 'in_transit' });
+    });
+
+    it('conserva null en coordenadas, peso y nivel de servicio ausentes', async () => {
+        const { service, rawRepo } = buildService();
+        rawRepo.find.mockResolvedValue([stopRow({ deliveryLatitude: null, deliveryLongitude: null, estimatedWeightKg: null, serviceLevel: null })]);
+
+        const { data } = await service.findDriverAssignments(9, '2026-10-14');
+
+        expect(data[0].deliveryLatitude).toBeNull();
+        expect(data[0].deliveryLongitude).toBeNull();
+        expect(data[0].estimatedWeightKg).toBeNull();
+        expect(data[0].serviceLevel).toBeNull();
+    });
+
+    it('lastModifiedAt es el updatedAt más reciente de las paradas, sin importar su posición en la lista', async () => {
+        const { service, rawRepo } = buildService();
+        rawRepo.find.mockResolvedValue([
+            stopRow({ id: 1, sequenceOrder: 1, updatedAt: new Date('2026-10-14T10:00:00Z') }),
+            stopRow({ id: 2, sequenceOrder: 2, updatedAt: new Date('2026-10-14T12:30:00Z') }),
+            stopRow({ id: 3, sequenceOrder: 3, updatedAt: new Date('2026-10-14T11:00:00Z') }),
+        ]);
+
+        const result = await service.findDriverAssignments(9, '2026-10-14');
+
+        expect(result.lastModifiedAt).toEqual(new Date('2026-10-14T12:30:00Z'));
+        expect(result.data.map((stop) => stop.id)).toEqual([1, 2, 3]);
     });
 });
