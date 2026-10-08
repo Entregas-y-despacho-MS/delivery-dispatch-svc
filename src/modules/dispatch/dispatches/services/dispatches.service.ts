@@ -4,6 +4,9 @@ import { In, Repository } from 'typeorm';
 import { Dispatch } from '../entities/dispatch.entity.js';
 import { DispatchStatus } from '../../dispatch-statuses/entities/dispatch-status.entity.js';
 import { DispatchNotFoundException } from '../exceptions/index.js';
+import { DriverAssignmentDto } from '../dto/driver-assignment.dto.js';
+import { DriverAssignmentsResponseDto } from '../dto/driver-assignments-response.dto.js';
+import { DtoRepository } from '../../../../shared/orm/index.js';
 import { MutationOptions } from '../../../../shared/dto/options.dto.js';
 import { DispatchStatusEnum } from '../../../../shared/enums/index.js';
 
@@ -19,10 +22,30 @@ const ACTIVE_STATUSES = [DispatchStatusEnum.PENDING, DispatchStatusEnum.IN_TRANS
 // transactions across modules) lives in app/sync, not here.
 @Injectable()
 export class DispatchesService {
+    private readonly repo: DtoRepository<Dispatch>;
+
     constructor(
         @InjectRepository(Dispatch)
         private readonly rawRepo: Repository<Dispatch>,
-    ) {}
+    ) {
+        this.repo = new DtoRepository(rawRepo);
+    }
+
+    /**
+     * The driver's stops for a shift date (RF-U02): every dispatch of the route batch assigned to
+     * them that day, in visit order (stops without a number go last). Closed stops are included —
+     * the app shows the day's progress. A driver without a route gets an empty list, never an error.
+     * `lastModifiedAt` is the newest `updatedAt` among the stops, so the app can tell the route changed.
+     */
+    async findDriverAssignments(driverId: number, shiftDate: string): Promise<DriverAssignmentsResponseDto> {
+        const data = await this.repo.find<DriverAssignmentDto>({
+            dto: DriverAssignmentDto,
+            where: { routeBatch: { driverId, shiftDate } },
+            order: { sequenceOrder: { direction: 'ASC', nulls: 'LAST' }, id: 'ASC' },
+        });
+        const lastModifiedAt = data.reduce<Date | null>((latest, stop) => (latest === null || stop.updatedAt > latest ? stop.updatedAt : latest), null);
+        return { date: shiftDate, lastModifiedAt, data };
+    }
 
     async existsById(id: number, options?: MutationOptions): Promise<boolean> {
         const repo = options?.manager?.getRepository(Dispatch) ?? this.rawRepo;

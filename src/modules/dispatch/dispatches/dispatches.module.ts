@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Dispatch } from './entities/dispatch.entity.js';
 import { DispatchesService } from './services/dispatches.service.js';
+import { DispatchesController } from './controllers/dispatches.controller.js';
 import { DispatchType } from '../dispatch-types/entities/dispatch-type.entity.js';
 import { DispatchStatus } from '../dispatch-statuses/entities/dispatch-status.entity.js';
 import { ServiceLevel } from '../../catalog/service-levels/entities/service-level.entity.js';
@@ -19,6 +20,7 @@ import { VehicleStatus } from '../../fleet/vehicle-statuses/entities/vehicle-sta
     imports: [
         TypeOrmModule.forFeature([Dispatch, DispatchType, DispatchStatus, ServiceLevel, RouteBatch, Vehicle, VehicleStatus]),
     ],
+    controllers: [DispatchesController],
     providers: [DispatchesService],
     exports:   [DispatchesService],
 })
