@@ -80,7 +80,7 @@ export class AuthService {
         const { accessToken, refreshToken } = await this.buildTokens(payload);
 
         const userDto = await this.usersService.findOneById(UserDto, user.id);
-        return { accessToken, refreshToken, user: userDto, mustChangePassword: this.computeMustChangePassword(user) };
+        return { accessToken, refreshToken, user: userDto, mustChangePassword: await this.computeMustChangePassword(user) };
     }
 
     // Admin-only (see AuthController) — creates an internal account. No tokens are returned:
@@ -105,7 +105,7 @@ export class AuthService {
         // No DB read needed — a refresh token's own `iat` is effectively "last activity", since
         // tokens rotate on every use.
         if (payload.role !== RoleEnum.DRIVER) {
-            const inactivityMinutes = this.settings.getNumber('session_inactivity_minutes', 30);
+            const inactivityMinutes = await this.settings.getNumber('session_inactivity_minutes', 30);
             const idleMs = Date.now() - payload.iat! * 1000;
             if (idleMs > inactivityMinutes * 60_000) {
                 await this.usersService.setRefreshToken(payload.sub, null);
@@ -134,7 +134,7 @@ export class AuthService {
         const { accessToken, refreshToken } = await this.buildTokens(newPayload);
 
         const userDto = await this.usersService.findOneById(UserDto, user.id);
-        return { accessToken, refreshToken, user: userDto, mustChangePassword: this.computeMustChangePassword(user) };
+        return { accessToken, refreshToken, user: userDto, mustChangePassword: await this.computeMustChangePassword(user) };
     }
 
     async logout(userId: number): Promise<void> {
@@ -157,7 +157,7 @@ export class AuthService {
         const user = await this.usersService.findOneByEmail(UserForAuthDto, dto.email, { throwException: false });
         if (!user || !user.active) return;
 
-        const expiryMinutes = this.settings.getNumber('password_reset_expiry_minutes', 30);
+        const expiryMinutes = await this.settings.getNumber('password_reset_expiry_minutes', 30);
         const token     = randomBytes(32).toString('hex');
         const expiresAt = new Date(Date.now() + expiryMinutes * 60_000);
         await this.usersService.setPasswordResetToken(user.id, token, expiresAt);
@@ -187,15 +187,17 @@ export class AuthService {
     // RF-A25, Escenario 2 — true if an admin flagged the account (requiresPwdChange) OR the
     // password is older than settings.password_expiration_days. Doesn't block the login itself,
     // just signals the client to redirect to a forced change screen.
-    private computeMustChangePassword(user: UserForAuthDto): boolean {
-        return isPasswordChangeRequired(user, this.settings.getNumber('password_expiration_days', 90));
+    private async computeMustChangePassword(user: UserForAuthDto): Promise<boolean> {
+        return isPasswordChangeRequired(user, await this.settings.getNumber('password_expiration_days', 90));
     }
 
     // The counter is incremented inside the database (one atomic UPDATE), not read-modified-written
     // here: parallel wrong passwords used to overwrite each other and never reached the limit.
     private async registerFailedAttempt(user: UserForAuthDto): Promise<void> {
-        const maxAttempts    = this.settings.getNumber('max_failed_login_attempts', 5);
-        const lockoutMinutes = this.settings.getNumber('account_lockout_minutes', 15);
+        const [maxAttempts, lockoutMinutes] = await Promise.all([
+            this.settings.getNumber('max_failed_login_attempts', 5),
+            this.settings.getNumber('account_lockout_minutes', 15),
+        ]);
 
         await this.usersService.registerFailedLogin(user.id, maxAttempts, lockoutMinutes * 60_000);
     }
