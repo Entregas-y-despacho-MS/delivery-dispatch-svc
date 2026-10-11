@@ -254,7 +254,7 @@ describe('Security hardening (e2e)', () => {
 
     // ── settings ───────────────────────────────────────────────────────────────
     describe('settings values are validated', () => {
-        const put = (key: string, value: string) => http().put(api(`/settings/${key}`)).set(auth('admin')).send({ value });
+        const put = (key: string, value: string) => http().put(api(`/settings/${key}`)).set(auth('coordinator')).send({ value });
 
         it.each([
             ['max_failed_login_attempts', 'abc'], ['max_failed_login_attempts', '0'], ['session_inactivity_minutes', '-5'],
@@ -322,7 +322,7 @@ describe('Security hardening (e2e)', () => {
                 ['post', 'vehicles', 'supervisor', { type: 't', model: 'm', plate: `HD${run}\u0000`, capacityKg: 1, capacityM3: 1 }],
                 ['put', 'vehicles/1', 'supervisor', { vehicleStatusId: big }],
                 ['post', 'service-levels', 'coordinator', { name: `hd${run}\u0000`, targetTimeMin: 20, priorityLevel: 1 }],
-                ['put', 'settings/max_wait_time_min', 'admin', { value: 'a\u0000b' }],
+                ['put', 'settings/max_wait_time_min', 'coordinator', { value: 'a\u0000b' }],
             ];
             for (const [method, path, who, body] of cases) {
                 const res = await (http() as any)[method](api(`/${path}`)).set(auth(who)).send(body);
@@ -336,7 +336,7 @@ describe('Security hardening (e2e)', () => {
         });
 
         it('a NUL character in the URL path is also a 400', async () => {
-            expect((await http().put(api('/settings/max%00wait')).set(auth('admin')).send({ value: '1' })).status).toBe(400);
+            expect((await http().put(api('/settings/max%00wait')).set(auth('coordinator')).send({ value: '1' })).status).toBe(400);
         });
     });
 

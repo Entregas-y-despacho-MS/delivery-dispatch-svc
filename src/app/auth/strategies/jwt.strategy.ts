@@ -65,7 +65,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
             username: user.username,
             roleId:   user.roleId,
             role:     user.role,
-            mustChangePassword: isPasswordChangeRequired(user, this.settings.getNumber('password_expiration_days', 90)),
+            mustChangePassword: isPasswordChangeRequired(user, await this.settings.getNumber('password_expiration_days', 90)),
         };
     }
 }

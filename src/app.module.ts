@@ -27,6 +27,7 @@ import { PushModule } from './plugins/push/push.module.js';
 import { OsrmModule } from './plugins/osrm/osrm.module.js';
 import { PendingOrdersModule } from './modules/dispatch/pending-orders/pending-orders.module.js';
 import { DispatchReservationsModule } from './modules/dispatch/dispatch-reservations/dispatch-reservations.module.js';
+import { CacheModule } from './plugins/cache/cache.module.js';
 
 @Module({
     imports: [
@@ -35,6 +36,7 @@ import { DispatchReservationsModule } from './modules/dispatch/dispatch-reservat
         // business modules that react to a connection (e.g. app/tracking's 'dispatch-board' room).
         EventEmitterModule.forRoot(),
         AppConfigModule,
+        CacheModule.register(),
         HealthModule,
         DatabaseModule,
         SettingsModule,

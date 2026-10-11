@@ -161,7 +161,7 @@ export class UsersService {
      * Escenario 2) plus requiresPwdChange/lockout/reset state.
      */
     async updatePassword(userId: number, plainPassword: string): Promise<void> {
-        this.validatePasswordPolicy(plainPassword);
+        await this.validatePasswordPolicy(plainPassword);
 
         const current = await this.rawRepo.findOneByOrFail({ id: userId });
         await this.assertPasswordNotReused(current, plainPassword);
@@ -253,7 +253,7 @@ export class UsersService {
         const repo = options?.manager?.getRepository(User) ?? this.rawRepo;
 
         if (await this.existsByUsernameOrEmail(dto.username, dto.email)) throw new UserAlreadyExistsException();
-        this.validatePasswordPolicy(dto.password);
+        await this.validatePasswordPolicy(dto.password);
         await this.assertRoleExists(dto.roleId, options);
 
         const user        = repo.create();
@@ -289,7 +289,7 @@ export class UsersService {
             }
         }
 
-        if (dto.password !== undefined) this.validatePasswordPolicy(dto.password);
+        if (dto.password !== undefined) await this.validatePasswordPolicy(dto.password);
 
         const payload: Record<string, any> = {};
         if (dto.fullName !== undefined) payload.fullName     = dto.fullName;
@@ -368,8 +368,8 @@ export class UsersService {
     }
 
     /** Backed by settings.password_min_length — every code path that sets a password goes through here. */
-    private validatePasswordPolicy(plainPassword: string): void {
-        const minLength = this.settings.getNumber('password_min_length', 6);
+    private async validatePasswordPolicy(plainPassword: string): Promise<void> {
+        const minLength = await this.settings.getNumber('password_min_length', 6);
         if (plainPassword.length < minLength) throw new PasswordTooShortException(minLength);
     }
 

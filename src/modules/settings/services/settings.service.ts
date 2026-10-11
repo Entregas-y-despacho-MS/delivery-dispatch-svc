@@ -2,40 +2,34 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Setting } from '../entities/setting.entity.js';
-import { DtoRepository } from '../../../shared/orm/index.js';
-import { SettingNotFoundException, InvalidSettingValueException } from '../exceptions/index.js';
-import { validateSettingValue } from '../utils/setting-value.validator.js';
+import { InvalidSettingValueException, SettingNotFoundException, SettingsVersionException } from '../exceptions/index.js';
+import { validateSettingConfiguration, validateSettingValue } from '../utils/setting-value.validator.js';
+import { CacheService } from '../../../plugins/cache/cache.port.js';
+import { CacheUnavailableException } from '../../../plugins/cache/exceptions/index.js';
+import { SETTINGS_CACHE_KEY, SETTINGS_VERSION_KEY } from '../settings.constants.js';
 
-// Refreshes the in-memory cache periodically as a safety net for changes made directly in the
-// DB (outside update()) — update() itself refreshes its own key immediately, no need to wait.
-// 60s, not longer: the query is `SELECT * FROM settings` over ~a dozen rows (microseconds), so a
-// short interval costs nothing and keeps that safety-net window tight. See decisions.md,
-// 2026-09-19, for why this is a poll-and-replace cache rather than lazy per-key fetch.
+type SettingsSnapshot = {
+    version: number;
+    settings: Setting[];
+};
+
 const CACHE_REFRESH_MS = 60_000;
 
-/**
- * Business-tunable config, backed by the `settings` table (key/value) — not env vars. Read
- * constantly (e.g. every login), so values are cached in memory instead of hitting the DB on
- * every read. See .claude/rules/settings.md.
- */
 @Injectable()
 export class SettingsService implements OnModuleInit, OnModuleDestroy {
     private readonly logger = new Logger(SettingsService.name);
-    private readonly repo: DtoRepository<Setting>;
-    private cache = new Map<string, string>();
     private refreshTimer?: NodeJS.Timeout;
 
     constructor(
         @InjectRepository(Setting)
         private readonly rawRepo: Repository<Setting>,
+        private readonly cache: CacheService,
     ) {
-        this.repo = new DtoRepository(rawRepo);
     }
 
     async onModuleInit(): Promise<void> {
         await this.refresh();
         this.refreshTimer = setInterval(() => void this.refresh(), CACHE_REFRESH_MS);
-        // Don't hold the process open just for this timer.
         this.refreshTimer.unref?.();
     }
 
@@ -44,43 +38,154 @@ export class SettingsService implements OnModuleInit, OnModuleDestroy {
     }
 
     async refresh(): Promise<void> {
-        const rows = await this.rawRepo.find();
-        this.cache = new Map(rows.map((row) => [row.key, row.value]));
+        const settings = await this.rawRepo.find({ order: { key: 'ASC' } });
+        await this.cacheSnapshot(settings);
     }
 
-    getString(key: string, fallback: string): string {
-        const value = this.cache.get(key);
-        if (value === undefined) {
-            this.logger.warn(`Setting "${key}" not found in cache, using fallback "${fallback}".`);
+    async getString(key: string, fallback: string): Promise<string> {
+        const setting = await this.readSetting(key);
+        if (setting === null) {
+            this.logger.warn(`Setting "${key}" not found, using fallback "${fallback}".`);
             return fallback;
         }
-        return value;
+        return setting;
     }
 
-    getNumber(key: string, fallback: number): number {
-        const value = this.cache.get(key);
-        const parsed = value !== undefined ? Number(value) : NaN;
-        if (Number.isNaN(parsed)) {
+    async getNumber(key: string, fallback: number): Promise<number> {
+        const value = await this.readSetting(key);
+        const parsed = value !== null && value.trim() !== '' ? Number(value) : NaN;
+        if (!Number.isFinite(parsed)) {
             this.logger.warn(`Setting "${key}" is missing or not a number, using fallback ${fallback}.`);
             return fallback;
         }
         return parsed;
     }
 
-    async findAll<T>(dto: new () => T): Promise<T[]> {
-        return this.repo.find({ dto, order: { key: 'ASC' } });
+    async getVersion(): Promise<number> {
+        const snapshot = await this.readSnapshot();
+        if (snapshot) return snapshot.version;
+
+        const setting = await this.rawRepo.findOneBy({ key: SETTINGS_VERSION_KEY });
+        if (!setting) return 0;
+        if (!/^\d+$/.test(setting.value)) throw new SettingsVersionException();
+        const version = Number(setting.value);
+        if (!Number.isSafeInteger(version)) throw new SettingsVersionException();
+        return version;
     }
 
-    async update<T>(returnDto: new () => T, key: string, value: string): Promise<T> {
-        const problem = validateSettingValue(key, value);
-        if (problem) throw new InvalidSettingValueException(problem);
+    async findAll<T extends object>(dto: new () => T): Promise<T[]> {
+        const snapshot = await this.readSnapshot();
+        const settings = snapshot?.settings ?? await this.loadSettings();
+        return this.toDtos(dto, settings.filter(({ key }) => key !== SETTINGS_VERSION_KEY));
+    }
 
-        const result = await this.rawRepo.update(key, { value });
-        if (result.affected === 0) throw new SettingNotFoundException();
+    async update<T extends object>(returnDto: new () => T, key: string, value: string): Promise<T> {
+        if (key === SETTINGS_VERSION_KEY) {
+            throw new InvalidSettingValueException(`${SETTINGS_VERSION_KEY} is managed by the service and cannot be changed.`);
+        }
 
-        this.cache.set(key, value);
+        const result = await this.rawRepo.manager.transaction(async (manager) => {
+            const repository = manager.getRepository(Setting);
+            const settings = await repository.find({
+                order: { key: 'ASC' },
+                lock:  { mode: 'pessimistic_write' },
+            });
+            const current = settings.find((setting) => setting.key === key);
+            if (!current) throw new SettingNotFoundException();
 
-        const updated = await new DtoRepository(this.rawRepo).findOne({ dto: returnDto, where: { key } });
-        return updated!;
+            const valueProblem = validateSettingValue(key, value);
+            if (valueProblem) throw new InvalidSettingValueException(valueProblem);
+
+            const values = Object.fromEntries(settings
+                .filter((setting) => setting.key !== SETTINGS_VERSION_KEY)
+                .map((setting) => [setting.key, setting.value]));
+            values[key] = value;
+            const configurationProblem = validateSettingConfiguration(values);
+            if (configurationProblem) throw new InvalidSettingValueException(configurationProblem);
+
+            const versionSetting = settings.find((setting) => setting.key === SETTINGS_VERSION_KEY);
+            if (versionSetting && !/^\d+$/.test(versionSetting.value)) throw new SettingsVersionException();
+
+            await repository.update(key, { value });
+            const version = Number(versionSetting?.value ?? '0') + 1;
+            if (!Number.isSafeInteger(version)) throw new SettingsVersionException();
+            if (!versionSetting) {
+                await repository.insert({
+                    key:         SETTINGS_VERSION_KEY,
+                    value:       String(version),
+                    description: 'Internal monotonically increasing version for operational settings.',
+                });
+            }
+            await repository.update(SETTINGS_VERSION_KEY, { value: String(version) });
+
+            return {
+                version,
+                settings: await repository.find({ order: { key: 'ASC' } }),
+            };
+        });
+
+        await this.cacheSnapshot(result.settings, result.version);
+        const updated = result.settings.find((setting) => setting.key === key)!;
+        return this.toDto(returnDto, updated);
+    }
+
+    private async readSetting(key: string): Promise<string | null> {
+        const snapshot = await this.readSnapshot();
+        const cachedSetting = snapshot?.settings.find((setting) => setting.key === key);
+        if (cachedSetting) return cachedSetting.value;
+
+        const setting = await this.rawRepo.findOneBy({ key });
+        if (!setting) return null;
+        await this.refreshAfterCacheMiss();
+        return setting.value;
+    }
+
+    private async readSnapshot(): Promise<SettingsSnapshot | null> {
+        try {
+            const cached = await this.cache.get(SETTINGS_CACHE_KEY);
+            if (!cached) return null;
+            const parsed = JSON.parse(cached) as SettingsSnapshot;
+            if (!Number.isSafeInteger(parsed.version) || !Array.isArray(parsed.settings)) return null;
+            return {
+                version: parsed.version,
+                settings: parsed.settings.map((setting) => ({
+                    ...setting,
+                    updatedAt: new Date(setting.updatedAt),
+                })),
+            };
+        } catch (error) {
+            if (!(error instanceof CacheUnavailableException)) this.logger.warn('The settings cache is invalid; loading from PostgreSQL.');
+            return null;
+        }
+    }
+
+    private async loadSettings(): Promise<Setting[]> {
+        const settings = await this.rawRepo.find({ order: { key: 'ASC' } });
+        await this.cacheSnapshot(settings);
+        return settings;
+    }
+
+    private async refreshAfterCacheMiss(): Promise<void> {
+        const settings = await this.rawRepo.find({ order: { key: 'ASC' } });
+        await this.cacheSnapshot(settings);
+    }
+
+    private async cacheSnapshot(settings: Setting[], knownVersion?: number): Promise<void> {
+        const versionSetting = settings.find(({ key }) => key === SETTINGS_VERSION_KEY);
+        const version = knownVersion ?? (versionSetting ? (/^\d+$/.test(versionSetting.value) ? Number(versionSetting.value) : null) : 0);
+        if (version === null) return;
+        try {
+            await this.cache.setIfNewer(SETTINGS_CACHE_KEY, version, JSON.stringify({ version, settings } satisfies SettingsSnapshot));
+        } catch (error) {
+            if (!(error instanceof CacheUnavailableException)) this.logger.warn('Could not update the settings cache.');
+        }
+    }
+
+    private toDtos<T extends object>(dto: new () => T, settings: Setting[]): T[] {
+        return settings.map((setting) => this.toDto(dto, setting));
+    }
+
+    private toDto<T extends object>(dto: new () => T, setting: Setting): T {
+        return Object.assign(new dto(), setting);
     }
 }

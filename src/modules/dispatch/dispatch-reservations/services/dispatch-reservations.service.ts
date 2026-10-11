@@ -21,14 +21,14 @@ export class DispatchReservationsService {
         private readonly settings: SettingsService,
     ) {}
 
-    private ttlMinutes(): number {
-        const ttl = Math.trunc(this.settings.getNumber(RESERVATION_TTL_SETTING, DEFAULT_TTL_MINUTES));
+    private async ttlMinutes(): Promise<number> {
+        const ttl = Math.trunc(await this.settings.getNumber(RESERVATION_TTL_SETTING, DEFAULT_TTL_MINUTES));
         return ttl >= 1 ? ttl : DEFAULT_TTL_MINUTES;
     }
 
     /** All-or-nothing: if any order cannot be reserved, none is. Re-reserving your own orders renews them. */
     async reserve(userId: number, dispatchIds: number[]): Promise<{ reserved: number; expiresAt: Date }> {
-        const ttl = this.ttlMinutes();
+        const ttl = await this.ttlMinutes();
         return this.dataSource.transaction(async (manager) => {
             const eligible: { id: number }[] = await manager.query(
                 `SELECT d.dispatch_id AS id
@@ -73,7 +73,7 @@ export class DispatchReservationsService {
                 SET last_activity_at = NOW(), expires_at = NOW() + make_interval(mins => $2::int)
               WHERE reserved_by = $1 AND expires_at > NOW()
           RETURNING expires_at`,
-            [userId, this.ttlMinutes()],
+            [userId, await this.ttlMinutes()],
         );
         return { renewed: rows.length, expiresAt: rows.length ? new Date(rows[0].expires_at) : null };
     }

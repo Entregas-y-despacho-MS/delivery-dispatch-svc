@@ -1,7 +1,8 @@
 /// <reference types="multer" />
-import { BadRequestException, Body, Controller, Post, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Post, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiBearerAuth, ApiBody, ApiConsumes, ApiCreatedResponse, ApiExtraModels, ApiOperation, ApiTags, getSchemaPath } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiBody, ApiConsumes, ApiCreatedResponse, ApiExtraModels, ApiOperation, ApiResponse, ApiTags, getSchemaPath } from '@nestjs/swagger';
+import type { Response } from 'express';
 import { SyncService } from '../services/sync.service.js';
 import { SyncEventsBatchDto } from '../dto/sync-events-batch.dto.js';
 import { SyncEventsBatchResultDto, SyncEventResultDto } from '../dto/sync-event-result.dto.js';
@@ -9,6 +10,8 @@ import { SyncEvidenceDto } from '../dto/sync-evidence.dto.js';
 import { DriverOnly } from '../../auth/decorators/index.js';
 import { CurrentUser } from '../../../shared/decorators/current-user.decorator.js';
 import { ApiUnauthorized, ApiBadRequests } from '../../../shared/utils/swagger/index.js';
+import { SettingsService } from '../../../modules/settings/services/settings.service.js';
+import { SETTINGS_VERSION_HEADER } from '../../../modules/settings/settings.constants.js';
 
 /**
  * RF-U13 — sincronización offline de la app móvil del repartidor. Cada evento trae su propio
@@ -26,7 +29,10 @@ const ALLOWED_EVIDENCE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 
 @ApiBearerAuth('access-token')
 @Controller('sync')
 export class SyncController {
-    constructor(private readonly syncService: SyncService) {}
+    constructor(
+        private readonly syncService: SyncService,
+        private readonly settingsService: SettingsService,
+    ) {}
 
     @Post('events')
     @DriverOnly()
@@ -52,6 +58,7 @@ export class SyncController {
     @ApiExtraModels(SyncEventsBatchResultDto)
     @ApiCreatedResponse({
         description: 'The batch was processed. Read each result: 201 does not mean every event was saved.',
+        headers: { [SETTINGS_VERSION_HEADER]: { description: 'Current operational settings version. Reload settings when this value changes.', schema: { type: 'integer' } } },
         content: { 'application/json': { schema: { $ref: getSchemaPath(SyncEventsBatchResultDto) }, examples: {
             mixed: {
                 summary: 'One event saved, one was already saved before, one failed',
@@ -64,8 +71,14 @@ export class SyncController {
         } } },
     })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
-    async syncEvents(@Body() dto: SyncEventsBatchDto, @CurrentUser('id') driverId: number): Promise<SyncEventsBatchResultDto> {
-        return await this.syncService.processBatch(dto.events, driverId);
+    async syncEvents(
+        @Body() dto: SyncEventsBatchDto,
+        @CurrentUser('id') driverId: number,
+        @Res({ passthrough: true }) response: Response,
+    ): Promise<SyncEventsBatchResultDto> {
+        const result = await this.syncService.processBatch(dto.events, driverId);
+        response.setHeader(SETTINGS_VERSION_HEADER, String(await this.settingsService.getVersion()));
+        return result;
     }
 
     @Post('evidences')
@@ -99,9 +112,24 @@ export class SyncController {
         },
     })
     @ApiBadRequests({ validation: true, example: ['clientEventId must be a UUID'] })
+    @ApiResponse({
+        status: 413,
+        description: 'The uploaded evidence file exceeds the 10 MB limit.',
+        schema: {
+            type: 'object',
+            properties: {
+                statusCode: { type: 'integer', example: 413 },
+                error:      { type: 'string', example: 'HTTP_ERROR' },
+                message:    { type: 'string', example: 'File too large' },
+                path:       { type: 'string', example: '/api/sync/evidences' },
+                timestamp:  { type: 'string', format: 'date-time', example: '2026-10-11T00:00:00.000Z' },
+            },
+        },
+    })
     @ApiExtraModels(SyncEventResultDto)
     @ApiCreatedResponse({
         description: 'Read `outcome`: 201 does not mean the evidence was saved.',
+        headers: { [SETTINGS_VERSION_HEADER]: { description: 'Current operational settings version. Reload settings when this value changes.', schema: { type: 'integer' } } },
         content: { 'application/json': { schema: { $ref: getSchemaPath(SyncEventResultDto) }, examples: {
             applied:           { summary: 'Saved now', value: { clientEventId: '01933b6e-7f2a-7c3d-9a1b-2f8e6c4d5a10', outcome: 'applied' } },
             already_processed: { summary: 'Saved by an earlier attempt, nothing changed', value: { clientEventId: '01933b6e-7f2a-7c3d-9a1b-2f8e6c4d5a10', outcome: 'already_processed' } },
@@ -112,8 +140,11 @@ export class SyncController {
     async syncEvidence(
         @Body() dto: SyncEvidenceDto,
         @CurrentUser('id') driverId: number,
+        @Res({ passthrough: true }) response: Response,
         @UploadedFile() file?: Express.Multer.File,
     ): Promise<SyncEventResultDto> {
-        return await this.syncService.syncEvidence(dto, file, driverId);
+        const result = await this.syncService.syncEvidence(dto, file, driverId);
+        response.setHeader(SETTINGS_VERSION_HEADER, String(await this.settingsService.getVersion()));
+        return result;
     }
 }

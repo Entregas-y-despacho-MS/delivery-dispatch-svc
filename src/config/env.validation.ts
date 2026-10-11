@@ -18,6 +18,10 @@ export const envValidation = Joi.object({
     DB_NAME:     Joi.string().required(),
     DB_LOGS:     Joi.boolean().default(false),
 
+    CACHE_ADAPTER: Joi.string().valid('redis', 'memory').default('redis'),
+    REDIS_HOST:    Joi.string().default('localhost'),
+    REDIS_PORT:    Joi.number().port().default(6379),
+
     // -- Auth (JWT) -----------------------------------------------------------
     ACTIVE_JWT:              Joi.boolean().default(true),
     JWT_SECRET:              Joi.string().required(),
