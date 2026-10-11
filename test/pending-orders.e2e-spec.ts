@@ -184,15 +184,16 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
 
     // ── Qué entra a la bandeja ─────────────────────────────────────────────────
     describe('estados incluidos y excluidos', () => {
-        it('incluye pending y rescheduled de hoy; excluye cualquier otro estado y los reprogramados para otro día', async () => {
+        it('incluye pending, in_planning propuesto y rescheduled de hoy; excluye cualquier otro estado y los reprogramados para otro día', async () => {
             const pending = await insert({ status: 'pending' });
             const pendingNoWindow = await insert({ status: 'pending', days: null });
+            const proposed = await insert({ status: 'in_planning' });
             const rescheduledToday = await insert({ status: 'rescheduled', days: 0 });
             const rescheduledTomorrow = await insert({ status: 'rescheduled', days: 1 });
             const rescheduledYesterday = await insert({ status: 'rescheduled', days: -1 });
             const rescheduledNoDate = await insert({ status: 'rescheduled', days: null });
             const others: number[] = [];
-            for (const status of ['address_review', 'in_planning', 'scheduled', 'assigned', 'out_for_delivery', 'in_transit',
+            for (const status of ['address_review', 'scheduled', 'assigned', 'out_for_delivery', 'in_transit',
                 'delivered', 'not_delivered', 'incident', 'returned', 'pickup_scheduled']) {
                 others.push(await insert({ status }));
             }
@@ -200,7 +201,7 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
             const res = await mine('limit=100');
             expect(res.status).toBe(200);
             const got = ids(res);
-            expect(got).toEqual(expect.arrayContaining([pending, pendingNoWindow, rescheduledToday]));
+            expect(got).toEqual(expect.arrayContaining([pending, pendingNoWindow, proposed, rescheduledToday]));
             for (const excluded of [rescheduledTomorrow, rescheduledYesterday, rescheduledNoDate, ...others]) {
                 expect(got, `dispatch ${excluded}`).not.toContain(excluded);
             }
