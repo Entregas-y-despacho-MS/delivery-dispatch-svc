@@ -10,7 +10,7 @@ import { User } from '../src/modules/auth/users/entities/user.entity.js';
 import { Role } from '../src/modules/auth/roles/entities/role.entity.js';
 import { Setting } from '../src/modules/settings/entities/setting.entity.js';
 import { SettingsService } from '../src/modules/settings/services/settings.service.js';
-import { OPERATIONAL_SETTING_SEEDS, SETTINGS_CACHE_KEY, SETTINGS_VERSION_HEADER, SETTINGS_VERSION_KEY } from '../src/modules/settings/settings.constants.js';
+import { SETTINGS_CACHE_KEY, SETTINGS_VERSION_HEADER, SETTINGS_VERSION_KEY } from '../src/modules/settings/settings.constants.js';
 import { CacheService } from '../src/plugins/cache/cache.port.js';
 import { hashPassword } from '../src/shared/utils/crypto.util.js';
 
@@ -54,7 +54,20 @@ describe('Operational settings (e2e)', () => {
             if (existing) initialSettingValues.set(key, existing.value);
         }
         const fixtureSettings = [
-            ...OPERATIONAL_SETTING_SEEDS,
+            { key: 'plan_generation_times', value: '08:30,13:30', description: null },
+            { key: 'plan_horizon_days', value: '4', description: null },
+            { key: 'plan_non_working_dates', value: '', description: null },
+            { key: 'service_min_operating_days', value: '2', description: null },
+            { key: 'service_max_operating_days', value: '3', description: null },
+            { key: 'morning_window_start', value: '09:00', description: null },
+            { key: 'morning_window_end', value: '13:00', description: null },
+            { key: 'afternoon_window_start', value: '14:00', description: null },
+            { key: 'afternoon_window_end', value: '18:00', description: null },
+            { key: 'route_cutoff_time', value: '15:00', description: null },
+            { key: 'final_review_end_time', value: '16:00', description: null },
+            { key: 'route_reminder_time', value: '16:30', description: null },
+            { key: 'final_review_escalation_time', value: '07:00', description: null },
+            { key: 'warehouse_prep_end_time', value: '08:15', description: null },
             { key: SETTINGS_VERSION_KEY, value: '0', description: 'Internal monotonically increasing version for operational settings.' },
         ];
         for (const setting of fixtureSettings) {

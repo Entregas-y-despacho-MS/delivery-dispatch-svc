@@ -4,10 +4,23 @@ import { SettingsService } from './settings.service.js';
 import { SettingDto } from '../dto/setting.dto.js';
 import { Setting } from '../entities/setting.entity.js';
 import { InvalidSettingValueException, SettingNotFoundException } from '../exceptions/index.js';
-import { OPERATIONAL_SETTING_SEEDS, SETTINGS_VERSION_KEY } from '../settings.constants.js';
+import { SETTINGS_VERSION_KEY } from '../settings.constants.js';
 import { MemoryCacheAdapter } from '../../../plugins/cache/memory/memory-cache.adapter.js';
 
 function build() {
+    const operationalSettings = {
+        route_cutoff_time: '15:00',
+        final_review_end_time: '16:00',
+        route_reminder_time: '16:30',
+        service_min_operating_days: '2',
+        service_max_operating_days: '3',
+        morning_window_start: '09:00',
+        morning_window_end: '13:00',
+        afternoon_window_start: '14:00',
+        afternoon_window_end: '18:00',
+        final_review_escalation_time: '07:00',
+        warehouse_prep_end_time: '08:15',
+    };
     const settings = new Map<string, Setting>([
         ['delivery_window_start', { key: 'delivery_window_start', value: '08:00', description: null, updatedAt: new Date() }],
         ['delivery_window_end', { key: 'delivery_window_end', value: '20:00', description: null, updatedAt: new Date() }],
@@ -22,7 +35,7 @@ function build() {
         ['password_reset_expiry_minutes', { key: 'password_reset_expiry_minutes', value: '30', description: null, updatedAt: new Date() }],
         ['session_inactivity_minutes', { key: 'session_inactivity_minutes', value: '30', description: null, updatedAt: new Date() }],
         ['order_reservation_ttl_minutes', { key: 'order_reservation_ttl_minutes', value: '15', description: null, updatedAt: new Date() }],
-        ...OPERATIONAL_SETTING_SEEDS.map((setting) => [setting.key, { ...setting, updatedAt: new Date() }] as const),
+        ...Object.entries(operationalSettings).map(([key, value]) => [key, { key, value, description: null, updatedAt: new Date() }] as const),
         [SETTINGS_VERSION_KEY, { key: SETTINGS_VERSION_KEY, value: '0', description: 'version', updatedAt: new Date() }],
     ]);
     let repositoryReference: Repository<Setting>;

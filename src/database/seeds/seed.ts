@@ -4,8 +4,6 @@ import 'dotenv/config';
 import { AppDataSource } from '../config/data-source.js';
 import { User } from '../../modules/auth/users/entities/user.entity.js';
 import { Role } from '../../modules/auth/roles/entities/role.entity.js';
-import { Setting } from '../../modules/settings/entities/setting.entity.js';
-import { seedOperationalSettings } from './settings.seed.js';
 import { hashPassword } from '../../shared/utils/crypto.util.js';
 
 const GREEN  = '\x1b[32m';
@@ -83,8 +81,6 @@ async function seed(): Promise<void> {
     try {
         await seedRoles();
         await seedRootUser();
-        await seedDemoUsers();
-        await seedOperationalSettings(AppDataSource.getRepository(Setting));
         // Add more seeders here in dependency order.
 
         console.log(`\n${GREEN}${BOLD}✔  Seed completed.${RESET}\n`);
