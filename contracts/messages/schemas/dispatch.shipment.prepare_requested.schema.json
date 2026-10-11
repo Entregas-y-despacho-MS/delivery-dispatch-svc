@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.delivery-dispatch.local/messages/schemas/dispatch.shipment.prepare_requested.schema.json",
+  "title": "dispatch.shipment.prepare_requested",
+  "description": "Orden de preparación a Almacén: fecha de salida firme y bultos esperados, cuando la promesa queda firme (confirmación del cliente, reprogramación o vencimiento de las 12 horas con aviso válido). Una reprogramación emite una orden nueva con `recordVersion` mayor que reemplaza a la anterior. `departureDate` es una fecha calendario (YYYY-MM-DD) del día operativo de salida.",
+  "type": "object",
+  "allOf": [{ "$ref": "../envelope.schema.json" }],
+  "properties": {
+    "type": { "const": "dispatch.shipment.prepare_requested" },
+    "source": { "const": "dispatch" },
+    "schemaVersion": { "const": 1 },
+    "data": { "$ref": "#/$defs/data" }
+  },
+  "$defs": {
+    "data": {
+      "type": "object",
+      "required": ["salesOrderId", "trackingCode", "recordVersion", "updatedAt", "departureDate", "packages"],
+      "properties": {
+        "salesOrderId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
+        "trackingCode": { "$ref": "dispatch.transfer.status_changed.schema.json#/$defs/trackingCode" },
+        "recordVersion": { "$ref": "../envelope.schema.json#/$defs/recordVersion" },
+        "updatedAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "warehouseId": {
+          "description": "Almacén de origen del pedido, si se conoce.",
+          "$ref": "../envelope.schema.json#/$defs/entityId"
+        },
+        "departureDate": {
+          "description": "Fecha de salida firme del almacén (YYYY-MM-DD).",
+          "type": "string",
+          "format": "date"
+        },
+        "deliveryWindowStart": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "deliveryWindowEnd": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "packages": {
+          "description": "Bultos esperados con sus medidas (cm) y peso bruto (kg).",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "../envelope.schema.json#/$defs/package" }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

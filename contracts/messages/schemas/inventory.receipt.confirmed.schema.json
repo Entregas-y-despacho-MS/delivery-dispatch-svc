@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.delivery-dispatch.local/messages/schemas/inventory.receipt.confirmed.schema.json",
+  "title": "inventory.receipt.confirmed",
+  "description": "Recepción física confirmada por Almacén para una recogida en proveedor o una devolución de cliente: cantidades aceptadas, faltantes, daños o diferencias. `referenceType` + `referenceId` identifican el registro de origen.",
+  "type": "object",
+  "allOf": [{ "$ref": "../envelope.schema.json" }],
+  "properties": {
+    "type": { "const": "inventory.receipt.confirmed" },
+    "source": { "const": "inventory" },
+    "schemaVersion": { "const": 1 },
+    "data": { "$ref": "#/$defs/data" }
+  },
+  "$defs": {
+    "data": {
+      "type": "object",
+      "required": ["receiptId", "recordVersion", "updatedAt", "receivedAt", "warehouseId", "referenceType", "referenceId", "result", "items"],
+      "properties": {
+        "receiptId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
+        "recordVersion": { "$ref": "../envelope.schema.json#/$defs/recordVersion" },
+        "updatedAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "receivedAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "warehouseId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
+        "referenceType": {
+          "description": "Tipo del registro de origen: devolución (RMA) o recogida ligada a una orden de compra.",
+          "type": "string",
+          "enum": ["rma", "purchase_order"]
+        },
+        "referenceId": {
+          "description": "ID del RMA o de la orden de compra, según `referenceType`.",
+          "$ref": "../envelope.schema.json#/$defs/entityId"
+        },
+        "trackingCode": {
+          "description": "Código del servicio de traslado de Despachos (DSP-AAAA-NNNNN), si Almacén lo conoce.",
+          "type": "string",
+          "pattern": "^DSP-[0-9]{4}-[0-9]{5}$"
+        },
+        "result": {
+          "description": "Resultado global de la recepción.",
+          "type": "string",
+          "enum": ["complete", "with_differences", "rejected"]
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/item" }
+        },
+        "notes": { "type": "string", "maxLength": 1000 }
+      },
+      "additionalProperties": false
+    },
+    "item": {
+      "description": "Línea recibida. Cantidades en unidades del producto.",
+      "type": "object",
+      "required": ["itemId", "expectedQuantity", "acceptedQuantity"],
+      "properties": {
+        "itemId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
+        "expectedQuantity": { "type": "integer", "minimum": 0 },
+        "acceptedQuantity": { "type": "integer", "minimum": 0 },
+        "missingQuantity": { "type": "integer", "minimum": 0, "default": 0 },
+        "damagedQuantity": { "type": "integer", "minimum": 0, "default": 0 },
+        "notes": { "type": "string", "maxLength": 500 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

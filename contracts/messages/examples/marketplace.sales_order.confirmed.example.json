@@ -1,0 +1,31 @@
+{
+  "messageId": "0192f1e2-1a01-7b41-9a1e-5d2f0c8e4a01",
+  "type": "marketplace.sales_order.confirmed",
+  "schemaVersion": 1,
+  "source": "marketplace",
+  "occurredAt": "2026-10-07T13:40:00Z",
+  "data": {
+    "salesOrderId": "SO-2026-000123",
+    "recordVersion": 1,
+    "updatedAt": "2026-10-07T13:40:00Z",
+    "confirmedAt": "2026-10-07T13:39:42Z",
+    "recipient": {
+      "name": "María Fernández Quispe",
+      "phone": "+59171234567",
+      "email": "maria.fernandez@example.com"
+    },
+    "deliveryAddress": {
+      "line": "Av. Arce 2345, Edificio Los Pinos, piso 4",
+      "reference": "Frente a la farmacia, portón negro",
+      "location": { "latitude": -16.5115, "longitude": -68.1223 }
+    },
+    "preferences": {
+      "preferredWindowStart": "2026-10-09T14:00:00Z",
+      "preferredWindowEnd": "2026-10-09T18:00:00Z",
+      "contactless": false,
+      "notes": "Tocar el timbre 4B"
+    },
+    "deliveryDeadline": "2026-10-14T23:59:59Z",
+    "priority": "normal"
+  }
+}

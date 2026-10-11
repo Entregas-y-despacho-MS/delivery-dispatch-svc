@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.delivery-dispatch.local/messages/schemas/dispatch.transfer.status_changed.schema.json",
+  "title": "dispatch.transfer.status_changed",
+  "description": "Estado del servicio de traslado. En entregas se emite al alcanzar delivered, not_delivered, incident, returned o cancelled (a Marketplace; a Inventarios además en returned e incident). Identifica el pedido con `salesOrderId` (entrega y devolución de cliente) o con `purchaseOrderId` (recogida en proveedor), exactamente uno. Sin datos personales ni tracking_token: `additionalProperties: false` lo impone.",
+  "type": "object",
+  "allOf": [{ "$ref": "../envelope.schema.json" }],
+  "properties": {
+    "type": { "const": "dispatch.transfer.status_changed" },
+    "source": { "const": "dispatch" },
+    "schemaVersion": { "const": 1 },
+    "data": { "$ref": "#/$defs/data" }
+  },
+  "$defs": {
+    "data": {
+      "type": "object",
+      "required": ["trackingCode", "status", "previousStatus", "occurredAt", "recordVersion"],
+      "properties": {
+        "salesOrderId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
+        "purchaseOrderId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
+        "trackingCode": { "$ref": "#/$defs/trackingCode" },
+        "status": { "$ref": "#/$defs/reportedStatus" },
+        "previousStatus": { "$ref": "#/$defs/dispatchStatus" },
+        "occurredAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "recordVersion": { "$ref": "../envelope.schema.json#/$defs/recordVersion" },
+        "reasonCode": { "$ref": "#/$defs/reasonCode" }
+      },
+      "oneOf": [
+        { "properties": { "salesOrderId": true }, "required": ["salesOrderId"] },
+        { "properties": { "purchaseOrderId": true }, "required": ["purchaseOrderId"] }
+      ],
+      "additionalProperties": false
+    },
+    "trackingCode": {
+      "description": "Código del servicio de traslado, único e inmutable (DSP-AAAA-NNNNN).",
+      "type": "string",
+      "pattern": "^DSP-[0-9]{4}-[0-9]{5}$"
+    },
+    "reportedStatus": {
+      "description": "Estados que se informan al ERP: resultados de entrega y, para recojos, los del glosario (sección 4).",
+      "type": "string",
+      "enum": ["delivered", "not_delivered", "incident", "returned", "cancelled", "picked_up_in_transit", "returned_to_warehouse"]
+    },
+    "dispatchStatus": {
+      "description": "Cualquier estado del glosario de dispatch_statuses (interoperabilidad-y-flujos.md, sección 4).",
+      "type": "string",
+      "enum": [
+        "pending", "address_review", "in_planning", "scheduled", "assigned", "out_for_delivery", "in_transit",
+        "delivered", "not_delivered", "incident", "rescheduled", "returned", "cancelled",
+        "pickup_scheduled", "picked_up_in_transit", "returned_to_warehouse"
+      ]
+    },
+    "reasonCode": {
+      "description": "Código del catálogo de motivos (por ejemplo INC-CUST-ABSENT). Es un patrón y no un enum porque el catálogo es extensible.",
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9]*(-[A-Z0-9]+)+$",
+      "maxLength": 40
+    }
+  }
+}

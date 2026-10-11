@@ -1,0 +1,20 @@
+{
+  "messageId": "0192f1e2-7c3a-7b41-9a1e-5d2f0c8e4a10",
+  "type": "inventory.shipment.ready",
+  "schemaVersion": 1,
+  "source": "inventory",
+  "occurredAt": "2026-10-07T14:03:00Z",
+  "data": {
+    "salesOrderId": "SO-2026-000123",
+    "recordVersion": 3,
+    "updatedAt": "2026-10-07T14:02:51Z",
+    "warehouseId": "WH-LPZ-01",
+    "availableFrom": "2026-10-07T15:00:00Z",
+    "packages": [
+      { "packageId": "PKG-000123-1", "lengthCm": 40, "widthCm": 30, "heightCm": 25, "grossWeightKg": 6.4 }
+    ],
+    "handlingConditions": ["FRAGILE"],
+    "evidencePolicy": "hand_delivery_standard",
+    "physicallyPacked": false
+  }
+}

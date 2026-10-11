@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.delivery-dispatch.local/messages/schemas/inventory.shipment.updated.schema.json",
+  "title": "inventory.shipment.updated",
+  "description": "Cambio de empaque o pedido que deja de estar listo. `isReady: false` indica que el pedido deja de estar listo para retirar. Si viene `packages`, reemplaza completa la lista anterior; un campo ausente no cambia.",
+  "type": "object",
+  "allOf": [{ "$ref": "../envelope.schema.json" }],
+  "properties": {
+    "type": { "const": "inventory.shipment.updated" },
+    "source": { "const": "inventory" },
+    "schemaVersion": { "const": 1 },
+    "data": { "$ref": "#/$defs/data" }
+  },
+  "$defs": {
+    "data": {
+      "type": "object",
+      "required": ["salesOrderId", "recordVersion", "updatedAt", "isReady"],
+      "properties": {
+        "salesOrderId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
+        "recordVersion": { "$ref": "../envelope.schema.json#/$defs/recordVersion" },
+        "updatedAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "isReady": {
+          "description": "false cuando el pedido deja de estar listo para retirar.",
+          "type": "boolean"
+        },
+        "warehouseId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
+        "availableFrom": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "packages": { "$ref": "inventory.shipment.ready.schema.json#/$defs/packages" },
+        "handlingConditions": { "$ref": "inventory.shipment.ready.schema.json#/$defs/handlingConditions" },
+        "evidencePolicy": { "$ref": "../envelope.schema.json#/$defs/evidencePolicy" },
+        "physicallyPacked": { "type": "boolean" },
+        "reason": { "type": "string", "maxLength": 500 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

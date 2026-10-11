@@ -1,0 +1,23 @@
+{
+  "messageId": "0192f5d2-7e44-7d48-9f77-4b0a2d6e8c54",
+  "type": "inventory.receipt.confirmed",
+  "schemaVersion": 1,
+  "source": "inventory",
+  "occurredAt": "2026-10-15T16:45:00Z",
+  "data": {
+    "receiptId": "RCP-2026-000310",
+    "recordVersion": 1,
+    "updatedAt": "2026-10-15T16:45:00Z",
+    "receivedAt": "2026-10-15T16:40:12Z",
+    "warehouseId": "WH-LPZ-01",
+    "referenceType": "purchase_order",
+    "referenceId": "PO-2026-000087",
+    "trackingCode": "DSP-2026-00045",
+    "result": "with_differences",
+    "items": [
+      { "itemId": "SKU-LAP-14", "expectedQuantity": 10, "acceptedQuantity": 8, "missingQuantity": 1, "damagedQuantity": 1, "notes": "Una caja con golpe en la esquina" },
+      { "itemId": "SKU-MOUSE-02", "expectedQuantity": 20, "acceptedQuantity": 20 }
+    ],
+    "notes": "Diferencias informadas al repartidor en la recepción"
+  }
+}

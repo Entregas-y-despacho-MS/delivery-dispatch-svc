@@ -1,0 +1,14 @@
+{
+  "messageId": "0192f204-9e03-7d63-9c3a-7f4b2e0a6c03",
+  "type": "marketplace.sales_order.cancelled",
+  "schemaVersion": 1,
+  "source": "marketplace",
+  "occurredAt": "2026-10-08T16:30:00Z",
+  "data": {
+    "salesOrderId": "SO-2026-000123",
+    "recordVersion": 3,
+    "updatedAt": "2026-10-08T16:30:00Z",
+    "cancelledAt": "2026-10-08T16:29:50Z",
+    "reason": "Cancelado por el cliente antes de la preparación"
+  }
+}

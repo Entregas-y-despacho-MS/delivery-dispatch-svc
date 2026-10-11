@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.delivery-dispatch.local/messages/envelope.schema.json",
+  "title": "Sobre estándar de mensaje",
+  "description": "Sobre común de todo mensaje entre Despachos y el ERP (docs/interoperabilidad-y-flujos.md, sección 1.3). Cada esquema de tópico lo extiende fijando `type` y el contenido de `data`. Unidades: peso en kg, medidas en cm, fechas ISO-8601 UTC, coordenadas WGS84.",
+  "type": "object",
+  "required": ["messageId", "type", "schemaVersion", "source", "occurredAt", "data"],
+  "properties": {
+    "messageId": { "$ref": "#/$defs/messageId" },
+    "type": { "$ref": "#/$defs/topic" },
+    "schemaVersion": { "$ref": "#/$defs/schemaVersion" },
+    "source": { "$ref": "#/$defs/source" },
+    "occurredAt": { "$ref": "#/$defs/dateTimeUtc" },
+    "data": { "type": "object" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "messageId": {
+      "description": "UUID v7 del mensaje; clave de idempotencia.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "topic": {
+      "description": "Nombre del tópico o tipo de evento, en minúsculas separado por puntos.",
+      "type": "string",
+      "pattern": "^[a-z]+(\\.[a-z_]+){2}$"
+    },
+    "schemaVersion": {
+      "description": "Versión del esquema de `data`. Se versiona el contenido, no los nombres de tópico.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "source": {
+      "description": "Servicio emisor.",
+      "type": "string",
+      "enum": ["marketplace", "inventory", "procurement", "dispatch"]
+    },
+    "dateTimeUtc": {
+      "description": "Fecha y hora ISO-8601 en UTC (sufijo Z).",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "recordVersion": {
+      "description": "Versión creciente del registro. Despachos ignora un mensaje con recordVersion menor o igual al ya procesado.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "entityId": {
+      "description": "ID original del registro en el servicio dueño.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "geoPoint": {
+      "description": "Coordenadas WGS84 en grados decimales.",
+      "type": "object",
+      "required": ["latitude", "longitude"],
+      "properties": {
+        "latitude": { "type": "number", "minimum": -90, "maximum": 90 },
+        "longitude": { "type": "number", "minimum": -180, "maximum": 180 }
+      },
+      "additionalProperties": false
+    },
+    "package": {
+      "description": "Bulto con medidas reales en centímetros y peso bruto en kilogramos.",
+      "type": "object",
+      "required": ["packageId", "lengthCm", "widthCm", "heightCm", "grossWeightKg"],
+      "properties": {
+        "packageId": { "$ref": "#/$defs/entityId" },
+        "lengthCm": { "type": "number", "exclusiveMinimum": 0 },
+        "widthCm": { "type": "number", "exclusiveMinimum": 0 },
+        "heightCm": { "type": "number", "exclusiveMinimum": 0 },
+        "grossWeightKg": { "type": "number", "exclusiveMinimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "evidencePolicy": {
+      "description": "Política de evidencia requerida para la entrega. Mismos valores que el CHECK de dispatch.dispatches.evidence_policy.",
+      "type": "string",
+      "enum": ["hand_delivery_standard", "contactless_delivery", "high_value_control"]
+    },
+    "handlingCondition": {
+      "description": "Condición de manipulación del bulto o pedido (por ejemplo FRAGILE). Es un patrón MAYÚSCULAS_CON_GUION_BAJO y no un enum cerrado: una condición nueva de Almacén no debe enviar el pedido al dead-letter.",
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{1,39}$"
+    }
+  }
+}

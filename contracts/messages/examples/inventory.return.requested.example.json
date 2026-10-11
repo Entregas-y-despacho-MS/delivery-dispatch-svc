@@ -1,0 +1,30 @@
+{
+  "messageId": "0192f4c1-6d33-7c37-8e66-3a9f1c5d7b43",
+  "type": "inventory.return.requested",
+  "schemaVersion": 1,
+  "source": "inventory",
+  "occurredAt": "2026-10-12T11:00:00Z",
+  "data": {
+    "rmaId": "RMA-2026-000045",
+    "salesOrderId": "SO-2026-000123",
+    "recordVersion": 1,
+    "updatedAt": "2026-10-12T11:00:00Z",
+    "approvedAt": "2026-10-12T10:58:30Z",
+    "warehouseId": "WH-LPZ-01",
+    "contact": {
+      "name": "María Fernández Quispe",
+      "phone": "+59171234567",
+      "email": "maria.fernandez@example.com"
+    },
+    "pickupAddress": {
+      "line": "Calle 21 de Calacoto 8790, casa 12",
+      "reference": "Condominio Las Palmas, segunda garita",
+      "location": { "latitude": -16.5421, "longitude": -68.0802 }
+    },
+    "returnReason": "Producto con falla de encendido dentro de garantía",
+    "packages": [
+      { "packageId": "PKG-RMA-45-1", "lengthCm": 40, "widthCm": 30, "heightCm": 25, "grossWeightKg": 6.4 }
+    ],
+    "preferredPickupDate": "2026-10-14T15:00:00Z"
+  }
+}

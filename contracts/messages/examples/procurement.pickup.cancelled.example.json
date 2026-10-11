@@ -1,0 +1,14 @@
+{
+  "messageId": "0192f805-a177-7a7b-8caa-7e3d5a9b1f87",
+  "type": "procurement.pickup.cancelled",
+  "schemaVersion": 1,
+  "source": "procurement",
+  "occurredAt": "2026-10-10T15:20:00Z",
+  "data": {
+    "purchaseOrderId": "PO-2026-000087",
+    "recordVersion": 3,
+    "updatedAt": "2026-10-10T15:20:00Z",
+    "cancelledAt": "2026-10-10T15:19:40Z",
+    "reason": "Orden de compra anulada por el área de Compras"
+  }
+}

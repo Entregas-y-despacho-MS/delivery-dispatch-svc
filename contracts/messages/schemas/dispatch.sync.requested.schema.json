@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.delivery-dispatch.local/messages/schemas/dispatch.sync.requested.schema.json",
+  "title": "dispatch.sync.requested",
+  "description": "Solicitud del registro completo de un pedido cuyo mensaje no llegó. El destinatario se deduce de `entityType`: `sales_order` va a Marketplace (faltan los datos de entrega) y `shipment` va a Inventarios (faltan los bultos). El origen responde publicando el registro completo por su tópico habitual. Máximo 3 solicitudes por pedido.",
+  "type": "object",
+  "allOf": [{ "$ref": "../envelope.schema.json" }],
+  "properties": {
+    "type": { "const": "dispatch.sync.requested" },
+    "source": { "const": "dispatch" },
+    "schemaVersion": { "const": 1 },
+    "data": { "$ref": "#/$defs/data" }
+  },
+  "$defs": {
+    "data": {
+      "type": "object",
+      "required": ["entityType", "entityId", "requestedAt"],
+      "properties": {
+        "entityType": { "type": "string", "enum": ["sales_order", "shipment"] },
+        "entityId": {
+          "description": "ID del pedido de venta (`salesOrderId`) cuyo registro falta.",
+          "$ref": "../envelope.schema.json#/$defs/entityId"
+        },
+        "requestedAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "attempt": {
+          "description": "Número de solicitud para este pedido (1 a 3).",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

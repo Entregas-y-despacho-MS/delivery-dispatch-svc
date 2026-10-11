@@ -1,0 +1,16 @@
+{
+  "messageId": "0192f9a1-b288-7b8c-9dbb-8f4e6b0c2a98",
+  "type": "dispatch.transfer.status_changed",
+  "schemaVersion": 1,
+  "source": "dispatch",
+  "occurredAt": "2026-10-09T19:42:10Z",
+  "data": {
+    "salesOrderId": "SO-2026-000123",
+    "trackingCode": "DSP-2026-00045",
+    "status": "not_delivered",
+    "previousStatus": "in_transit",
+    "occurredAt": "2026-10-09T19:41:55Z",
+    "recordVersion": 7,
+    "reasonCode": "INC-CUST-ABSENT"
+  }
+}
