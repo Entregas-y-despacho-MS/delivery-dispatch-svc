@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.delivery-dispatch.local/messages/schemas/dispatch.pickup.scheduled.schema.json",
+  "title": "dispatch.pickup.scheduled",
+  "description": "Fecha y franja programada para la recogida en proveedor. Una reprogramación emite un mensaje nuevo con `recordVersion` mayor.",
+  "type": "object",
+  "allOf": [{ "$ref": "../envelope.schema.json" }],
+  "properties": {
+    "type": { "const": "dispatch.pickup.scheduled" },
+    "source": { "const": "dispatch" },
+    "schemaVersion": { "const": 1 },
+    "data": { "$ref": "#/$defs/data" }
+  },
+  "$defs": {
+    "data": {
+      "type": "object",
+      "required": ["purchaseOrderId", "trackingCode", "recordVersion", "updatedAt", "pickupWindow"],
+      "properties": {
+        "purchaseOrderId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
+        "trackingCode": { "$ref": "dispatch.transfer.status_changed.schema.json#/$defs/trackingCode" },
+        "recordVersion": { "$ref": "../envelope.schema.json#/$defs/recordVersion" },
+        "updatedAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "pickupWindow": { "$ref": "procurement.pickup.requested.schema.json#/$defs/pickupWindow" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

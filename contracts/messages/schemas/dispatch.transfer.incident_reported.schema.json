@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.delivery-dispatch.local/messages/schemas/dispatch.transfer.incident_reported.schema.json",
+  "title": "dispatch.transfer.incident_reported",
+  "description": "Incidencia registrada en el traslado y siguiente paso decidido por Despacho. Identifica el pedido con `salesOrderId` o con `purchaseOrderId`, exactamente uno. Sin datos personales.",
+  "type": "object",
+  "allOf": [{ "$ref": "../envelope.schema.json" }],
+  "properties": {
+    "type": { "const": "dispatch.transfer.incident_reported" },
+    "source": { "const": "dispatch" },
+    "schemaVersion": { "const": 1 },
+    "data": { "$ref": "#/$defs/data" }
+  },
+  "$defs": {
+    "data": {
+      "type": "object",
+      "required": ["trackingCode", "incidentId", "reasonCode", "reportedAt", "nextStep", "recordVersion", "updatedAt"],
+      "properties": {
+        "salesOrderId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
+        "purchaseOrderId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
+        "trackingCode": { "$ref": "dispatch.transfer.status_changed.schema.json#/$defs/trackingCode" },
+        "incidentId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
+        "reasonCode": { "$ref": "dispatch.transfer.status_changed.schema.json#/$defs/reasonCode" },
+        "reportedAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "nextStep": {
+          "description": "Decisión de Despacho: reprogramar, devolver al origen, continuar con la ruta o cancelar.",
+          "type": "string",
+          "enum": ["reschedule", "return_to_origin", "continue", "cancel"]
+        },
+        "rescheduledWindow": {
+          "description": "Nueva franja, cuando `nextStep` es reschedule.",
+          "$ref": "procurement.pickup.requested.schema.json#/$defs/pickupWindow"
+        },
+        "recordVersion": { "$ref": "../envelope.schema.json#/$defs/recordVersion" },
+        "updatedAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" }
+      },
+      "oneOf": [
+        { "properties": { "salesOrderId": true }, "required": ["salesOrderId"] },
+        { "properties": { "purchaseOrderId": true }, "required": ["purchaseOrderId"] }
+      ],
+      "additionalProperties": false
+    }
+  }
+}

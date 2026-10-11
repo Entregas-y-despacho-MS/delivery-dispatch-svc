@@ -1,0 +1,16 @@
+{
+  "messageId": "0192f9c3-d4aa-7daa-9fdd-0b6a8d2e4cba",
+  "type": "dispatch.shipment.departed",
+  "schemaVersion": 1,
+  "source": "dispatch",
+  "occurredAt": "2026-10-09T13:05:00Z",
+  "data": {
+    "salesOrderId": "SO-2026-000123",
+    "trackingCode": "DSP-2026-00045",
+    "recordVersion": 5,
+    "updatedAt": "2026-10-09T13:04:50Z",
+    "departedAt": "2026-10-09T13:04:30Z",
+    "driverId": "USR-0042",
+    "packageIds": ["PKG-000123-1"]
+  }
+}

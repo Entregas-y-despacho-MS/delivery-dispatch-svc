@@ -1,0 +1,13 @@
+{
+  "messageId": "0192fbe5-f6cc-7fcc-9bff-2d8cae4a6edc",
+  "type": "dispatch.sync.requested",
+  "schemaVersion": 1,
+  "source": "dispatch",
+  "occurredAt": "2026-10-07T15:10:00Z",
+  "data": {
+    "entityType": "shipment",
+    "entityId": "SO-2026-000123",
+    "requestedAt": "2026-10-07T15:10:00Z",
+    "attempt": 1
+  }
+}

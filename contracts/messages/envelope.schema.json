@@ -81,9 +81,9 @@
       "enum": ["hand_delivery_standard", "contactless_delivery", "high_value_control"]
     },
     "handlingCondition": {
-      "description": "Condición de manipulación del bulto o pedido.",
+      "description": "Condición de manipulación del bulto o pedido (por ejemplo FRAGILE). Es un patrón MAYÚSCULAS_CON_GUION_BAJO y no un enum cerrado: una condición nueva de Almacén no debe enviar el pedido al dead-letter.",
       "type": "string",
-      "enum": ["FRAGILE", "COLD_CHAIN", "THIS_SIDE_UP", "HAZARDOUS"]
+      "pattern": "^[A-Z][A-Z0-9_]{1,39}$"
     }
   }
 }

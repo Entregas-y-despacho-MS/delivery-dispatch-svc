@@ -1,0 +1,20 @@
+{
+  "messageId": "0192f8b2-c399-7c9d-8ecc-9a5f7c1d3ba9",
+  "type": "dispatch.shipment.prepare_requested",
+  "schemaVersion": 1,
+  "source": "dispatch",
+  "occurredAt": "2026-10-08T22:00:00Z",
+  "data": {
+    "salesOrderId": "SO-2026-000123",
+    "trackingCode": "DSP-2026-00045",
+    "recordVersion": 2,
+    "updatedAt": "2026-10-08T22:00:00Z",
+    "warehouseId": "WH-LPZ-01",
+    "departureDate": "2026-10-09",
+    "deliveryWindowStart": "2026-10-09T14:00:00Z",
+    "deliveryWindowEnd": "2026-10-09T16:00:00Z",
+    "packages": [
+      { "packageId": "PKG-000123-1", "lengthCm": 40, "widthCm": 30, "heightCm": 25, "grossWeightKg": 6.4 }
+    ]
+  }
+}

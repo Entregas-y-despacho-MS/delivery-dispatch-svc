@@ -1,0 +1,14 @@
+{
+  "messageId": "0192fad4-e5bb-7ebb-8aee-1c7b9e3f5dcb",
+  "type": "dispatch.pickup.scheduled",
+  "schemaVersion": 1,
+  "source": "dispatch",
+  "occurredAt": "2026-10-09T17:10:00Z",
+  "data": {
+    "purchaseOrderId": "PO-2026-000087",
+    "trackingCode": "DSP-2026-00051",
+    "recordVersion": 1,
+    "updatedAt": "2026-10-09T17:10:00Z",
+    "pickupWindow": { "startsAt": "2026-10-12T14:00:00Z", "endsAt": "2026-10-12T16:00:00Z" }
+  }
+}
