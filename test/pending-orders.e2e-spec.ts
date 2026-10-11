@@ -762,5 +762,27 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
             expect(ids(await mine(`${q}&shift=afternoon`))).toEqual([proposedNormal]);
             expect(ids(await mine(`${q}&shift=morning`)).sort((x, y) => x - y)).toEqual([proposedUrgent, pending].sort((x, y) => x - y));
         });
+
+        it('pagina propuestos, reservados y libres sin repetir ni saltar pedidos', async () => {
+            const name = `${tag} Prop8`;
+            const created = [
+                await insert({ name, status: 'in_planning' }),
+                await insert({ name, status: 'in_planning' }),
+                await insert({ name }),
+                await insert({ name }),
+                await insert({ name, status: 'rescheduled', days: 0 }),
+            ];
+            await reserve([created[1], created[3]]);
+            const q = `search=${encodeURIComponent(name)}&limit=2`;
+
+            const seen: number[] = [];
+            for (const page of [1, 2, 3]) {
+                const res = await mine(`${q}&page=${page}`);
+                expect(res.body.total).toBe(5);
+                seen.push(...ids(res));
+            }
+            expect(seen.sort((x, y) => x - y)).toEqual([...created].sort((x, y) => x - y));
+            expect((await mine(`${q}&page=4`)).body.data).toEqual([]);
+        });
     });
 });
