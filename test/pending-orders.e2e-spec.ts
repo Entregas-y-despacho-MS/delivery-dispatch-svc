@@ -663,4 +663,103 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
             expect(count).toBe(0);
         });
     });
+
+    // ── in_planning propuesto frente a reservado (descripción vigente de ST-48.2, D-08) ──
+    // El campo `inbox` indica el origen en la bandeja: 'proposed' (in_planning sin reserva vigente),
+    // 'reserved' (reserva vigente en dispatch_reservations) o null (pedido libre).
+    describe('in_planning propuesto frente a reservado', () => {
+        const rowFor = async (id: number, role: string, name: string) =>
+            (await mine(`search=${encodeURIComponent(name)}`, role)).body.data.find((r: any) => r.id === id);
+        const statusInDb = async (id: number): Promise<string> =>
+            (await dataSource.query(
+                `SELECT s.name FROM dispatches d JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id WHERE d.dispatch_id = $1`,
+                [id],
+            ))[0].name;
+
+        it('un in_planning propuesto (sin reserva) aparece en la bandeja, libre y marcado como propuesto', async () => {
+            const name = `${tag} Prop1`;
+            const proposed = await insert({ name, status: 'in_planning' });
+            const row = await rowFor(proposed, 'coordinator', name);
+            expect(row).toMatchObject({ status: 'in_planning', inbox: 'proposed', locked: false, reservation: null });
+        });
+
+        it('un pedido libre (pending) no es propuesto ni reservado', async () => {
+            const name = `${tag} Prop2`;
+            const free = await insert({ name });
+            expect(await rowFor(free, 'coordinator', name)).toMatchObject({ status: 'pending', inbox: null, locked: false, reservation: null });
+        });
+
+        it('un pedido reservado conserva su estado real y se marca como reservado (la reserva no cambia el estado)', async () => {
+            const name = `${tag} Prop3`;
+            const id = await insert({ name });
+            expect((await reserve([id])).status).toBe(201);
+
+            expect(await rowFor(id, 'coordinator2', name)).toMatchObject({
+                status: 'pending', inbox: 'reserved', locked: true, reservation: { reservedById: userIds.coordinator, reservedByMe: false },
+            });
+            expect(await rowFor(id, 'coordinator', name)).toMatchObject({ status: 'pending', inbox: 'reserved', locked: false });
+            expect(await statusInDb(id)).toBe('pending');
+        });
+
+        it('un in_planning propuesto se puede reservar: pasa de propuesto a reservado y sigue en in_planning', async () => {
+            const name = `${tag} Prop4`;
+            const proposed = await insert({ name, status: 'in_planning' });
+            const res = await reserve([proposed]);
+            expect(res.status).toBe(201);
+            expect(res.body.reserved).toBe(1);
+
+            expect(await rowFor(proposed, 'coordinator2', name)).toMatchObject({
+                status: 'in_planning', inbox: 'reserved', locked: true, reservation: { reservedById: userIds.coordinator },
+            });
+            expect(await rowFor(proposed, 'coordinator', name)).toMatchObject({ status: 'in_planning', inbox: 'reserved', locked: false });
+            expect(await statusInDb(proposed)).toBe('in_planning');
+        });
+
+        it('al liberar o vencer la reserva, el in_planning vuelve a verse como propuesto', async () => {
+            const name = `${tag} Prop5`;
+            const released = await insert({ name, status: 'in_planning' });
+            const expired = await insert({ name, status: 'in_planning' });
+            await reserve([released, expired]);
+
+            await release({ dispatchIds: [released] });
+            await dataSource.query(`UPDATE dispatch_reservations SET expires_at = NOW() - INTERVAL '1 second' WHERE dispatch_id = $1`, [expired]);
+
+            for (const id of [released, expired]) {
+                expect(await rowFor(id, 'coordinator2', name), `dispatch ${id}`)
+                    .toMatchObject({ status: 'in_planning', inbox: 'proposed', locked: false, reservation: null });
+            }
+        });
+
+        it('reservar, renovar y liberar nunca modifican el estado del despacho (D-08)', async () => {
+            const name = `${tag} Prop6`;
+            const pending = await insert({ name });
+            const proposed = await insert({ name, status: 'in_planning' });
+            const rescheduled = await insert({ name, status: 'rescheduled', days: 0 });
+            const before = await Promise.all([pending, proposed, rescheduled].map(statusInDb));
+
+            expect((await reserve([pending, proposed, rescheduled])).status).toBe(201);
+            expect((await renew()).body.renewed).toBe(3);
+            expect(await Promise.all([pending, proposed, rescheduled].map(statusInDb))).toEqual(before);
+
+            expect((await release()).body.released).toBe(3);
+            expect(await Promise.all([pending, proposed, rescheduled].map(statusInDb))).toEqual(before);
+        });
+
+        it('los in_planning propuestos respetan filtros, total y orden', async () => {
+            const name = `${tag} Prop7`;
+            const proposedUrgent = await insert({ name, status: 'in_planning', priority: 'urgent', zone: zones[0], at: '09:00' });
+            const proposedNormal = await insert({ name, status: 'in_planning', priority: 'normal', zone: zones[1], at: '15:00' });
+            const pending = await insert({ name, priority: 'normal', zone: zones[0], at: '09:00' });
+            const q = `search=${encodeURIComponent(name)}`;
+
+            const all = await mine(q);
+            expect(all.body.total).toBe(3);
+            expect(ids(all)[0]).toBe(proposedUrgent); // urgentes primero
+
+            expect(ids(await mine(`${q}&priority=urgent`))).toEqual([proposedUrgent]);
+            expect(ids(await mine(`${q}&delivery_zone_id=${zones[1]}`))).toEqual([proposedNormal]);
+            expect(ids(await mine(`${q}&shift=afternoon`))).toEqual([proposedNormal]);
+            expect(ids(await mine(`${q}&shift=morning`)).sort((x, y) => x - y)).toEqual([proposedUrgent, pending].sort((x, y) => x - y));
+        });
+    });
 });
