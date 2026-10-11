@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.delivery-dispatch.local/messages/schemas/marketplace.sales_order.confirmed.schema.json",
+  "title": "marketplace.sales_order.confirmed",
+  "description": "Pedido de venta confirmado con los datos de entrega del cliente. `confirmedAt` es la confirmación comercial desde la que corre el plazo de entrega (D0). No lleva datos de facturación ni de pago: todos los pedidos se asumen pagados. Sin `deliveryAddress.location` válido, el despacho queda en address_review.",
+  "type": "object",
+  "allOf": [{ "$ref": "../envelope.schema.json" }],
+  "properties": {
+    "type": { "const": "marketplace.sales_order.confirmed" },
+    "source": { "const": "marketplace" },
+    "schemaVersion": { "const": 1 },
+    "data": { "$ref": "#/$defs/data" }
+  },
+  "$defs": {
+    "data": {
+      "type": "object",
+      "required": ["salesOrderId", "recordVersion", "updatedAt", "confirmedAt", "recipient", "deliveryAddress"],
+      "properties": {
+        "salesOrderId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
+        "recordVersion": { "$ref": "../envelope.schema.json#/$defs/recordVersion" },
+        "updatedAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "confirmedAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "recipient": { "$ref": "#/$defs/recipient" },
+        "deliveryAddress": { "$ref": "#/$defs/deliveryAddress" },
+        "preferences": { "$ref": "#/$defs/preferences" },
+        "deliveryDeadline": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "priority": { "$ref": "#/$defs/priority" }
+      },
+      "additionalProperties": false
+    },
+    "recipient": {
+      "description": "Destinatario de la entrega.",
+      "type": "object",
+      "required": ["name", "phone"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "phone": { "type": "string", "minLength": 5, "maxLength": 30 },
+        "email": { "type": "string", "format": "email", "maxLength": 150 }
+      },
+      "additionalProperties": false
+    },
+    "deliveryAddress": {
+      "description": "Dirección de entrega. `location` es opcional: sin coordenadas válidas el despacho queda en address_review.",
+      "type": "object",
+      "required": ["line"],
+      "properties": {
+        "line": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "reference": { "type": "string", "maxLength": 500 },
+        "location": { "$ref": "../envelope.schema.json#/$defs/geoPoint" }
+      },
+      "additionalProperties": false
+    },
+    "preferences": {
+      "description": "Preferencias de entrega del cliente.",
+      "type": "object",
+      "properties": {
+        "preferredWindowStart": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "preferredWindowEnd": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "contactless": { "type": "boolean" },
+        "notes": { "type": "string", "maxLength": 500 }
+      },
+      "additionalProperties": false
+    },
+    "priority": {
+      "description": "Prioridad del pedido. Mismos valores que el CHECK de dispatch.dispatches.priority; por defecto normal.",
+      "type": "string",
+      "enum": ["urgent", "normal"]
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.delivery-dispatch.local/messages/schemas/marketplace.sales_order.updated.schema.json",
+  "title": "marketplace.sales_order.updated",
+  "description": "Cambio de dirección, contacto o preferencias de un pedido de venta. Cada bloque enviado (`recipient`, `deliveryAddress`, `preferences`) reemplaza completo al anterior; un bloque ausente no cambia. Debe venir al menos un campo modificado además de los de identificación (`minProperties: 4`).",
+  "type": "object",
+  "allOf": [{ "$ref": "../envelope.schema.json" }],
+  "properties": {
+    "type": { "const": "marketplace.sales_order.updated" },
+    "source": { "const": "marketplace" },
+    "schemaVersion": { "const": 1 },
+    "data": { "$ref": "#/$defs/data" }
+  },
+  "$defs": {
+    "data": {
+      "type": "object",
+      "required": ["salesOrderId", "recordVersion", "updatedAt"],
+      "properties": {
+        "salesOrderId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
+        "recordVersion": { "$ref": "../envelope.schema.json#/$defs/recordVersion" },
+        "updatedAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "recipient": { "$ref": "marketplace.sales_order.confirmed.schema.json#/$defs/recipient" },
+        "deliveryAddress": { "$ref": "marketplace.sales_order.confirmed.schema.json#/$defs/deliveryAddress" },
+        "preferences": { "$ref": "marketplace.sales_order.confirmed.schema.json#/$defs/preferences" },
+        "deliveryDeadline": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "priority": { "$ref": "marketplace.sales_order.confirmed.schema.json#/$defs/priority" }
+      },
+      "minProperties": 4,
+      "additionalProperties": false
+    }
+  }
+}
