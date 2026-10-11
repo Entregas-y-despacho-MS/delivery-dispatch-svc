@@ -1,0 +1,14 @@
+{
+  "messageId": "0192f3b8-4c22-7b26-9d55-2f8e0b4c6a32",
+  "type": "inventory.shipment.cancelled",
+  "schemaVersion": 1,
+  "source": "inventory",
+  "occurredAt": "2026-10-08T17:05:00Z",
+  "data": {
+    "salesOrderId": "SO-2026-000123",
+    "recordVersion": 5,
+    "updatedAt": "2026-10-08T17:04:55Z",
+    "cancelledAt": "2026-10-08T17:04:55Z",
+    "reason": "Producto sin stock tras inspección de calidad"
+  }
+}

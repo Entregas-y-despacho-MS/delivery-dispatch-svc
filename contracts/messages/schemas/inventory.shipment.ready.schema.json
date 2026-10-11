@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.delivery-dispatch.local/messages/schemas/inventory.shipment.ready.schema.json",
+  "title": "inventory.shipment.ready",
+  "description": "Pedido de venta con sus bultos definidos (medidas en cm y peso bruto real en kg). Significa 'bultos definidos con dimensiones reales', no necesariamente 'físicamente empacado': `physicallyPacked` (opcional, por defecto false) indica si ya está empacado y no gobierna la salida. Se une con marketplace.sales_order.confirmed por `salesOrderId`.",
+  "type": "object",
+  "allOf": [{ "$ref": "../envelope.schema.json" }],
+  "properties": {
+    "type": { "const": "inventory.shipment.ready" },
+    "source": { "const": "inventory" },
+    "schemaVersion": { "const": 1 },
+    "data": { "$ref": "#/$defs/data" }
+  },
+  "$defs": {
+    "data": {
+      "type": "object",
+      "required": ["salesOrderId", "recordVersion", "updatedAt", "warehouseId", "packages"],
+      "properties": {
+        "salesOrderId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
+        "recordVersion": { "$ref": "../envelope.schema.json#/$defs/recordVersion" },
+        "updatedAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "warehouseId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
+        "availableFrom": {
+          "description": "Momento desde el cual los bultos pueden retirarse del almacén.",
+          "$ref": "../envelope.schema.json#/$defs/dateTimeUtc"
+        },
+        "packages": { "$ref": "#/$defs/packages" },
+        "handlingConditions": { "$ref": "#/$defs/handlingConditions" },
+        "evidencePolicy": { "$ref": "../envelope.schema.json#/$defs/evidencePolicy" },
+        "physicallyPacked": {
+          "description": "Indica si el pedido ya está empacado físicamente. Opcional; por defecto false. No gobierna la salida.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "packages": {
+      "description": "Bultos del pedido con medidas reales (cm) y peso bruto (kg).",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "../envelope.schema.json#/$defs/package" }
+    },
+    "handlingConditions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "../envelope.schema.json#/$defs/handlingCondition" }
+    }
+  }
+}

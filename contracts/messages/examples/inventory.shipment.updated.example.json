@@ -1,0 +1,19 @@
+{
+  "messageId": "0192f3a0-2b11-7a15-8c44-1e7d9a3b5f21",
+  "type": "inventory.shipment.updated",
+  "schemaVersion": 1,
+  "source": "inventory",
+  "occurredAt": "2026-10-08T10:20:00Z",
+  "data": {
+    "salesOrderId": "SO-2026-000123",
+    "recordVersion": 4,
+    "updatedAt": "2026-10-08T10:19:48Z",
+    "isReady": true,
+    "packages": [
+      { "packageId": "PKG-000123-1", "lengthCm": 40, "widthCm": 30, "heightCm": 25, "grossWeightKg": 6.4 },
+      { "packageId": "PKG-000123-2", "lengthCm": 20, "widthCm": 20, "heightCm": 15, "grossWeightKg": 1.8 }
+    ],
+    "physicallyPacked": true,
+    "reason": "Se separó un accesorio en un segundo bulto"
+  }
+}

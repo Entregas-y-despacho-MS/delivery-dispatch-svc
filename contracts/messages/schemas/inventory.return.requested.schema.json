@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.delivery-dispatch.local/messages/schemas/inventory.return.requested.schema.json",
+  "title": "inventory.return.requested",
+  "description": "Devolución aprobada (RMA) que requiere recojo en el domicilio del cliente. Despachos crea una orden de recojo en pickup_scheduled con destino en el almacén indicado.",
+  "type": "object",
+  "allOf": [{ "$ref": "../envelope.schema.json" }],
+  "properties": {
+    "type": { "const": "inventory.return.requested" },
+    "source": { "const": "inventory" },
+    "schemaVersion": { "const": 1 },
+    "data": { "$ref": "#/$defs/data" }
+  },
+  "$defs": {
+    "data": {
+      "type": "object",
+      "required": ["rmaId", "recordVersion", "updatedAt", "approvedAt", "warehouseId", "contact", "pickupAddress", "returnReason"],
+      "properties": {
+        "rmaId": {
+          "description": "ID de la solicitud de garantía/devolución aprobada (RMA).",
+          "$ref": "../envelope.schema.json#/$defs/entityId"
+        },
+        "salesOrderId": {
+          "description": "Pedido de venta original, si se conoce.",
+          "$ref": "../envelope.schema.json#/$defs/entityId"
+        },
+        "recordVersion": { "$ref": "../envelope.schema.json#/$defs/recordVersion" },
+        "updatedAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "approvedAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "warehouseId": {
+          "description": "Almacén de destino de la mercadería devuelta.",
+          "$ref": "../envelope.schema.json#/$defs/entityId"
+        },
+        "contact": { "$ref": "marketplace.sales_order.confirmed.schema.json#/$defs/recipient" },
+        "pickupAddress": { "$ref": "marketplace.sales_order.confirmed.schema.json#/$defs/deliveryAddress" },
+        "returnReason": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "packages": {
+          "description": "Bultos estimados a recoger, si Almacén los conoce.",
+          "type": "array",
+          "items": { "$ref": "../envelope.schema.json#/$defs/package" }
+        },
+        "preferredPickupDate": {
+          "description": "Fecha de recojo preferida por el cliente, en UTC.",
+          "$ref": "../envelope.schema.json#/$defs/dateTimeUtc"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
