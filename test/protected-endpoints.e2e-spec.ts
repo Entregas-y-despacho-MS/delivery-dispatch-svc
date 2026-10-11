@@ -24,6 +24,7 @@ describe('Endpoints protegidos — 401/403 (e2e)', () => {
     const createdUserIds: number[] = [];
 
     let adminToken: string;
+    let coordinatorToken: string;
     let driverToken: string;
     let rootToken: string;
 
@@ -54,6 +55,7 @@ describe('Endpoints protegidos — 401/403 (e2e)', () => {
         const roleRepo = dataSource.getRepository(Role);
 
         const adminRole  = await roleRepo.findOneByOrFail({ name: 'admin' });
+        const coordinatorRole = await roleRepo.findOneByOrFail({ name: 'coordinator' });
         const driverRole = await roleRepo.findOneByOrFail({ name: 'driver' });
         const rootRole   = await roleRepo.findOneByOrFail({ name: 'root' });
 
@@ -61,12 +63,13 @@ describe('Endpoints protegidos — 401/403 (e2e)', () => {
         const passwordHash = await hashPassword(password);
         const suffix       = Date.now();
 
-        const [testAdmin, testDriver, testRoot] = await userRepo.save([
+        const [testAdmin, testCoordinator, testDriver, testRoot] = await userRepo.save([
             userRepo.create({ fullName: 'E2E Admin',  username: `e2e_admin_${suffix}`,  passwordHash, roleId: adminRole.id,  active: true, requiresPwdChange: false }),
+            userRepo.create({ fullName: 'E2E Coordinator', username: `e2e_coordinator_${suffix}`, passwordHash, roleId: coordinatorRole.id, active: true, requiresPwdChange: false }),
             userRepo.create({ fullName: 'E2E Driver', username: `e2e_driver_${suffix}`, passwordHash, roleId: driverRole.id, active: true, requiresPwdChange: false }),
             userRepo.create({ fullName: 'E2E Root',   username: `e2e_root_${suffix}`,   passwordHash, roleId: rootRole.id,   active: true, requiresPwdChange: false }),
         ]);
-        createdUserIds.push(testAdmin.id, testDriver.id, testRoot.id);
+        createdUserIds.push(testAdmin.id, testCoordinator.id, testDriver.id, testRoot.id);
 
         const login = async (username: string): Promise<string> => {
             const res = await request(app.getHttpServer())
@@ -76,6 +79,7 @@ describe('Endpoints protegidos — 401/403 (e2e)', () => {
         };
 
         adminToken  = await login(testAdmin.username);
+        coordinatorToken = await login(testCoordinator.username);
         driverToken = await login(testDriver.username);
         rootToken   = await login(testRoot.username);
     });
@@ -104,7 +108,7 @@ describe('Endpoints protegidos — 401/403 (e2e)', () => {
     });
 
     describe('token válido, rol insuficiente', () => {
-        it('driver contra un endpoint @AdminOnly() → 403 INSUFFICIENT_PERMISSIONS', async () => {
+        it('driver contra settings → 403 INSUFFICIENT_PERMISSIONS', async () => {
             const res = await request(app.getHttpServer())
                 .get(`/${apiPrefix}/settings`)
                 .set('Authorization', `Bearer ${driverToken}`);
@@ -114,14 +118,36 @@ describe('Endpoints protegidos — 401/403 (e2e)', () => {
     });
 
     describe('token válido, rol suficiente', () => {
-        it('admin contra un endpoint @AdminOnly() → 200', async () => {
+        it('admin puede consultar settings', async () => {
             const res = await request(app.getHttpServer())
                 .get(`/${apiPrefix}/settings`)
                 .set('Authorization', `Bearer ${adminToken}`);
             expect(res.status).toBe(200);
         });
 
-        it('root bypasea @AdminOnly() aunque su rol no sea admin → 200', async () => {
+        it('coordinator puede consultar y actualizar settings', async () => {
+            const get = await request(app.getHttpServer())
+                .get(`/${apiPrefix}/settings`)
+                .set('Authorization', `Bearer ${coordinatorToken}`);
+            expect(get.status).toBe(200);
+
+            const [{ setting_value: currentValue }] = await dataSource.query(`SELECT setting_value FROM settings WHERE setting_key = 'max_wait_time_min'`);
+            const put = await request(app.getHttpServer())
+                .put(`/${apiPrefix}/settings/max_wait_time_min`)
+                .set('Authorization', `Bearer ${coordinatorToken}`)
+                .send({ value: currentValue });
+            expect(put.status).toBe(200);
+        });
+
+        it('admin cannot update settings', async () => {
+            const res = await request(app.getHttpServer())
+                .put(`/${apiPrefix}/settings/max_wait_time_min`)
+                .set('Authorization', `Bearer ${adminToken}`)
+                .send({ value: '15' });
+            expect(res.status).toBe(403);
+        });
+
+        it('root bypasea la restricción de rol → 200', async () => {
             const res = await request(app.getHttpServer())
                 .get(`/${apiPrefix}/settings`)
                 .set('Authorization', `Bearer ${rootToken}`);
