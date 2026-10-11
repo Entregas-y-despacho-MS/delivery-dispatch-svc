@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.delivery-dispatch.local/messages/schemas/procurement.pickup.cancelled.schema.json",
+  "title": "procurement.pickup.cancelled",
+  "description": "Cancelación de la recogida en proveedor.",
+  "type": "object",
+  "allOf": [{ "$ref": "../envelope.schema.json" }],
+  "properties": {
+    "type": { "const": "procurement.pickup.cancelled" },
+    "source": { "const": "procurement" },
+    "schemaVersion": { "const": 1 },
+    "data": { "$ref": "#/$defs/data" }
+  },
+  "$defs": {
+    "data": {
+      "type": "object",
+      "required": ["purchaseOrderId", "recordVersion", "updatedAt", "cancelledAt"],
+      "properties": {
+        "purchaseOrderId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
+        "recordVersion": { "$ref": "../envelope.schema.json#/$defs/recordVersion" },
+        "updatedAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "cancelledAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
+        "reason": { "type": "string", "maxLength": 500 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "messageId": "0192f7f4-9066-7f6a-9b99-6d2c4f8a0e76",
+  "type": "procurement.pickup.updated",
+  "schemaVersion": 1,
+  "source": "procurement",
+  "occurredAt": "2026-10-10T10:00:00Z",
+  "data": {
+    "purchaseOrderId": "PO-2026-000087",
+    "recordVersion": 2,
+    "updatedAt": "2026-10-10T10:00:00Z",
+    "pickupWindow": { "startsAt": "2026-10-13T13:00:00Z", "endsAt": "2026-10-13T18:00:00Z" },
+    "estimates": { "packages": 7, "weightKg": 52.0, "volumeM3": 0.9 }
+  }
+}

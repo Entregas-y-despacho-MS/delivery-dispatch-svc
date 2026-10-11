@@ -1,0 +1,27 @@
+{
+  "messageId": "0192f6e3-8f55-7e59-8a88-5c1b3e7f9d65",
+  "type": "procurement.pickup.requested",
+  "schemaVersion": 1,
+  "source": "procurement",
+  "occurredAt": "2026-10-09T08:30:00Z",
+  "data": {
+    "purchaseOrderId": "PO-2026-000087",
+    "recordVersion": 1,
+    "updatedAt": "2026-10-09T08:30:00Z",
+    "approvedAt": "2026-10-09T08:25:10Z",
+    "supplier": { "supplierId": "SUP-000214", "name": "Distribuidora Andina S.R.L." },
+    "contact": { "name": "Carlos Mamani", "phone": "+59122334455", "email": "despachos@andina.example.com" },
+    "pickupAddress": {
+      "line": "Av. Panamericana km 3, galpón 7, El Alto",
+      "reference": "Portón azul junto a la balanza",
+      "location": { "latitude": -16.4897, "longitude": -68.1973 }
+    },
+    "pickupWindow": { "startsAt": "2026-10-12T13:00:00Z", "endsAt": "2026-10-12T20:00:00Z" },
+    "warehouseId": "WH-LPZ-01",
+    "products": [
+      { "productId": "SKU-LAP-14", "description": "Laptop 14 pulgadas", "quantity": 10 },
+      { "productId": "SKU-MOUSE-02", "description": "Mouse inalámbrico", "quantity": 20 }
+    ],
+    "estimates": { "packages": 6, "weightKg": 48.5, "volumeM3": 0.8 }
+  }
+}
