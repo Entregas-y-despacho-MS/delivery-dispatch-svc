@@ -184,15 +184,16 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
 
     // ── Qué entra a la bandeja ─────────────────────────────────────────────────
     describe('estados incluidos y excluidos', () => {
-        it('incluye pending y rescheduled de hoy; excluye cualquier otro estado y los reprogramados para otro día', async () => {
+        it('incluye pending, in_planning propuesto y rescheduled de hoy; excluye cualquier otro estado y los reprogramados para otro día', async () => {
             const pending = await insert({ status: 'pending' });
             const pendingNoWindow = await insert({ status: 'pending', days: null });
+            const proposed = await insert({ status: 'in_planning' });
             const rescheduledToday = await insert({ status: 'rescheduled', days: 0 });
             const rescheduledTomorrow = await insert({ status: 'rescheduled', days: 1 });
             const rescheduledYesterday = await insert({ status: 'rescheduled', days: -1 });
             const rescheduledNoDate = await insert({ status: 'rescheduled', days: null });
             const others: number[] = [];
-            for (const status of ['address_review', 'in_planning', 'scheduled', 'assigned', 'out_for_delivery', 'in_transit',
+            for (const status of ['address_review', 'scheduled', 'assigned', 'out_for_delivery', 'in_transit',
                 'delivered', 'not_delivered', 'incident', 'returned', 'pickup_scheduled']) {
                 others.push(await insert({ status }));
             }
@@ -200,7 +201,7 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
             const res = await mine('limit=100');
             expect(res.status).toBe(200);
             const got = ids(res);
-            expect(got).toEqual(expect.arrayContaining([pending, pendingNoWindow, rescheduledToday]));
+            expect(got).toEqual(expect.arrayContaining([pending, pendingNoWindow, proposed, rescheduledToday]));
             for (const excluded of [rescheduledTomorrow, rescheduledYesterday, rescheduledNoDate, ...others]) {
                 expect(got, `dispatch ${excluded}`).not.toContain(excluded);
             }
@@ -223,7 +224,7 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
             const res = await mine(`search=${encodeURIComponent(tag + ' Campos')}`);
             const row = res.body.data.find((r: any) => r.id === id);
             expect(Object.keys(row).sort()).toEqual([
-                'address', 'id', 'locked', 'orderNumber', 'packagesCount', 'priority', 'recipient', 'recipientPhone', 'reservation',
+                'address', 'id', 'inbox', 'locked', 'orderNumber', 'packagesCount', 'priority', 'recipient', 'recipientPhone', 'reservation',
                 'shift', 'slaDueAt', 'status', 'trackingCode', 'volumeM3', 'weightKg', 'windowEnd', 'windowStart', 'zoneId', 'zoneName',
             ].sort());
             expect(row).toMatchObject({
@@ -430,7 +431,7 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
         const rowFor = async (id: number, role: string, name: string) =>
             (await mine(`search=${encodeURIComponent(name)}`, role)).body.data.find((r: any) => r.id === id);
 
-        it('quien reserva ve el pedido propio como in_planning sin bloquear; los demás lo ven bloqueado con nombre y vencimiento', async () => {
+        it('quien reserva ve el pedido propio como reservado sin bloquear; los demás lo ven bloqueado con nombre y vencimiento', async () => {
             const name = `${tag} Reserva1`;
             const a = await insert({ name });
             const b = await insert({ name });
@@ -440,17 +441,17 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
 
             const other = await rowFor(a, 'coordinator2', name);
             expect(other).toMatchObject({
-                status: 'in_planning', locked: true,
+                status: 'pending', inbox: 'reserved', locked: true,
                 reservation: { reservedById: userIds.coordinator, reservedByName: fullNames.coordinator, reservedByMe: false },
             });
             expect(new Date(other.reservation.expiresAt).getTime()).toBeGreaterThan(Date.now() + 14 * 60_000);
             expect(new Date(other.reservation.expiresAt).getTime()).toBeLessThanOrEqual(Date.now() + 15 * 60_000 + 5_000);
 
             const own = await rowFor(a, 'coordinator', name);
-            expect(own).toMatchObject({ status: 'in_planning', locked: false, reservation: { reservedById: userIds.coordinator, reservedByMe: true } });
+            expect(own).toMatchObject({ status: 'pending', inbox: 'reserved', locked: false, reservation: { reservedById: userIds.coordinator, reservedByMe: true } });
 
             const supervisor = await rowFor(a, 'supervisor', name);
-            expect(supervisor).toMatchObject({ status: 'in_planning', locked: true });
+            expect(supervisor).toMatchObject({ status: 'pending', inbox: 'reserved', locked: true });
         });
 
         it('los pedidos reservados siguen listados; el que no se reservó queda libre', async () => {
@@ -460,7 +461,7 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
             await reserve([reserved]);
             const res = await mine(`search=${encodeURIComponent(name)}`, 'coordinator2');
             expect(ids(res).sort((x, y) => x - y)).toEqual([reserved, free].sort((x, y) => x - y));
-            expect(res.body.data.find((r: any) => r.id === free)).toMatchObject({ status: 'pending', locked: false, reservation: null });
+            expect(res.body.data.find((r: any) => r.id === free)).toMatchObject({ status: 'pending', inbox: null, locked: false, reservation: null });
         });
 
         it('otro coordinador no puede reservar un pedido ajeno: 409 y nada del lote queda reservado', async () => {
@@ -522,7 +523,7 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
             expect(partial.status).toBe(200);
             expect(partial.body.released).toBe(1);
             expect(await rowFor(a, 'coordinator2', name)).toMatchObject({ status: 'pending', locked: false, reservation: null });
-            expect(await rowFor(b, 'coordinator2', name)).toMatchObject({ status: 'in_planning', locked: true });
+            expect(await rowFor(b, 'coordinator2', name)).toMatchObject({ status: 'pending', inbox: 'reserved', locked: true });
 
             const all = await release();
             expect(all.body.released).toBe(1);
@@ -615,7 +616,7 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
             await dataSource.query(`UPDATE dispatch_reservations SET expires_at = NOW() - INTERVAL '1 second' WHERE dispatch_id = $1`, [id]);
             expect((await reserve([id], 'coordinator2')).status).toBe(201);
             const row = (await mine(`search=${encodeURIComponent(name)}`, 'coordinator')).body.data[0];
-            expect(row).toMatchObject({ status: 'in_planning', locked: true, reservation: { reservedById: userIds.coordinator2, reservedByName: fullNames.coordinator2 } });
+            expect(row).toMatchObject({ status: 'pending', inbox: 'reserved', locked: true, reservation: { reservedById: userIds.coordinator2, reservedByName: fullNames.coordinator2 } });
         });
 
         it('el tiempo de vida sale de order_reservation_ttl_minutes (15 por defecto)', async () => {
@@ -661,6 +662,127 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
             await dataSource.query(`DELETE FROM dispatches WHERE dispatch_id = $1`, [id]);
             const [{ count }] = await dataSource.query(`SELECT COUNT(*)::int AS count FROM dispatch_reservations WHERE dispatch_id = $1`, [id]);
             expect(count).toBe(0);
+        });
+    });
+
+    // ── in_planning propuesto frente a reservado (descripción vigente de ST-48.2, D-08) ──
+    // El campo `inbox` indica el origen en la bandeja: 'proposed' (in_planning sin reserva vigente),
+    // 'reserved' (reserva vigente en dispatch_reservations) o null (pedido libre).
+    describe('in_planning propuesto frente a reservado', () => {
+        const rowFor = async (id: number, role: string, name: string) =>
+            (await mine(`search=${encodeURIComponent(name)}`, role)).body.data.find((r: any) => r.id === id);
+        const statusInDb = async (id: number): Promise<string> =>
+            (await dataSource.query(
+                `SELECT s.name FROM dispatches d JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id WHERE d.dispatch_id = $1`,
+                [id],
+            ))[0].name;
+
+        it('un in_planning propuesto (sin reserva) aparece en la bandeja, libre y marcado como propuesto', async () => {
+            const name = `${tag} Prop1`;
+            const proposed = await insert({ name, status: 'in_planning' });
+            const row = await rowFor(proposed, 'coordinator', name);
+            expect(row).toMatchObject({ status: 'in_planning', inbox: 'proposed', locked: false, reservation: null });
+        });
+
+        it('un pedido libre (pending) no es propuesto ni reservado', async () => {
+            const name = `${tag} Prop2`;
+            const free = await insert({ name });
+            expect(await rowFor(free, 'coordinator', name)).toMatchObject({ status: 'pending', inbox: null, locked: false, reservation: null });
+        });
+
+        it('un pedido reservado conserva su estado real y se marca como reservado (la reserva no cambia el estado)', async () => {
+            const name = `${tag} Prop3`;
+            const id = await insert({ name });
+            expect((await reserve([id])).status).toBe(201);
+
+            expect(await rowFor(id, 'coordinator2', name)).toMatchObject({
+                status: 'pending', inbox: 'reserved', locked: true, reservation: { reservedById: userIds.coordinator, reservedByMe: false },
+            });
+            expect(await rowFor(id, 'coordinator', name)).toMatchObject({ status: 'pending', inbox: 'reserved', locked: false });
+            expect(await statusInDb(id)).toBe('pending');
+        });
+
+        it('un in_planning propuesto se puede reservar: pasa de propuesto a reservado y sigue en in_planning', async () => {
+            const name = `${tag} Prop4`;
+            const proposed = await insert({ name, status: 'in_planning' });
+            const res = await reserve([proposed]);
+            expect(res.status).toBe(201);
+            expect(res.body.reserved).toBe(1);
+
+            expect(await rowFor(proposed, 'coordinator2', name)).toMatchObject({
+                status: 'in_planning', inbox: 'reserved', locked: true, reservation: { reservedById: userIds.coordinator },
+            });
+            expect(await rowFor(proposed, 'coordinator', name)).toMatchObject({ status: 'in_planning', inbox: 'reserved', locked: false });
+            expect(await statusInDb(proposed)).toBe('in_planning');
+        });
+
+        it('al liberar o vencer la reserva, el in_planning vuelve a verse como propuesto', async () => {
+            const name = `${tag} Prop5`;
+            const released = await insert({ name, status: 'in_planning' });
+            const expired = await insert({ name, status: 'in_planning' });
+            await reserve([released, expired]);
+
+            await release({ dispatchIds: [released] });
+            await dataSource.query(`UPDATE dispatch_reservations SET expires_at = NOW() - INTERVAL '1 second' WHERE dispatch_id = $1`, [expired]);
+
+            for (const id of [released, expired]) {
+                expect(await rowFor(id, 'coordinator2', name), `dispatch ${id}`)
+                    .toMatchObject({ status: 'in_planning', inbox: 'proposed', locked: false, reservation: null });
+            }
+        });
+
+        it('reservar, renovar y liberar nunca modifican el estado del despacho (D-08)', async () => {
+            const name = `${tag} Prop6`;
+            const pending = await insert({ name });
+            const proposed = await insert({ name, status: 'in_planning' });
+            const rescheduled = await insert({ name, status: 'rescheduled', days: 0 });
+            const before = await Promise.all([pending, proposed, rescheduled].map(statusInDb));
+
+            expect((await reserve([pending, proposed, rescheduled])).status).toBe(201);
+            expect((await renew()).body.renewed).toBe(3);
+            expect(await Promise.all([pending, proposed, rescheduled].map(statusInDb))).toEqual(before);
+
+            expect((await release()).body.released).toBe(3);
+            expect(await Promise.all([pending, proposed, rescheduled].map(statusInDb))).toEqual(before);
+        });
+
+        it('los in_planning propuestos respetan filtros, total y orden', async () => {
+            const name = `${tag} Prop7`;
+            const proposedUrgent = await insert({ name, status: 'in_planning', priority: 'urgent', zone: zones[0], at: '09:00' });
+            const proposedNormal = await insert({ name, status: 'in_planning', priority: 'normal', zone: zones[1], at: '15:00' });
+            const pending = await insert({ name, priority: 'normal', zone: zones[0], at: '09:00' });
+            const q = `search=${encodeURIComponent(name)}`;
+
+            const all = await mine(q);
+            expect(all.body.total).toBe(3);
+            expect(ids(all)[0]).toBe(proposedUrgent); // urgentes primero
+
+            expect(ids(await mine(`${q}&priority=urgent`))).toEqual([proposedUrgent]);
+            expect(ids(await mine(`${q}&delivery_zone_id=${zones[1]}`))).toEqual([proposedNormal]);
+            expect(ids(await mine(`${q}&shift=afternoon`))).toEqual([proposedNormal]);
+            expect(ids(await mine(`${q}&shift=morning`)).sort((x, y) => x - y)).toEqual([proposedUrgent, pending].sort((x, y) => x - y));
+        });
+
+        it('pagina propuestos, reservados y libres sin repetir ni saltar pedidos', async () => {
+            const name = `${tag} Prop8`;
+            const created = [
+                await insert({ name, status: 'in_planning' }),
+                await insert({ name, status: 'in_planning' }),
+                await insert({ name }),
+                await insert({ name }),
+                await insert({ name, status: 'rescheduled', days: 0 }),
+            ];
+            await reserve([created[1], created[3]]);
+            const q = `search=${encodeURIComponent(name)}&limit=2`;
+
+            const seen: number[] = [];
+            for (const page of [1, 2, 3]) {
+                const res = await mine(`${q}&page=${page}`);
+                expect(res.body.total).toBe(5);
+                seen.push(...ids(res));
+            }
+            expect(seen.sort((x, y) => x - y)).toEqual([...created].sort((x, y) => x - y));
+            expect((await mine(`${q}&page=4`)).body.data).toEqual([]);
         });
     });
 });
