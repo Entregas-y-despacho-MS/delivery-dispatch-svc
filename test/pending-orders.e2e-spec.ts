@@ -224,7 +224,7 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
             const res = await mine(`search=${encodeURIComponent(tag + ' Campos')}`);
             const row = res.body.data.find((r: any) => r.id === id);
             expect(Object.keys(row).sort()).toEqual([
-                'address', 'id', 'locked', 'orderNumber', 'packagesCount', 'priority', 'recipient', 'recipientPhone', 'reservation',
+                'address', 'id', 'inbox', 'locked', 'orderNumber', 'packagesCount', 'priority', 'recipient', 'recipientPhone', 'reservation',
                 'shift', 'slaDueAt', 'status', 'trackingCode', 'volumeM3', 'weightKg', 'windowEnd', 'windowStart', 'zoneId', 'zoneName',
             ].sort());
             expect(row).toMatchObject({
@@ -431,7 +431,7 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
         const rowFor = async (id: number, role: string, name: string) =>
             (await mine(`search=${encodeURIComponent(name)}`, role)).body.data.find((r: any) => r.id === id);
 
-        it('quien reserva ve el pedido propio como in_planning sin bloquear; los demás lo ven bloqueado con nombre y vencimiento', async () => {
+        it('quien reserva ve el pedido propio como reservado sin bloquear; los demás lo ven bloqueado con nombre y vencimiento', async () => {
             const name = `${tag} Reserva1`;
             const a = await insert({ name });
             const b = await insert({ name });
@@ -441,17 +441,17 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
 
             const other = await rowFor(a, 'coordinator2', name);
             expect(other).toMatchObject({
-                status: 'in_planning', locked: true,
+                status: 'pending', inbox: 'reserved', locked: true,
                 reservation: { reservedById: userIds.coordinator, reservedByName: fullNames.coordinator, reservedByMe: false },
             });
             expect(new Date(other.reservation.expiresAt).getTime()).toBeGreaterThan(Date.now() + 14 * 60_000);
             expect(new Date(other.reservation.expiresAt).getTime()).toBeLessThanOrEqual(Date.now() + 15 * 60_000 + 5_000);
 
             const own = await rowFor(a, 'coordinator', name);
-            expect(own).toMatchObject({ status: 'in_planning', locked: false, reservation: { reservedById: userIds.coordinator, reservedByMe: true } });
+            expect(own).toMatchObject({ status: 'pending', inbox: 'reserved', locked: false, reservation: { reservedById: userIds.coordinator, reservedByMe: true } });
 
             const supervisor = await rowFor(a, 'supervisor', name);
-            expect(supervisor).toMatchObject({ status: 'in_planning', locked: true });
+            expect(supervisor).toMatchObject({ status: 'pending', inbox: 'reserved', locked: true });
         });
 
         it('los pedidos reservados siguen listados; el que no se reservó queda libre', async () => {
@@ -461,7 +461,7 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
             await reserve([reserved]);
             const res = await mine(`search=${encodeURIComponent(name)}`, 'coordinator2');
             expect(ids(res).sort((x, y) => x - y)).toEqual([reserved, free].sort((x, y) => x - y));
-            expect(res.body.data.find((r: any) => r.id === free)).toMatchObject({ status: 'pending', locked: false, reservation: null });
+            expect(res.body.data.find((r: any) => r.id === free)).toMatchObject({ status: 'pending', inbox: null, locked: false, reservation: null });
         });
 
         it('otro coordinador no puede reservar un pedido ajeno: 409 y nada del lote queda reservado', async () => {
@@ -523,7 +523,7 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
             expect(partial.status).toBe(200);
             expect(partial.body.released).toBe(1);
             expect(await rowFor(a, 'coordinator2', name)).toMatchObject({ status: 'pending', locked: false, reservation: null });
-            expect(await rowFor(b, 'coordinator2', name)).toMatchObject({ status: 'in_planning', locked: true });
+            expect(await rowFor(b, 'coordinator2', name)).toMatchObject({ status: 'pending', inbox: 'reserved', locked: true });
 
             const all = await release();
             expect(all.body.released).toBe(1);
@@ -616,7 +616,7 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
             await dataSource.query(`UPDATE dispatch_reservations SET expires_at = NOW() - INTERVAL '1 second' WHERE dispatch_id = $1`, [id]);
             expect((await reserve([id], 'coordinator2')).status).toBe(201);
             const row = (await mine(`search=${encodeURIComponent(name)}`, 'coordinator')).body.data[0];
-            expect(row).toMatchObject({ status: 'in_planning', locked: true, reservation: { reservedById: userIds.coordinator2, reservedByName: fullNames.coordinator2 } });
+            expect(row).toMatchObject({ status: 'pending', inbox: 'reserved', locked: true, reservation: { reservedById: userIds.coordinator2, reservedByName: fullNames.coordinator2 } });
         });
 
         it('el tiempo de vida sale de order_reservation_ttl_minutes (15 por defecto)', async () => {

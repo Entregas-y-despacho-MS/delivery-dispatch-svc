@@ -5,6 +5,7 @@ import { BUSINESS_TIME_ZONE, INBOX_ELIGIBILITY_SQL } from '../../dispatches/util
 import { FindPendingOrdersParamsDto, PendingOrderSortBy } from '../dto/find-pending-orders-params.dto.js';
 import { FindPendingOrdersResponseDto, PendingOrderDto } from '../dto/pending-order.dto.js';
 import { escapeLike } from '../../../../shared/utils/like.util.js';
+import { DispatchStatusEnum } from '../../../../shared/enums/dispatch-status.enum.js';
 
 const LOCAL_START = `(d.scheduled_window_start AT TIME ZONE '${BUSINESS_TIME_ZONE}')`;
 const SHIFT_SQL = `CASE WHEN d.scheduled_window_start IS NULL THEN NULL
@@ -106,8 +107,9 @@ export class PendingOrdersService {
             windowStart: row.window_start,
             windowEnd: row.window_end,
             priority: row.priority,
-            // While a live reservation exists the order is shown as in planning, whoever holds it.
-            status: reserved ? 'in_planning' : row.status,
+            // The real dispatch status: a soft reservation only protects the edit, it never changes the status (D-08).
+            status: row.status,
+            inbox: reserved ? 'reserved' : row.status === DispatchStatusEnum.IN_PLANNING ? 'proposed' : null,
             slaDueAt: row.sla_due_at,
             packagesCount: Number(row.packages_count),
             weightKg: Number(row.weight_kg),

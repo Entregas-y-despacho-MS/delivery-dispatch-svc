@@ -52,8 +52,14 @@ export class PendingOrderDto {
     @ApiProperty({ enum: ['urgent', 'normal'], description: 'Order priority' })
     priority!: string;
 
-    @ApiProperty({ example: 'pending', description: 'Dispatch status. Shown as `in_planning` while a live reservation exists, whoever holds it' })
+    @ApiProperty({ example: 'pending', description: 'Real dispatch status. A soft reservation never changes it (D-08)' })
     status!: string;
+
+    @ApiProperty({
+        type: String, nullable: true, enum: ['proposed', 'reserved'],
+        description: '`reserved`: a coordinator holds a live reservation (dispatch_reservations). `proposed`: `in_planning` set up by the generator with no live reservation. `null`: free order',
+    })
+    inbox!: 'proposed' | 'reserved' | null;
 
     @ApiProperty({ type: String, format: 'date-time', nullable: true, description: 'SLA deadline: creation time plus the target time of the service level. null when the order has no service level' })
     slaDueAt!: Date | null;
