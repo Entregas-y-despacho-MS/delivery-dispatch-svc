@@ -1,22 +1,27 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource, type EntityManager } from 'typeorm';
+import { DataSource } from 'typeorm';
 import type { MessageEnvelope } from '../../../../plugins/messaging/envelope/message-envelope.js';
-
-export type TransactionalMessageResult = 'receipt-committed' | 'duplicate';
+import {
+    InboundMessageTransaction,
+    type TransactionalMessageResult,
+    type TransactionOptions,
+} from '../../../../plugins/messaging/inbound-message-transaction.port.js';
 
 /**
  * Shared unit of work for ERP consumers. It serializes messages for the same sales order across
  * backend instances and commits the business write together with the processed receipt.
  */
 @Injectable()
-export class InboundMessageTransactionService {
-    constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+export class InboundMessageTransactionService extends InboundMessageTransaction {
+    constructor(@InjectDataSource() private readonly dataSource: DataSource) {
+        super();
+    }
 
     async process(
         envelope: MessageEnvelope,
         salesOrderId: string,
-        handle: (manager: EntityManager) => Promise<void>,
+        handle: (options: TransactionOptions) => Promise<void>,
     ): Promise<TransactionalMessageResult> {
         return await this.dataSource.transaction<TransactionalMessageResult>(async (manager) => {
             // Lock the message first and then the order, in the same order in every consumer.
@@ -34,7 +39,7 @@ export class InboundMessageTransactionService {
             );
             if (existing[0]?.status === 'processed') return 'duplicate';
 
-            await handle(manager);
+            await handle({ manager });
             await manager.query(
                 `INSERT INTO inbound_messages (message_id, status, type, source, error_detail)
                  VALUES ($1, 'processed', $2, $3, NULL)

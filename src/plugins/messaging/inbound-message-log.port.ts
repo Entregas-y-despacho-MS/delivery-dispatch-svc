@@ -14,7 +14,7 @@ export interface InboundMessageRecord {
  * Receipt log of incoming messages; the message UUID is the idempotency key.
  *
  * Legacy handlers write their receipt after the handler finishes. Consumers that mutate business
- * data use InboundMessageTransactionService instead and return `receipt-committed`, so their
+ * data use InboundMessageTransaction instead and return `receipt-committed`, so their
  * receipt and business changes commit together. All handlers remain idempotent by recordVersion.
  */
 export abstract class InboundMessageLog {

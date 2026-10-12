@@ -6,6 +6,7 @@ import { MessageBus } from '../message-bus.port.js';
 import { messageValidatorProvider } from '../messaging.providers.js';
 import { MemoryInboundMessageLogAdapter } from './memory-inbound-message-log.adapter.js';
 import { MemoryInboundMessageRejectionAdapter } from './memory-inbound-message-rejection.adapter.js';
+import { MemoryInboundMessageTransactionAdapter } from './memory-inbound-message-transaction.adapter.js';
 import { MemoryMessageBusAdapter } from './memory-message-bus.adapter.js';
 
 @Module({
@@ -13,6 +14,7 @@ import { MemoryMessageBusAdapter } from './memory-message-bus.adapter.js';
         messageValidatorProvider,
         MemoryInboundMessageLogAdapter,
         MemoryInboundMessageRejectionAdapter,
+        MemoryInboundMessageTransactionAdapter,
         { provide: InboundMessageLog, useExisting: MemoryInboundMessageLogAdapter },
         { provide: InboundMessageRejection, useExisting: MemoryInboundMessageRejectionAdapter },
         MemoryMessageBusAdapter,
@@ -20,6 +22,8 @@ import { MemoryMessageBusAdapter } from './memory-message-bus.adapter.js';
     ],
     // The receipts stay private to this module (the tests reach them through the adapter class), so
     // they never compete with the database `InboundMessageLog` of InboundMessagesModule.
-    exports: [MessageBus, MessageValidator, MemoryMessageBusAdapter, MemoryInboundMessageLogAdapter, MemoryInboundMessageRejectionAdapter],
+    // In the application, business handlers still use the database transaction even when the
+    // broker is in memory. MemoryInboundMessageTransactionAdapter is exported for isolated runs.
+    exports: [MessageBus, MessageValidator, MemoryMessageBusAdapter, MemoryInboundMessageLogAdapter, MemoryInboundMessageRejectionAdapter, MemoryInboundMessageTransactionAdapter],
 })
 export class MemoryMessagingModule {}
