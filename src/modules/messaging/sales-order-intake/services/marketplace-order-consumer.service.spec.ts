@@ -12,9 +12,13 @@ import {
 import { MemoryInboundMessageLogAdapter } from '../../../../plugins/messaging/memory/memory-inbound-message-log.adapter.js';
 import { MemoryMessageBusAdapter } from '../../../../plugins/messaging/memory/memory-message-bus.adapter.js';
 import { MemoryOrderSyncStateAdapter } from '../../sales-order-sync/memory/memory-order-sync-state.adapter.js';
+import { MemoryConsolidationRecord } from '../memory/memory-consolidation-record.js';
+import { MemoryDispatchGenerator } from '../memory/memory-dispatch-generator.js';
 import { MemoryPendingSalesOrderStore } from '../memory/memory-pending-sales-order.store.js';
+import { MemoryShipmentBlocksReader } from '../memory/memory-shipment-blocks.reader.js';
 import { MarketplaceOrderRepository } from '../repositories/marketplace-order.repository.js';
 import { MARKETPLACE_ORDER_TOPICS, MarketplaceOrderConsumer } from './marketplace-order-consumer.service.js';
+import { OrderConsolidator } from './order-consolidator.service.js';
 
 const CONTRACTS_DIR = resolve(process.cwd(), 'contracts/messages');
 const ORDER = 'SO-2026-000123';
@@ -59,18 +63,41 @@ describe('MarketplaceOrderConsumer', () => {
     let syncStates: MemoryOrderSyncStateAdapter;
     let pending: MemoryPendingSalesOrderStore;
     let orders: MarketplaceOrderRepository;
+    let shipments: MemoryShipmentBlocksReader;
+    let generator: MemoryDispatchGenerator;
+    let consolidator: OrderConsolidator;
+
+    /** What the Almacén consumer (ST-72.1) leaves behind when its `ready` was applied. */
+    const almacenArrived = async (overrides: { isReady?: boolean } = {}) => {
+        await syncStates.save({
+            salesOrderId: ORDER,
+            source: 'inventory',
+            lastRecordVersion: 1,
+            baseReceived: true,
+            cancelledAt: null,
+            cancelledVersion: null,
+        });
+        shipments.set(ORDER, {
+            warehouseId: 'WH-LPZ-01',
+            packages: [{ packageId: 'PKG-000123-1', lengthCm: 40, widthCm: 30, heightCm: 25, grossWeightKg: 6.4 }],
+            ...overrides,
+        });
+    };
 
     beforeEach(async () => {
         syncStates = new MemoryOrderSyncStateAdapter();
         pending = new MemoryPendingSalesOrderStore();
         orders = new MarketplaceOrderRepository(syncStates, pending);
+        shipments = new MemoryShipmentBlocksReader();
+        generator = new MemoryDispatchGenerator();
+        consolidator = new OrderConsolidator(syncStates, orders, shipments, generator, new MemoryConsolidationRecord());
         bus = new MemoryMessageBusAdapter(
             MessageValidator.fromDirectory(CONTRACTS_DIR),
             new MemoryInboundMessageLogAdapter(),
         );
         transaction = new FakeInboundMessageTransaction();
 
-        await new MarketplaceOrderConsumer(bus, transaction, orders).onModuleInit();
+        await new MarketplaceOrderConsumer(bus, transaction, orders, consolidator).onModuleInit();
     });
 
     it('stores the order of a valid confirmed message', async () => {
@@ -239,6 +266,90 @@ describe('MarketplaceOrderConsumer', () => {
         expect((await orders.find(ORDER))?.baseReceived).toBe(true);
     });
 
+    describe('join with Almacén', () => {
+        it('does not create a dispatch while Almacén has not arrived', async () => {
+            await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.confirmed, message(MARKETPLACE_ORDER_TOPICS.confirmed));
+
+            expect(generator.created).toHaveLength(0);
+            expect((await orders.find(ORDER))?.baseReceived).toBe(true);
+        });
+
+        it('creates the dispatch when the confirmed completes an order that Almacén already sent', async () => {
+            await almacenArrived();
+
+            await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.confirmed, message(MARKETPLACE_ORDER_TOPICS.confirmed));
+
+            expect(generator.created).toHaveLength(1);
+            expect(generator.created[0].order).toMatchObject({
+                salesOrderId: ORDER,
+                confirmedAt: '2026-10-07T13:39:42Z',
+                warehouseId: 'WH-LPZ-01',
+            });
+        });
+
+        it('does not create it twice when the same message is delivered again', async () => {
+            await almacenArrived();
+            const confirmed = message(MARKETPLACE_ORDER_TOPICS.confirmed);
+
+            await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.confirmed, confirmed);
+            await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.confirmed, confirmed);
+
+            expect(generator.created).toHaveLength(1);
+        });
+
+        it('does not create it twice when an update arrives after the order was consolidated', async () => {
+            await almacenArrived();
+            await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.confirmed, message(MARKETPLACE_ORDER_TOPICS.confirmed));
+
+            await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.updated, message(MARKETPLACE_ORDER_TOPICS.updated));
+
+            expect(generator.created).toHaveLength(1);
+        });
+
+        it('does not create a dispatch for an order that Marketplace cancelled', async () => {
+            await almacenArrived();
+            await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.cancelled, message(MARKETPLACE_ORDER_TOPICS.cancelled));
+
+            await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.confirmed, message(MARKETPLACE_ORDER_TOPICS.confirmed));
+
+            expect(generator.created).toHaveLength(0);
+        });
+
+        it('waits for a shipment that is not ready', async () => {
+            await almacenArrived({ isReady: false });
+
+            await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.confirmed, message(MARKETPLACE_ORDER_TOPICS.confirmed));
+
+            expect(generator.created).toHaveLength(0);
+        });
+
+        it('creates it when the base arrives after an update (any order of arrival)', async () => {
+            await almacenArrived();
+            await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.updated, message(MARKETPLACE_ORDER_TOPICS.updated));
+            expect(generator.created).toHaveLength(0);
+
+            await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.confirmed, message(MARKETPLACE_ORDER_TOPICS.confirmed));
+
+            expect(generator.created).toHaveLength(1);
+            // The address of the update is newer and goes into the dispatch.
+            expect(generator.created[0].order.deliveryAddress.line).toBe('Calle 21 de Calacoto 8790, casa 12');
+        });
+
+        it('fails the handler, and leaves no receipt, when the dispatch cannot be created', async () => {
+            await almacenArrived();
+            generator.createFromConsolidated = async () => {
+                throw new Error('unique violation');
+            };
+            const confirmed = message(MARKETPLACE_ORDER_TOPICS.confirmed);
+
+            const outcome = await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.confirmed, confirmed);
+
+            expect(outcome).toBeNull();
+            expect(bus.handlerErrors).toHaveLength(1);
+            expect(transaction.processed.has(confirmed.messageId)).toBe(false);
+        });
+    });
+
     it('subscribes to the three Marketplace topics and to no other', async () => {
         const other = new MemoryMessageBusAdapter(
             MessageValidator.fromDirectory(CONTRACTS_DIR),
@@ -251,7 +362,7 @@ describe('MarketplaceOrderConsumer', () => {
             await original(topic, handler);
         };
 
-        await new MarketplaceOrderConsumer(other, transaction, orders).onModuleInit();
+        await new MarketplaceOrderConsumer(other, transaction, orders, consolidator).onModuleInit();
 
         expect(subscribed.sort()).toEqual([
             'marketplace.sales_order.cancelled',

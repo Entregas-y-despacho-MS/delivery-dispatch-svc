@@ -10,6 +10,7 @@ import type {
     UpdatedOrderData,
 } from '../domain/marketplace-order.types.js';
 import { MarketplaceOrderRepository } from '../repositories/marketplace-order.repository.js';
+import { OrderConsolidator } from './order-consolidator.service.js';
 
 export const MARKETPLACE_ORDER_TOPICS = {
     confirmed: 'marketplace.sales_order.confirmed',
@@ -25,8 +26,9 @@ export const MARKETPLACE_ORDER_TOPICS = {
  * Marketplace state of its order inside `InboundMessageTransaction`: the state and the `processed`
  * receipt commit together, and a repeated message does not run the handler again.
  *
- * Joining with Almacén (`tryConsolidate`) and the changes over an existing dispatch come in the
- * next stages of the subtask.
+ * After saving, it asks `OrderConsolidator` to join the order with Almacén; that happens inside the
+ * same transaction, so the dispatch (if it is created) commits with the state and the receipt. The
+ * changes over an existing dispatch come in the next stage of the subtask.
  */
 @Injectable()
 export class MarketplaceOrderConsumer implements OnModuleInit {
@@ -36,6 +38,7 @@ export class MarketplaceOrderConsumer implements OnModuleInit {
         private readonly bus: MessageBus,
         private readonly transaction: InboundMessageTransaction,
         private readonly orders: MarketplaceOrderRepository,
+        private readonly consolidator: OrderConsolidator,
     ) {}
 
     async onModuleInit(): Promise<void> {
@@ -62,6 +65,8 @@ export class MarketplaceOrderConsumer implements OnModuleInit {
             // An ignored message changes nothing: only its receipt is committed.
             if (applied.outcome === 'applied' || applied.outcome === 'base_completed_late') {
                 await this.orders.save(applied.state, options);
+                // Joins with Almacén in this same transaction; it does nothing while a base is missing.
+                await this.consolidator.tryConsolidate(salesOrderId, options);
             }
         });
 
