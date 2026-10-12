@@ -8,6 +8,8 @@ import { TypeOrmPendingShipmentStore } from './repositories/typeorm-pending-ship
 import { TypeOrmWarehouseCodeLookup } from './repositories/typeorm-warehouse-code.lookup.js';
 import { ShipmentOrderRepository } from './repositories/shipment-order.repository.js';
 import { SalesOrderSyncModule } from '../sales-order-sync/sales-order-sync.module.js';
+import { ShipmentBlocksReader } from '../sales-order-intake/ports/shipment-blocks.reader.js';
+import { TypeOrmShipmentBlocksReader } from './repositories/typeorm-shipment-blocks.reader.js';
 
 @Module({
     imports: [TypeOrmModule.forFeature([PendingShipment, Warehouse]), SalesOrderSyncModule],
@@ -17,7 +19,9 @@ import { SalesOrderSyncModule } from '../sales-order-sync/sales-order-sync.modul
         TypeOrmWarehouseCodeLookup,
         { provide: WarehouseCodeLookup, useExisting: TypeOrmWarehouseCodeLookup },
         ShipmentOrderRepository,
+        TypeOrmShipmentBlocksReader,
+        { provide: ShipmentBlocksReader, useExisting: TypeOrmShipmentBlocksReader },
     ],
-    exports: [PendingShipmentStore, WarehouseCodeLookup, ShipmentOrderRepository],
+    exports: [PendingShipmentStore, WarehouseCodeLookup, ShipmentOrderRepository, ShipmentBlocksReader],
 })
 export class ShipmentIntakeModule {}
