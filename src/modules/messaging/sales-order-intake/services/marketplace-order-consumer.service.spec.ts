@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MessageEnvelope } from '../../../../plugins/messaging/envelope/message-envelope.js';
 import { MessageValidator } from '../../../../plugins/messaging/envelope/message-validator.js';
 import { generateMessageId } from '../../../../plugins/messaging/envelope/uuid-v7.js';
@@ -14,10 +14,12 @@ import { MemoryMessageBusAdapter } from '../../../../plugins/messaging/memory/me
 import { MemoryOrderSyncStateAdapter } from '../../sales-order-sync/memory/memory-order-sync-state.adapter.js';
 import { MemoryConsolidationRecord } from '../memory/memory-consolidation-record.js';
 import { MemoryDispatchGenerator } from '../memory/memory-dispatch-generator.js';
+import { MemoryExistingDispatchChanges } from '../memory/memory-existing-dispatch-changes.js';
 import { MemoryPendingSalesOrderStore } from '../memory/memory-pending-sales-order.store.js';
 import { MemoryShipmentBlocksReader } from '../memory/memory-shipment-blocks.reader.js';
 import { MarketplaceOrderRepository } from '../repositories/marketplace-order.repository.js';
 import { MARKETPLACE_ORDER_TOPICS, MarketplaceOrderConsumer } from './marketplace-order-consumer.service.js';
+import { DispatchChangeEvents } from './dispatch-change-events.service.js';
 import { OrderConsolidator } from './order-consolidator.service.js';
 
 const CONTRACTS_DIR = resolve(process.cwd(), 'contracts/messages');
@@ -66,6 +68,9 @@ describe('MarketplaceOrderConsumer', () => {
     let shipments: MemoryShipmentBlocksReader;
     let generator: MemoryDispatchGenerator;
     let consolidator: OrderConsolidator;
+    let dispatchChanges: MemoryExistingDispatchChanges;
+    let emit: ReturnType<typeof vi.fn>;
+    let events: DispatchChangeEvents;
 
     /** What the Almacén consumer (ST-72.1) leaves behind when its `ready` was applied. */
     const almacenArrived = async (overrides: { isReady?: boolean } = {}) => {
@@ -91,13 +96,23 @@ describe('MarketplaceOrderConsumer', () => {
         shipments = new MemoryShipmentBlocksReader();
         generator = new MemoryDispatchGenerator();
         consolidator = new OrderConsolidator(syncStates, orders, shipments, generator, new MemoryConsolidationRecord());
+        dispatchChanges = new MemoryExistingDispatchChanges();
+        emit = vi.fn();
+        events = new DispatchChangeEvents({ emit } as never);
         bus = new MemoryMessageBusAdapter(
             MessageValidator.fromDirectory(CONTRACTS_DIR),
             new MemoryInboundMessageLogAdapter(),
         );
         transaction = new FakeInboundMessageTransaction();
 
-        await new MarketplaceOrderConsumer(bus, transaction, orders, consolidator).onModuleInit();
+        await new MarketplaceOrderConsumer(
+            bus,
+            transaction,
+            orders,
+            consolidator,
+            dispatchChanges,
+            events,
+        ).onModuleInit();
     });
 
     it('stores the order of a valid confirmed message', async () => {
@@ -350,6 +365,106 @@ describe('MarketplaceOrderConsumer', () => {
         });
     });
 
+    describe('changes over an order that already is a dispatch', () => {
+        /** Gets the order consolidated and registers the dispatch the generator "created". */
+        const consolidatedAs = async (snapshot: { status?: string; routeBatchId?: number | null } = {}) => {
+            await almacenArrived();
+            await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.confirmed, message(MARKETPLACE_ORDER_TOPICS.confirmed));
+            dispatchChanges.add(ORDER, { dispatchId: 1, ...snapshot });
+        };
+
+        it('updates the address of a pending dispatch and raises no event', async () => {
+            await consolidatedAs({ status: 'pending' });
+
+            await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.updated, message(MARKETPLACE_ORDER_TOPICS.updated));
+
+            expect(dispatchChanges.get(ORDER)).toMatchObject({
+                status: 'pending',
+                deliveryAddress: 'Calle 21 de Calacoto 8790, casa 12',
+                deliveryReference: 'Condominio Las Palmas, segunda garita',
+            });
+            expect(emit).not.toHaveBeenCalled();
+        });
+
+        it('takes an in_planning dispatch out of its batch when the address changes', async () => {
+            await consolidatedAs({ status: 'in_planning', routeBatchId: 4 });
+
+            await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.updated, message(MARKETPLACE_ORDER_TOPICS.updated));
+
+            expect(dispatchChanges.get(ORDER)).toMatchObject({ status: 'pending', routeBatchId: null });
+            expect(dispatchChanges.batchVersionBumps).toEqual([4]);
+        });
+
+        it('does not touch a scheduled dispatch and tells the coordinators once, after the commit', async () => {
+            await consolidatedAs({ status: 'scheduled', routeBatchId: 4 });
+
+            await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.updated, message(MARKETPLACE_ORDER_TOPICS.updated));
+
+            expect(dispatchChanges.get(ORDER)).toMatchObject({ status: 'scheduled', deliveryAddress: 'Av. Arce 2345' });
+            expect(emit).toHaveBeenCalledTimes(1);
+            expect(emit).toHaveBeenCalledWith('dispatch.change_requires_attention', {
+                dispatchId: 1,
+                source: 'marketplace',
+                changeType: 'order_changed',
+                receivedAt: '2026-10-08T09:15:00Z',
+            });
+        });
+
+        it('cancels a pending dispatch when Marketplace cancels the order', async () => {
+            await consolidatedAs({ status: 'pending' });
+
+            await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.cancelled, message(MARKETPLACE_ORDER_TOPICS.cancelled));
+
+            expect(dispatchChanges.get(ORDER)?.status).toBe('cancelled');
+            expect(emit).not.toHaveBeenCalled();
+        });
+
+        it('asks for attention, without cancelling, when the dispatch is already assigned', async () => {
+            await consolidatedAs({ status: 'assigned', routeBatchId: 4 });
+
+            await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.cancelled, message(MARKETPLACE_ORDER_TOPICS.cancelled));
+
+            expect(dispatchChanges.get(ORDER)?.status).toBe('assigned');
+            expect(emit).toHaveBeenCalledWith(
+                'dispatch.change_requires_attention',
+                expect.objectContaining({ dispatchId: 1, changeType: 'order_cancelled' }),
+            );
+        });
+
+        it('does not raise the event again when the same message is delivered twice', async () => {
+            await consolidatedAs({ status: 'scheduled', routeBatchId: 4 });
+            const updated = message(MARKETPLACE_ORDER_TOPICS.updated);
+
+            await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.updated, updated);
+            await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.updated, updated);
+
+            expect(emit).toHaveBeenCalledTimes(1);
+        });
+
+        it('raises no event when the transaction fails, because nothing was committed', async () => {
+            await consolidatedAs({ status: 'scheduled', routeBatchId: 4 });
+            dispatchChanges.applyDeliveryChange = async () => {
+                throw new Error('database unavailable');
+            };
+
+            const outcome = await bus.publishRaw(
+                MARKETPLACE_ORDER_TOPICS.updated,
+                message(MARKETPLACE_ORDER_TOPICS.updated),
+            );
+
+            expect(outcome).toBeNull();
+            expect(emit).not.toHaveBeenCalled();
+        });
+
+        it('does not look for a dispatch before the order was consolidated', async () => {
+            const spy = vi.spyOn(dispatchChanges, 'applyDeliveryChange');
+
+            await bus.publishRaw(MARKETPLACE_ORDER_TOPICS.updated, message(MARKETPLACE_ORDER_TOPICS.updated));
+
+            expect(spy).not.toHaveBeenCalled();
+        });
+    });
+
     it('subscribes to the three Marketplace topics and to no other', async () => {
         const other = new MemoryMessageBusAdapter(
             MessageValidator.fromDirectory(CONTRACTS_DIR),
@@ -362,7 +477,14 @@ describe('MarketplaceOrderConsumer', () => {
             await original(topic, handler);
         };
 
-        await new MarketplaceOrderConsumer(other, transaction, orders, consolidator).onModuleInit();
+        await new MarketplaceOrderConsumer(
+            other,
+            transaction,
+            orders,
+            consolidator,
+            dispatchChanges,
+            events,
+        ).onModuleInit();
 
         expect(subscribed.sort()).toEqual([
             'marketplace.sales_order.cancelled',

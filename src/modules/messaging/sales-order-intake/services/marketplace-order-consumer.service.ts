@@ -1,6 +1,9 @@
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import type { MessageEnvelope } from '../../../../plugins/messaging/envelope/message-envelope.js';
-import { InboundMessageTransaction } from '../../../../plugins/messaging/inbound-message-transaction.port.js';
+import {
+    InboundMessageTransaction,
+    type TransactionOptions,
+} from '../../../../plugins/messaging/inbound-message-transaction.port.js';
 import { MessageBus, type MessageHandlingResult } from '../../../../plugins/messaging/message-bus.port.js';
 import { applyMarketplaceMessage, type ApplyOutcome } from '../domain/apply-marketplace-message.js';
 import type {
@@ -10,6 +13,8 @@ import type {
     UpdatedOrderData,
 } from '../domain/marketplace-order.types.js';
 import { MarketplaceOrderRepository } from '../repositories/marketplace-order.repository.js';
+import { ExistingDispatchChanges, type DispatchChangeOutcome } from '../ports/existing-dispatch-changes.port.js';
+import { DispatchChangeEvents } from './dispatch-change-events.service.js';
 import { OrderConsolidator } from './order-consolidator.service.js';
 
 export const MARKETPLACE_ORDER_TOPICS = {
@@ -27,8 +32,11 @@ export const MARKETPLACE_ORDER_TOPICS = {
  * receipt commit together, and a repeated message does not run the handler again.
  *
  * After saving, it asks `OrderConsolidator` to join the order with Almacén; that happens inside the
- * same transaction, so the dispatch (if it is created) commits with the state and the receipt. The
- * changes over an existing dispatch come in the next stage of the subtask.
+ * same transaction, so the dispatch (if it is created) commits with the state and the receipt.
+ *
+ * When the order already is a dispatch, the change is applied to it by `ExistingDispatchChanges`
+ * (also inside the transaction), and the events it returns are raised only after the transaction
+ * committed. A `duplicate` raises nothing.
  */
 @Injectable()
 export class MarketplaceOrderConsumer implements OnModuleInit {
@@ -39,6 +47,8 @@ export class MarketplaceOrderConsumer implements OnModuleInit {
         private readonly transaction: InboundMessageTransaction,
         private readonly orders: MarketplaceOrderRepository,
         private readonly consolidator: OrderConsolidator,
+        private readonly dispatchChanges: ExistingDispatchChanges,
+        private readonly events: DispatchChangeEvents,
     ) {}
 
     async onModuleInit(): Promise<void> {
@@ -56,6 +66,7 @@ export class MarketplaceOrderConsumer implements OnModuleInit {
     private async handle(message: MarketplaceOrderMessage, envelope: MessageEnvelope): Promise<MessageHandlingResult> {
         const { salesOrderId } = message.data;
         let outcome: ApplyOutcome | undefined;
+        const dispatchOutcomes: DispatchChangeOutcome[] = [];
 
         const result = await this.transaction.process(envelope, salesOrderId, async (options) => {
             const current = await this.orders.find(salesOrderId, options);
@@ -66,7 +77,12 @@ export class MarketplaceOrderConsumer implements OnModuleInit {
             if (applied.outcome === 'applied' || applied.outcome === 'base_completed_late') {
                 await this.orders.save(applied.state, options);
                 // Joins with Almacén in this same transaction; it does nothing while a base is missing.
-                await this.consolidator.tryConsolidate(salesOrderId, options);
+                const consolidation = await this.consolidator.tryConsolidate(salesOrderId, options);
+
+                // The order was already a dispatch before this message: the change has to reach it.
+                if (consolidation.status === 'already_consolidated') {
+                    dispatchOutcomes.push(await this.propagateToDispatch(message, options));
+                }
             }
         });
 
@@ -74,7 +90,37 @@ export class MarketplaceOrderConsumer implements OnModuleInit {
             this.logger.debug(`Ignored repeated message ${envelope.messageId} of order ${salesOrderId}.`);
         } else {
             this.logger.debug(`${envelope.type} of order ${salesOrderId}: ${outcome}.`);
+            // Only now the change is committed, so only now the coordinators are told.
+            this.events.emitAfterCommit(dispatchOutcomes);
         }
         return result;
+    }
+
+    private async propagateToDispatch(
+        message: MarketplaceOrderMessage,
+        options: TransactionOptions,
+    ): Promise<DispatchChangeOutcome> {
+        if (message.kind === 'cancelled') {
+            return await this.dispatchChanges.cancel(
+                {
+                    salesOrderId: message.data.salesOrderId,
+                    source: 'marketplace',
+                    cancelledAt: message.data.cancelledAt,
+                    reason: message.data.reason,
+                },
+                options,
+            );
+        }
+
+        const { recipient, deliveryAddress, priority, preferences, deliveryDeadline } = message.data;
+        return await this.dispatchChanges.applyDeliveryChange(
+            {
+                salesOrderId: message.data.salesOrderId,
+                source: 'marketplace',
+                receivedAt: message.data.updatedAt,
+                blocks: { recipient, deliveryAddress, priority, preferences, deliveryDeadline },
+            },
+            options,
+        );
     }
 }
