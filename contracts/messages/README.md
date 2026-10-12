@@ -76,6 +76,12 @@ Cada fila corresponde a `schemas/<tópico>.schema.json` y `examples/<tópico>.ex
 | `dispatch.transfer.status_changed` | Marketplace / Compras / Inventarios | Exactamente uno de `salesOrderId` o `purchaseOrderId`. Sin datos personales ni `tracking_token`. |
 | `dispatch.transfer.incident_reported` | Marketplace / Compras | `reasonCode` del catálogo `incident_reasons` y `nextStep` decidido por Despacho. |
 
+## Publicación y entrega
+
+- **Entrega al menos una vez.** Despachos publica por una *outbox* y puede enviar el mismo `messageId` más de una vez (un reintento tras un fallo de confirmación, o una instancia que retoma un mensaje). Quien consume debe ignorar un `messageId` ya procesado y un `recordVersion` menor o igual al almacenado.
+- **Reintentos de los mensajes salientes** (D-54 de `decisiones-planificacion-semiautomatica.md`): si el broker no responde, se reintenta tras 1 s, 2 s y 4 s y luego cada minuto, hasta 4 horas desde que se encoló. Al tercer fallo queda una alerta de demora en la auditoría técnica; vencidas las 4 horas, el mensaje queda `failed` con otra alerta y no se reintenta solo.
+- **Mensajes entrantes inválidos** van a `<tópico>.dead-letter` con `{ originalTopic, rejectedAt, errors, message }`. Si el emisor corrige el mensaje y lo reenvía con el **mismo** `messageId`, se procesa (el rechazo no «quema» el identificador).
+
 ## Decisiones de contrato
 
 - **`handlingCondition` y `reasonCode` son patrones, no enums cerrados.** Sus catálogos pueden crecer en el origen; un valor nuevo no debe mandar el mensaje al dead-letter.
