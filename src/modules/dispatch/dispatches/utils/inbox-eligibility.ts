@@ -12,3 +12,10 @@ export const INBOX_ELIGIBILITY_SQL = `(
     OR (s.name = 'rescheduled'
         AND (d.scheduled_window_start AT TIME ZONE '${BUSINESS_TIME_ZONE}')::date = (NOW() AT TIME ZONE '${BUSINESS_TIME_ZONE}')::date)
 )`;
+
+/**
+ * What the inbox lists: everything plannable plus the `address_review` orders, shown read-only so the
+ * coordinator sees them and can fix the point on the map (D-19). They are deliberately NOT part of
+ * INBOX_ELIGIBILITY_SQL: they cannot be reserved and never enter a batch.
+ */
+export const INBOX_LISTING_SQL = `(${INBOX_ELIGIBILITY_SQL} OR s.name = 'address_review')`;

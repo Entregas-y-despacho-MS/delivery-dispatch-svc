@@ -52,7 +52,7 @@ export class PendingOrderDto {
     @ApiProperty({ enum: ['urgent', 'normal'], description: 'Order priority' })
     priority!: string;
 
-    @ApiProperty({ example: 'pending', description: 'Real dispatch status. A soft reservation never changes it (D-08)' })
+    @ApiProperty({ example: 'pending', description: 'Real dispatch status (`pending`, `in_planning`, `rescheduled` or `address_review`). A soft reservation never changes it (D-08)' })
     status!: string;
 
     @ApiProperty({
@@ -75,6 +75,9 @@ export class PendingOrderDto {
 
     @ApiProperty({ example: false, description: 'true when another coordinator is planning this order: it must not be selectable' })
     locked!: boolean;
+
+    @ApiProperty({ example: false, description: 'true for `address_review` orders (D-19): listed for visibility only. The row must be disabled: it cannot be selected, has no reservation and never enters a batch' })
+    readOnly!: boolean;
 
     @ApiProperty({ allOf: [{ $ref: getSchemaPath(PendingOrderReservationDto) }], nullable: true, description: 'The live soft reservation, or null when the order is free' })
     reservation!: PendingOrderReservationDto | null;
