@@ -29,6 +29,8 @@ import { PendingOrdersModule } from './modules/dispatch/pending-orders/pending-o
 import { DispatchReservationsModule } from './modules/dispatch/dispatch-reservations/dispatch-reservations.module.js';
 import { CacheModule } from './plugins/cache/cache.module.js';
 import { MessagingModule } from './plugins/messaging/messaging.module.js';
+import { InboundMessagesModule } from './modules/messaging/inbound-messages/inbound-messages.module.js';
+import { OutboundMessagesModule } from './modules/messaging/outbound-messages/outbound-messages.module.js';
 
 @Module({
     imports: [
@@ -39,6 +41,8 @@ import { MessagingModule } from './plugins/messaging/messaging.module.js';
         AppConfigModule,
         CacheModule.register(),
         MessagingModule.register(),
+        InboundMessagesModule,
+        OutboundMessagesModule,
         HealthModule,
         DatabaseModule,
         SettingsModule,

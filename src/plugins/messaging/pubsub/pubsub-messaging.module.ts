@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { PubSub } from '@google-cloud/pubsub';
-import { InboundMessageLog } from '../inbound-message-log.port.js';
-import { MemoryInboundMessageLogAdapter } from '../memory/memory-inbound-message-log.adapter.js';
+import { MessageValidator } from '../envelope/message-validator.js';
 import { MessageBus } from '../message-bus.port.js';
 import { messageValidatorProvider } from '../messaging.providers.js';
 import { PUBSUB_CLIENT, PubsubMessageBusAdapter } from './pubsub-message-bus.adapter.js';
@@ -21,12 +20,11 @@ import { PubsubMessagingConfig } from './pubsub-messaging.config.js';
                 ),
         },
         messageValidatorProvider,
-        // Receipts in memory until the inbound_messages adapter (TypeORM) replaces them.
-        MemoryInboundMessageLogAdapter,
-        { provide: InboundMessageLog, useExisting: MemoryInboundMessageLogAdapter },
         PubsubMessageBusAdapter,
         { provide: MessageBus, useExisting: PubsubMessageBusAdapter },
     ],
-    exports: [MessageBus, InboundMessageLog],
+    // The `InboundMessageLog` port is not provided here: it comes from the global InboundMessagesModule
+    // (database adapter over `inbound_messages`), so a receipt survives a restart.
+    exports: [MessageBus, MessageValidator],
 })
 export class PubsubMessagingModule {}

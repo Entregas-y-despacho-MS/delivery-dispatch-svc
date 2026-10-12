@@ -33,6 +33,14 @@ export const envValidation = Joi.object({
     // Folder with envelope.schema.json and schemas/*.schema.json, relative to the working directory.
     MESSAGING_CONTRACTS_DIR:    Joi.string().default('contracts/messages'),
 
+    // -- Outbox publisher (outbound_messages) ------------------------------------
+    // 0 disables the timer. The waits between attempts are 1 s, 2 s and 4 s (see outbox-publisher.config.ts).
+    OUTBOX_POLL_INTERVAL_MS:    Joi.number().integer().min(0).default(2000),
+    OUTBOX_MAX_ATTEMPTS:        Joi.number().integer().min(1).default(3),
+    OUTBOX_BATCH_SIZE:          Joi.number().integer().min(1).default(20),
+    OUTBOX_LEASE_SECONDS:       Joi.number().integer().min(1).default(60),
+    OUTBOX_PUBLISH_TIMEOUT_MS:  Joi.number().integer().min(1).default(10000),
+
     // -- Auth (JWT) -----------------------------------------------------------
     ACTIVE_JWT:              Joi.boolean().default(true),
     JWT_SECRET:              Joi.string().required(),
