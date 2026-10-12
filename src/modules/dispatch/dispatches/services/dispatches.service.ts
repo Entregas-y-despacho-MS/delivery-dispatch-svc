@@ -11,7 +11,7 @@ import { MutationOptions } from '../../../../shared/dto/options.dto.js';
 import { DispatchStatusEnum } from '../../../../shared/enums/index.js';
 
 // Statuses a dispatch never leaves: a delivered or returned order is finished.
-export const FINAL_STATUSES: string[] = [DispatchStatusEnum.DELIVERED, DispatchStatusEnum.RETURNED];
+export const FINAL_STATUSES: string[] = [DispatchStatusEnum.DELIVERED, DispatchStatusEnum.RETURNED, DispatchStatusEnum.CANCELLED];
 
 // A dispatch is "active" (in progress) until it reaches a final state. `not_delivered` is left out on
 // purpose: it is a failed attempt that can still be rescheduled, but the business definition used for

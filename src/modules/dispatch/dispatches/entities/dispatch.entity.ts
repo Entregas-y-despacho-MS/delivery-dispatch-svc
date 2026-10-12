@@ -1,4 +1,4 @@
-import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
+import { Column, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn } from 'typeorm';
 import { BaseCreatedUpdated } from '../../../../database/entities/base.entity.js';
 import { numericTransformer } from '../../../../shared/orm/index.js';
 import { DispatchType } from '../../dispatch-types/entities/dispatch-type.entity.js';
@@ -6,6 +6,8 @@ import { DispatchStatus } from '../../dispatch-statuses/entities/dispatch-status
 import { DeliveryZone } from '../../../catalog/delivery-zones/entities/delivery-zone.entity.js';
 import { ServiceLevel } from '../../../catalog/service-levels/entities/service-level.entity.js';
 import { RouteBatch } from '../../route-batches/entities/route-batch.entity.js';
+import { Warehouse } from '../../../catalog/warehouses/entities/warehouse.entity.js';
+import { DispatchPackage } from './dispatch-package.entity.js';
 
 @Entity('dispatches')
 export class Dispatch extends BaseCreatedUpdated {
@@ -43,6 +45,9 @@ export class Dispatch extends BaseCreatedUpdated {
     @Column({ name: 'delivery_address', type: 'text' })
     deliveryAddress: string;
 
+    @Column({ name: 'delivery_reference', type: 'text', nullable: true })
+    deliveryReference: string | null;
+
     @Column({ name: 'delivery_latitude', type: 'numeric', precision: 9, scale: 6, nullable: true })
     deliveryLatitude: string | null;
 
@@ -57,6 +62,15 @@ export class Dispatch extends BaseCreatedUpdated {
 
     @Column({ name: 'contact_email', type: 'varchar', length: 150, nullable: true })
     contactEmail: string | null;
+
+    @Column({ name: 'order_confirmed_at', type: 'timestamptz', nullable: true })
+    orderConfirmedAt: Date | null;
+
+    @Column({ name: 'origin_warehouse_id', type: 'int', nullable: true })
+    originWarehouseId: number | null;
+
+    @Column({ name: 'shipment_ready', type: 'boolean', default: true })
+    shipmentReady: boolean;
 
     // Read-only informational label from the origin system (e.g. "Prepaid") — Despachos doesn't manage payments.
     @Column({ name: 'payment_status_label', type: 'varchar', length: 50, nullable: true })
@@ -82,6 +96,25 @@ export class Dispatch extends BaseCreatedUpdated {
     // Moment the origin confirmed the package/cargo is physically ready for pickup.
     @Column({ name: 'package_ready_at', type: 'timestamptz', nullable: true })
     packageReadyAt: Date | null;
+
+    @Column({ name: 'tracking_code', type: 'varchar', length: 20, nullable: true, unique: true })
+    trackingCode: string | null;
+
+    @Column({ name: 'evidence_policy', type: 'varchar', length: 30, default: 'hand_delivery_standard' })
+    evidencePolicy: string;
+
+    // Incremented explicitly by planning operations, never by TypeORM's VersionColumn.
+    @Column({ name: 'version', type: 'int', default: 0 })
+    version: number;
+
+    @Column({ name: 'customer_confirmation', type: 'varchar', length: 20, default: 'pending' })
+    customerConfirmation: string;
+
+    @Column({ name: 'promise_notified_at', type: 'timestamptz', nullable: true })
+    promiseNotifiedAt: Date | null;
+
+    @Column({ name: 'promise_firmed_at', type: 'timestamptz', nullable: true })
+    promiseFirmedAt: Date | null;
 
     @Column({ name: 'tracking_token', type: 'varchar', length: 100, nullable: true, unique: true })
     trackingToken: string | null;
@@ -123,4 +156,11 @@ export class Dispatch extends BaseCreatedUpdated {
     @ManyToOne(() => RouteBatch)
     @JoinColumn({ name: 'route_batch_id' })
     routeBatch: RouteBatch | null;
+
+    @ManyToOne(() => Warehouse)
+    @JoinColumn({ name: 'origin_warehouse_id' })
+    originWarehouse: Warehouse | null;
+
+    @OneToMany(() => DispatchPackage, (dispatchPackage) => dispatchPackage.dispatch)
+    packages: DispatchPackage[];
 }
