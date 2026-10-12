@@ -23,7 +23,7 @@ export interface OrderSyncState {
 /**
  * Port of the per-order, per-origin sync state. Both consumers (Marketplace in ST-72.2, Almacén in
  * ST-72.1) and `tryConsolidate` use it. Every method takes `{ manager }` so it runs inside the
- * transaction opened by `SalesOrderLock`.
+ * transaction opened by `InboundMessageTransaction.process`.
  *
  * `save` is an upsert of the fields above only: columns that belong to other features (the recovery
  * counters of ST-50.5) must be left untouched by an adapter.

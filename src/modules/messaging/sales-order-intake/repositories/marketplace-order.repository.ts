@@ -7,8 +7,8 @@ import { PendingSalesOrderStore } from '../ports/pending-sales-order.store.js';
 /**
  * The Marketplace state of one sales order, assembled from its two homes: the version, the base
  * mark and the cancellation live in the sync state (shared with Almacén), the blocks live in
- * `pending_sales_orders`. Both are written together; the caller passes `{ manager }` from
- * `SalesOrderLock.withLock` so they commit as one.
+ * `pending_sales_orders`. Both are written together; the caller passes the options it receives from
+ * `InboundMessageTransaction.process` (`{ manager }`) so they commit as one, together with the receipt.
  */
 @Injectable()
 export class MarketplaceOrderRepository {
