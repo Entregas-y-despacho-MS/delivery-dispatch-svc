@@ -22,6 +22,17 @@ export const envValidation = Joi.object({
     REDIS_HOST:    Joi.string().default('localhost'),
     REDIS_PORT:    Joi.number().port().default(6379),
 
+    // -- Plugin: messaging (Google Cloud Pub/Sub) -------------------------------
+    // pubsub = emulator in development (PUBSUB_EMULATOR_HOST) or real Pub/Sub; memory = in-process, tests only.
+    MESSAGING_ADAPTER:          Joi.string().valid('pubsub', 'memory').default('pubsub'),
+    PUBSUB_PROJECT_ID:          Joi.string().default('delivery-dispatch-local'),
+    // host:port of the emulator; leave empty to use real Pub/Sub with application default credentials.
+    PUBSUB_EMULATOR_HOST:       Joi.string().allow('').optional(),
+    // Subscription of this service on every incoming topic: <topic>.<suffix>.
+    PUBSUB_SUBSCRIPTION_SUFFIX: Joi.string().default('dispatch-svc'),
+    // Folder with envelope.schema.json and schemas/*.schema.json, relative to the working directory.
+    MESSAGING_CONTRACTS_DIR:    Joi.string().default('contracts/messages'),
+
     // -- Auth (JWT) -----------------------------------------------------------
     ACTIVE_JWT:              Joi.boolean().default(true),
     JWT_SECRET:              Joi.string().required(),

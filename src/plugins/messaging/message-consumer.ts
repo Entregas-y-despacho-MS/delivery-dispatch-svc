@@ -22,6 +22,8 @@ const UNKNOWN_SOURCE = 'unknown';
  */
 export class MessageConsumer {
     private readonly logger = new Logger(MessageConsumer.name);
+    /** Tail of the work in progress per messageId, so two deliveries of the same message never overlap. */
+    private readonly inFlight = new Map<string, Promise<void>>();
 
     constructor(
         private readonly validator: MessageValidator,
@@ -31,7 +33,30 @@ export class MessageConsumer {
 
     async consume(topic: string, message: unknown, handler: MessageHandler): Promise<ConsumeOutcome> {
         const messageId = this.messageIdOf(message);
+        if (!messageId) return await this.process(topic, message, handler, null);
 
+        // Pub/Sub may deliver the same message twice at once: the second delivery waits for the
+        // first and then finds its receipt, instead of running the handler a second time.
+        const previous = this.inFlight.get(messageId) ?? Promise.resolve();
+        const run = previous.then(() => this.process(topic, message, handler, messageId));
+        const tail = run.then(
+            () => undefined,
+            () => undefined,
+        );
+        this.inFlight.set(messageId, tail);
+        try {
+            return await run;
+        } finally {
+            if (this.inFlight.get(messageId) === tail) this.inFlight.delete(messageId);
+        }
+    }
+
+    private async process(
+        topic: string,
+        message: unknown,
+        handler: MessageHandler,
+        messageId: string | null,
+    ): Promise<ConsumeOutcome> {
         if (messageId && (await this.log.exists(messageId))) {
             this.logger.debug(`Ignored repeated message ${messageId} on ${topic}.`);
             return 'duplicate';

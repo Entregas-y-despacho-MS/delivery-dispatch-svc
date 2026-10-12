@@ -83,6 +83,16 @@ describe('MemoryMessageBusAdapter', () => {
         expect(handler).toHaveBeenCalledTimes(1);
     });
 
+    it('runs the handler once when the same message is delivered twice at the same time', async () => {
+        const message = validMessage();
+        handler.mockImplementation(() => new Promise((done) => setTimeout(done, 20)));
+
+        const outcomes = await Promise.all([bus.publishRaw(TOPIC, message), bus.publishRaw(TOPIC, message)]);
+
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(outcomes.sort()).toEqual(['duplicate', 'processed']);
+    });
+
     it('does not send the same invalid message to the dead-letter twice', async () => {
         const message = { ...validMessage(), source: 'marketplace' } as MessageEnvelope;
 
