@@ -22,6 +22,38 @@ export const envValidation = Joi.object({
     REDIS_HOST:    Joi.string().default('localhost'),
     REDIS_PORT:    Joi.number().port().default(6379),
 
+    // -- Plugin: messaging (Google Cloud Pub/Sub) -------------------------------
+    // pubsub = emulator in development (PUBSUB_EMULATOR_HOST) or real Pub/Sub; memory = in-process, tests only.
+    MESSAGING_ADAPTER:          Joi.string().valid('pubsub', 'memory').default('pubsub'),
+    // Default only for local work: in production without an emulator the project must be explicit, or
+    // the service would talk to the real Pub/Sub with the project name of the emulator.
+    /* oxlint-disable unicorn/no-thenable -- `then`/`otherwise` are Joi's own conditional keys */
+    PUBSUB_PROJECT_ID:          Joi.string().when('NODE_ENV', {
+        is:        EnvironmentEnum.PRODUCTION,
+        then:      Joi.when('PUBSUB_EMULATOR_HOST', {
+            is:        Joi.string().min(1).required(),
+            then:      Joi.string().default('delivery-dispatch-local'),
+            otherwise: Joi.string().required(),
+        }),
+        otherwise: Joi.string().default('delivery-dispatch-local'),
+    }),
+    // host:port of the emulator; leave empty to use real Pub/Sub with application default credentials.
+    PUBSUB_EMULATOR_HOST:       Joi.string().allow('').optional(),
+    // Subscription of this service on every incoming topic: <topic>.<suffix>.
+    PUBSUB_SUBSCRIPTION_SUFFIX: Joi.string().default('dispatch-svc'),
+    // Folder with envelope.schema.json and schemas/*.schema.json, relative to the working directory.
+    MESSAGING_CONTRACTS_DIR:    Joi.string().default('contracts/messages'),
+
+    // -- Outbox publisher (outbound_messages) ------------------------------------
+    // 0 disables the timer. Fast retries after 1 s, 2 s and 4 s, then one every OUTBOX_SLOW_RETRY_SECONDS until the
+    // message is OUTBOX_GIVE_UP_AFTER_MINUTES old and is left in `failed` (see outbox-publisher.config.ts).
+    OUTBOX_POLL_INTERVAL_MS:    Joi.number().integer().min(0).default(2000),
+    OUTBOX_SLOW_RETRY_SECONDS:  Joi.number().integer().min(1).default(60),
+    OUTBOX_GIVE_UP_AFTER_MINUTES: Joi.number().integer().min(1).default(240),
+    OUTBOX_BATCH_SIZE:          Joi.number().integer().min(1).default(20),
+    OUTBOX_LEASE_SECONDS:       Joi.number().integer().min(1).default(60),
+    OUTBOX_PUBLISH_TIMEOUT_MS:  Joi.number().integer().min(1).default(10000),
+
     // -- Auth (JWT) -----------------------------------------------------------
     ACTIVE_JWT:              Joi.boolean().default(true),
     JWT_SECRET:              Joi.string().required(),

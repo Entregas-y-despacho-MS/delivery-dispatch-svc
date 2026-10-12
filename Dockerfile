@@ -22,6 +22,8 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 WORKDIR /app
 COPY --from=deps    /app/node_modules  ./node_modules
 COPY --from=builder /app/dist          ./dist
+# JSON Schemas of the messages (ST-76.1): MessageValidator reads them at runtime from ./contracts/messages.
+COPY --from=builder /app/contracts     ./contracts
 
 # Install Chromium, fonts, and dbus (requires root)
 RUN apt-get update && apt-get install -y --no-install-recommends \

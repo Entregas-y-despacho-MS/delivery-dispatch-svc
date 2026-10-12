@@ -28,6 +28,9 @@ import { OsrmModule } from './plugins/osrm/osrm.module.js';
 import { PendingOrdersModule } from './modules/dispatch/pending-orders/pending-orders.module.js';
 import { DispatchReservationsModule } from './modules/dispatch/dispatch-reservations/dispatch-reservations.module.js';
 import { CacheModule } from './plugins/cache/cache.module.js';
+import { MessagingModule } from './plugins/messaging/messaging.module.js';
+import { InboundMessagesModule } from './modules/messaging/inbound-messages/inbound-messages.module.js';
+import { OutboundMessagesModule } from './modules/messaging/outbound-messages/outbound-messages.module.js';
 
 @Module({
     imports: [
@@ -37,6 +40,9 @@ import { CacheModule } from './plugins/cache/cache.module.js';
         EventEmitterModule.forRoot(),
         AppConfigModule,
         CacheModule.register(),
+        MessagingModule.register(),
+        InboundMessagesModule,
+        OutboundMessagesModule,
         HealthModule,
         DatabaseModule,
         SettingsModule,
