@@ -17,8 +17,8 @@ const UNKNOWN_SOURCE = 'unknown';
 /**
  * Receive pipeline shared by every adapter: ignore repeated messages, validate against the schema
  * of the topic, send invalid ones to the dead-letter and hand valid ones to the handler.
- * The receipt of a valid message is stored only after the handler succeeds, so a failing handler
- * is retried by the broker instead of being lost.
+ * A transactional handler commits its own receipt and returns `receipt-committed`. Legacy handlers
+ * are recorded after they succeed. A failing handler is retried by the broker.
  */
 export class MessageConsumer {
     private readonly logger = new Logger(MessageConsumer.name);
@@ -82,13 +82,16 @@ export class MessageConsumer {
         }
 
         const envelope = message as MessageEnvelope;
-        await handler(envelope);
-        await this.log.record({
-            messageId: envelope.messageId,
-            status: 'processed',
-            type: envelope.type,
-            source: envelope.source,
-        });
+        const handlingResult = await handler(envelope);
+        if (handlingResult === 'duplicate') return 'duplicate';
+        if (handlingResult !== 'receipt-committed') {
+            await this.log.record({
+                messageId: envelope.messageId,
+                status: 'processed',
+                type: envelope.type,
+                source: envelope.source,
+            });
+        }
         return 'processed';
     }
 

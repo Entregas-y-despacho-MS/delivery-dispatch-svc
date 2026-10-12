@@ -1,9 +1,16 @@
 import type { MessageEnvelope } from './envelope/message-envelope.js';
 
+/**
+ * A transactional handler writes its business changes and the processed receipt together.
+ * It returns `receipt-committed` so the common pipeline does not write a second receipt.
+ * `duplicate` means the transactional check found an already processed message.
+ */
+export type MessageHandlingResult = 'receipt-committed' | 'duplicate' | void;
+
 /** Handler of a subscribed topic. Throwing makes the broker redeliver the message. */
 export type MessageHandler<TData = Record<string, unknown>> = (
     envelope: MessageEnvelope<TData>,
-) => Promise<void>;
+) => Promise<MessageHandlingResult>;
 
 /**
  * Port of the asynchronous messaging with the ERP (Google Cloud Pub/Sub, emulated locally).

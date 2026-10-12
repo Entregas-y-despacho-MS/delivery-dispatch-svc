@@ -13,9 +13,9 @@ export interface InboundMessageRecord {
 /**
  * Receipt log of incoming messages; the message UUID is the idempotency key.
  *
- * Delivery is at-least-once: the receipt is written after the handler finishes, so a crash between
- * the two (or two instances receiving the same message at once) can run a handler twice. Handlers
- * must therefore be idempotent on their own — the `recordVersion` rule of the contracts does that.
+ * Legacy handlers write their receipt after the handler finishes. Consumers that mutate business
+ * data use InboundMessageTransactionService instead and return `receipt-committed`, so their
+ * receipt and business changes commit together. All handlers remain idempotent by recordVersion.
  */
 export abstract class InboundMessageLog {
     /**
