@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MessageEnvelope } from '../../../../plugins/messaging/envelope/message-envelope.js';
-import { OUTBOUND_MESSAGE_FAILED_ACTION, OutboxPublisherConfig } from './outbox-publisher.config.js';
+import {
+    OUTBOUND_MESSAGE_DELAYED_ACTION,
+    OUTBOUND_MESSAGE_FAILED_ACTION,
+    OutboxPublisherConfig,
+} from './outbox-publisher.config.js';
 import { OutboxPublisherService } from './outbox-publisher.service.js';
 
 const MESSAGE_ID = '0192f1e2-7c3a-7b41-9a1e-5d2f0c8e4a10';
 const OTHER_ID = '0192f1e2-7c3a-7b41-9a1e-5d2f0c8e4a11';
 const TYPE = 'dispatch.shipment.departed';
+const MINUTE = 60;
 
 const envelope = (): MessageEnvelope => ({
     messageId: MESSAGE_ID,
@@ -22,7 +27,8 @@ const config = (overrides: Record<string, number> = {}): OutboxPublisherConfig =
             get: (key: string) =>
                 ({
                     OUTBOX_POLL_INTERVAL_MS: 0,
-                    OUTBOX_MAX_ATTEMPTS: 3,
+                    OUTBOX_SLOW_RETRY_SECONDS: 60,
+                    OUTBOX_GIVE_UP_AFTER_MINUTES: 240,
                     OUTBOX_BATCH_SIZE: 20,
                     OUTBOX_LEASE_SECONDS: 60,
                     OUTBOX_PUBLISH_TIMEOUT_MS: 1000,
@@ -31,35 +37,47 @@ const config = (overrides: Record<string, number> = {}): OutboxPublisherConfig =
         overrides,
     );
 
-type Row = { message_id: string; type: string; payload: MessageEnvelope; attempts: number; created_at: string };
-const row = (id: string, attempts = 0, createdAt = '2026-10-11T14:00:00.000Z'): Row => ({
+type Row = {
+    message_id: string;
+    type: string;
+    payload: MessageEnvelope;
+    attempts: number;
+    created_at: string;
+    age_seconds: number;
+};
+const row = (id: string, attempts = 0, ageSeconds = 1, createdAt = '2026-10-11T14:00:00.000Z'): Row => ({
     message_id: id,
     type: TYPE,
     payload: envelope(),
     attempts,
     created_at: createdAt,
+    age_seconds: ageSeconds,
 });
 
 describe('OutboxPublisherService', () => {
     let claimed: Row[];
     let statements: { sql: string; params: unknown[] }[];
-    let failureAlertRows: unknown[];
+    let stillPending: boolean;
     let dataSource: { query: ReturnType<typeof vi.fn> };
     let bus: { publish: ReturnType<typeof vi.fn>; subscribe: ReturnType<typeof vi.fn> };
 
     const service = (cfg = config()) => new OutboxPublisherService(dataSource as never, bus as never, cfg);
     const statement = (fragment: string) => statements.find((s) => s.sql.includes(fragment));
+    const schedule = () => statement('WITH scheduled AS');
+    const giveUp = () => statement('WITH failed AS');
 
     beforeEach(() => {
         claimed = [row(MESSAGE_ID)];
         statements = [];
-        failureAlertRows = [{ audit_log_id: 1 }];
+        stillPending = true;
         dataSource = {
             query: vi.fn(async (sql: string, params: unknown[] = []) => {
                 statements.push({ sql, params });
                 // The claim is an UPDATE ... RETURNING, which the driver returns as [rows, affectedCount].
                 if (sql.includes('FOR UPDATE SKIP LOCKED')) return [claimed, claimed.length];
-                if (sql.includes('INSERT INTO audit_logs')) return failureAlertRows;
+                // The failure statements return a row only when the message was still pending.
+                if (sql.includes('WITH scheduled AS')) return stillPending ? [{ message_id: params[0] }] : [];
+                if (sql.includes('WITH failed AS')) return stillPending ? [{ audit_log_id: 1 }] : [];
                 return [];
             }),
         };
@@ -94,11 +112,10 @@ describe('OutboxPublisherService', () => {
     });
 
     it('publishes the oldest message first', async () => {
-        claimed = [row(OTHER_ID, 0, '2026-10-11T14:00:05.000Z'), row(MESSAGE_ID, 0, '2026-10-11T14:00:01.000Z')];
-        const order: string[] = [];
-        bus.publish.mockImplementation(async (_topic: string) => {
-            order.push(String(order.length));
-        });
+        claimed = [
+            row(OTHER_ID, 0, 1, '2026-10-11T14:00:05.000Z'),
+            row(MESSAGE_ID, 0, 1, '2026-10-11T14:00:01.000Z'),
+        ];
 
         await service().publishPending();
 
@@ -108,77 +125,132 @@ describe('OutboxPublisherService', () => {
         ]);
     });
 
-    it('schedules the first retry in 1 s when the broker fails', async () => {
-        bus.publish.mockRejectedValue(new Error('broker down'));
-
-        const result = await service().publishPending();
-
-        expect(result).toEqual({ sent: 0, retried: 1, failed: 0 });
-        expect(statement('next_attempt_at = NOW() + make_interval(secs => $3')?.params).toEqual([MESSAGE_ID, 1, 1]);
-        expect(statement('INSERT INTO audit_logs')).toBeUndefined();
-    });
-
-    it('schedules the second retry in 2 s', async () => {
-        claimed = [row(MESSAGE_ID, 1)];
-        bus.publish.mockRejectedValue(new Error('broker down'));
-
-        await service().publishPending();
-
-        expect(statement('next_attempt_at = NOW() + make_interval(secs => $3')?.params).toEqual([MESSAGE_ID, 2, 2]);
-    });
-
-    it('uses 4 s as the third wait when more attempts are allowed', async () => {
-        claimed = [row(MESSAGE_ID, 2)];
-        bus.publish.mockRejectedValue(new Error('broker down'));
-
-        await service(config({ maxAttempts: 4 })).publishPending();
-
-        expect(statement('next_attempt_at = NOW() + make_interval(secs => $3')?.params).toEqual([MESSAGE_ID, 3, 4]);
-    });
-
-    it('leaves the message failed and writes the alert in the same statement after the last attempt', async () => {
-        claimed = [row(MESSAGE_ID, 2)];
-        bus.publish.mockRejectedValue(new Error('broker down'));
-
-        const result = await service().publishPending();
-
-        expect(result).toEqual({ sent: 0, retried: 0, failed: 1 });
-        const alert = statement('INSERT INTO audit_logs')!;
-        expect(alert.sql).toContain("status = 'failed'");
-        expect(alert.params.slice(0, 3)).toEqual([MESSAGE_ID, 3, OUTBOUND_MESSAGE_FAILED_ACTION]);
-        expect(JSON.parse(alert.params[3] as string)).toEqual({
-            messageId: MESSAGE_ID,
-            type: TYPE,
-            attempts: 3,
-            lastError: 'broker down',
+    describe('when the broker fails', () => {
+        beforeEach(() => {
+            bus.publish.mockRejectedValue(new Error('broker down'));
         });
-    });
 
-    it('does not count a failure for a message that another instance already resolved', async () => {
-        claimed = [row(MESSAGE_ID, 2)];
-        failureAlertRows = []; // the UPDATE found no pending row, so no alert was inserted
-        bus.publish.mockRejectedValue(new Error('broker down'));
+        it.each([
+            [0, 1, 1],
+            [1, 2, 2],
+            [2, 3, 4],
+        ])('after %i previous failures waits %i s... (failure %i) ', async (previous, failure, seconds) => {
+            claimed = [row(MESSAGE_ID, previous)];
 
-        const result = await service().publishPending();
+            const result = await service().publishPending();
 
-        expect(result).toEqual({ sent: 0, retried: 0, failed: 0 });
-    });
+            expect(result).toEqual({ sent: 0, retried: 1, failed: 0 });
+            expect(schedule()?.params.slice(0, 3)).toEqual([MESSAGE_ID, failure, seconds]);
+        });
 
-    it('counts a publish that never answers as a failed attempt', async () => {
-        bus.publish.mockImplementation(() => new Promise(() => undefined));
+        it('writes a single "delayed" alert when the fast phase ends (3rd failure)', async () => {
+            claimed = [row(MESSAGE_ID, 2)];
 
-        const result = await service(config({ publishTimeoutMs: 20 })).publishPending();
+            await service().publishPending();
 
-        expect(result.retried).toBe(1);
-    });
+            const params = schedule()!.params;
+            expect(params[3]).toBe(OUTBOUND_MESSAGE_DELAYED_ACTION);
+            expect(params[5]).toBe(true);
+            expect(JSON.parse(params[4] as string)).toMatchObject({ messageId: MESSAGE_ID, type: TYPE, attempts: 3 });
+        });
 
-    it('keeps going with the next message when one fails', async () => {
-        claimed = [row(MESSAGE_ID), row(OTHER_ID)];
-        bus.publish.mockRejectedValueOnce(new Error('broker down')).mockResolvedValueOnce(undefined);
+        it('does not write the alert on the first two failures', async () => {
+            for (const previous of [0, 1]) {
+                statements = [];
+                claimed = [row(MESSAGE_ID, previous)];
+                await service().publishPending();
+                expect(schedule()?.params[5]).toBe(false);
+            }
+        });
 
-        const result = await service().publishPending();
+        it('keeps retrying every slowRetrySeconds after the fast phase, without another alert', async () => {
+            claimed = [row(MESSAGE_ID, 3, 30 * MINUTE)];
 
-        expect(result).toEqual({ sent: 1, retried: 1, failed: 0 });
+            const result = await service().publishPending();
+
+            expect(result).toEqual({ sent: 0, retried: 1, failed: 0 });
+            expect(schedule()?.params.slice(0, 3)).toEqual([MESSAGE_ID, 4, 60]);
+            expect(schedule()?.params[5]).toBe(false);
+            expect(giveUp()).toBeUndefined();
+        });
+
+        it('keeps retrying until the message is older than giveUpAfterMinutes', async () => {
+            claimed = [row(MESSAGE_ID, 50, 239 * MINUTE)];
+
+            const result = await service().publishPending();
+
+            expect(result.retried).toBe(1);
+            expect(giveUp()).toBeUndefined();
+        });
+
+        it('leaves the message failed and writes the alert in the same statement once the window is over', async () => {
+            claimed = [row(MESSAGE_ID, 50, 240 * MINUTE)];
+
+            const result = await service().publishPending();
+
+            expect(result).toEqual({ sent: 0, retried: 0, failed: 1 });
+            const alert = giveUp()!;
+            expect(alert.sql).toContain("status = 'failed'");
+            expect(alert.params.slice(0, 3)).toEqual([MESSAGE_ID, 51, OUTBOUND_MESSAGE_FAILED_ACTION]);
+            expect(JSON.parse(alert.params[3] as string)).toEqual({
+                messageId: MESSAGE_ID,
+                type: TYPE,
+                attempts: 51,
+                lastError: 'broker down',
+            });
+            expect(schedule()).toBeUndefined();
+        });
+
+        it('never gives up during the fast phase, however old the message is', async () => {
+            claimed = [row(MESSAGE_ID, 0, 24 * 60 * MINUTE)];
+
+            const result = await service().publishPending();
+
+            expect(result.retried).toBe(1);
+            expect(giveUp()).toBeUndefined();
+        });
+
+        it('does not count a failure for a message that another instance already resolved', async () => {
+            claimed = [row(MESSAGE_ID, 50, 240 * MINUTE)];
+            stillPending = false;
+
+            const result = await service().publishPending();
+
+            expect(result).toEqual({ sent: 0, retried: 0, failed: 0 });
+        });
+
+        it('counts a publish that never answers as a failed attempt', async () => {
+            bus.publish.mockImplementation(() => new Promise(() => undefined));
+
+            const result = await service(config({ publishTimeoutMs: 20 })).publishPending();
+
+            expect(result.retried).toBe(1);
+        });
+
+        it('keeps going with the next message when one fails', async () => {
+            claimed = [row(MESSAGE_ID), row(OTHER_ID)];
+            bus.publish.mockRejectedValueOnce(new Error('broker down')).mockResolvedValueOnce(undefined);
+
+            const result = await service().publishPending();
+
+            expect(result).toEqual({ sent: 1, retried: 1, failed: 0 });
+        });
+
+        it('continues with the batch when registering a failure also fails', async () => {
+            claimed = [row(MESSAGE_ID), row(OTHER_ID)];
+            bus.publish.mockRejectedValueOnce(new Error('broker down')).mockResolvedValueOnce(undefined);
+            dataSource.query.mockImplementation(async (sql: string, params: unknown[] = []) => {
+                statements.push({ sql, params });
+                if (sql.includes('FOR UPDATE SKIP LOCKED')) return [claimed, claimed.length];
+                if (sql.includes('WITH scheduled AS')) throw new Error('database down');
+                return [];
+            });
+
+            const result = await service().publishPending();
+
+            expect(bus.publish).toHaveBeenCalledTimes(2);
+            expect(result.sent).toBe(1);
+        });
     });
 
     it('does not count a failed "mark as sent" as a publish attempt nor raise an alert', async () => {
@@ -193,24 +265,8 @@ describe('OutboxPublisherService', () => {
 
         expect(bus.publish).toHaveBeenCalledTimes(1);
         expect(result).toEqual({ sent: 0, retried: 0, failed: 0 });
-        expect(statement('make_interval(secs => $3')).toBeUndefined();
-        expect(statement('INSERT INTO audit_logs')).toBeUndefined();
-    });
-
-    it('continues with the batch when registering a failure also fails', async () => {
-        claimed = [row(MESSAGE_ID), row(OTHER_ID)];
-        bus.publish.mockRejectedValueOnce(new Error('broker down')).mockResolvedValueOnce(undefined);
-        dataSource.query.mockImplementation(async (sql: string, params: unknown[] = []) => {
-            statements.push({ sql, params });
-            if (sql.includes('FOR UPDATE SKIP LOCKED')) return [claimed, claimed.length];
-            if (sql.includes('make_interval(secs => $3')) throw new Error('database down');
-            return [];
-        });
-
-        const result = await service().publishPending();
-
-        expect(bus.publish).toHaveBeenCalledTimes(2);
-        expect(result.sent).toBe(1);
+        expect(schedule()).toBeUndefined();
+        expect(giveUp()).toBeUndefined();
     });
 
     it('shares the run in progress between overlapping calls', async () => {

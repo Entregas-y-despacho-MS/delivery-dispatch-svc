@@ -4,6 +4,7 @@ import { DataSource } from 'typeorm';
 import type { MessageEnvelope } from '../../../../plugins/messaging/envelope/message-envelope.js';
 import { MessageBus } from '../../../../plugins/messaging/message-bus.port.js';
 import {
+    OUTBOUND_MESSAGE_DELAYED_ACTION,
     OUTBOUND_MESSAGE_FAILED_ACTION,
     OUTBOX_RETRY_DELAYS_MS,
     OutboxPublisherConfig,
@@ -15,6 +16,8 @@ interface ClaimedMessage {
     payload: MessageEnvelope;
     attempts: number;
     created_at: Date | string;
+    /** Seconds since the message was queued (computed by the database, which owns the clock). */
+    age_seconds: string | number;
 }
 
 export interface OutboxRunResult {
@@ -30,8 +33,11 @@ export interface OutboxRunResult {
  * forward (a lease), so several instances never take the same message and no transaction stays
  * open while the broker is called. A message is then:
  *   - published → `sent`;
- *   - not published → retried after 1 s, 2 s, 4 s (`next_attempt_at`, survives a restart);
- *   - not published on the last attempt → `failed` plus an alert in `audit_logs`.
+ *   - not published → retried after 1 s, 2 s and 4 s (fast phase; `next_attempt_at`, survives a
+ *     restart). The third failure writes one `outbound_message_delayed` alert in `audit_logs`: the
+ *     broker looks down, but the operation in the street is never blocked;
+ *   - still not published → one attempt every `slowRetrySeconds`, until the message is older than
+ *     `giveUpAfterMinutes`; then `failed` plus an `outbound_message_failed` alert.
  * Delivery is at-least-once: consumers deduplicate by `messageId`.
  */
 @Injectable()
@@ -120,7 +126,8 @@ export class OutboxPublisherService implements OnApplicationBootstrap, OnModuleD
                      ORDER BY next_attempt_at, created_at
                      LIMIT $2
                        FOR UPDATE SKIP LOCKED)
-          RETURNING message_id, type, payload, attempts, created_at`,
+          RETURNING message_id, type, payload, attempts, created_at,
+                    EXTRACT(EPOCH FROM (NOW() - created_at)) AS age_seconds`,
             [this.config.effectiveLeaseSeconds, this.config.batchSize],
         );
         // An UPDATE ... RETURNING comes back as [rows, affectedCount] with the postgres driver.
@@ -154,29 +161,61 @@ export class OutboxPublisherService implements OnApplicationBootstrap, OnModuleD
     }
 
     /**
-     * `retried`: another attempt was scheduled. `failed`: the attempts are exhausted and the message
-     * was left in `failed`. `ignored`: it was no longer pending (another instance resolved it).
+     * `retried`: another attempt was scheduled. `failed`: the message was given up on and left in
+     * `failed`. `ignored`: it was no longer pending (another instance resolved it).
+     *
+     * Fast phase: 1 s, 2 s and 4 s after the first three failures; the third also writes a single
+     * `outbound_message_delayed` alert. Slow phase: one attempt every `slowRetrySeconds` until the
+     * message is older than `giveUpAfterMinutes`.
      */
     private async registerFailure(message: ClaimedMessage, detail: string): Promise<'retried' | 'failed' | 'ignored'> {
         const attempts = message.attempts + 1;
-        if (attempts < this.config.maxAttempts) {
-            const delayMs = OUTBOX_RETRY_DELAYS_MS[Math.min(attempts - 1, OUTBOX_RETRY_DELAYS_MS.length - 1)];
-            await this.dataSource.query(
-                `UPDATE outbound_messages
+        const fastAttempts = OUTBOX_RETRY_DELAYS_MS.length;
+        const givenUp = attempts > fastAttempts && Number(message.age_seconds) >= this.config.giveUpAfterMinutes * 60;
+        if (givenUp) return await this.giveUp(message, attempts, detail);
+
+        const delayMs =
+            attempts <= fastAttempts ? OUTBOX_RETRY_DELAYS_MS[attempts - 1] : this.config.slowRetrySeconds * 1000;
+        const delayedAlert = attempts === fastAttempts;
+
+        // One statement: the new schedule and, when the fast phase ends, its alert are atomic, and the
+        // alert exists only if THIS call rescheduled the message.
+        const rows: unknown[] = await this.dataSource.query(
+            `WITH scheduled AS (
+                 UPDATE outbound_messages
                     SET attempts = $2, next_attempt_at = NOW() + make_interval(secs => $3::double precision),
                         updated_at = NOW()
-                  WHERE message_id = $1 AND status = 'pending'`,
-                [message.message_id, attempts, delayMs / 1000],
-            );
-            this.logger.warn(
-                `Message ${message.message_id} (${message.type}) not published, attempt ${attempts}/` +
-                    `${this.config.maxAttempts}; retrying in ${delayMs} ms: ${detail}`,
-            );
-            return 'retried';
-        }
+                  WHERE message_id = $1 AND status = 'pending'
+              RETURNING message_id),
+             alerted AS (
+                 INSERT INTO audit_logs (user_id, action, detail)
+                 SELECT NULL, $4, $5 FROM scheduled WHERE $6::boolean
+              RETURNING audit_log_id)
+             SELECT message_id FROM scheduled`,
+            [
+                message.message_id,
+                attempts,
+                delayMs / 1000,
+                OUTBOUND_MESSAGE_DELAYED_ACTION,
+                JSON.stringify({ messageId: message.message_id, type: message.type, attempts, lastError: detail }),
+                delayedAlert,
+            ],
+        );
+        if (rows.length === 0) return 'ignored';
 
-        // Terminal failure: one statement, so the status change and the alert are atomic, and the alert
-        // is written only if THIS call moved the message to `failed` (another instance may have sent it).
+        const text =
+            `Message ${message.message_id} (${message.type}) not published, attempt ${attempts}; ` +
+            `retrying in ${delayMs} ms: ${detail}`;
+        if (delayedAlert) {
+            this.logger.error(`${text} -- the broker looks down, retrying every ${this.config.slowRetrySeconds} s.`);
+        } else {
+            this.logger.warn(text);
+        }
+        return 'retried';
+    }
+
+    /** Terminal failure: one statement, so the status change and the alert are atomic. */
+    private async giveUp(message: ClaimedMessage, attempts: number, detail: string): Promise<'failed' | 'ignored'> {
         const alerts: unknown[] = await this.dataSource.query(
             `WITH failed AS (
                  UPDATE outbound_messages
@@ -196,7 +235,8 @@ export class OutboxPublisherService implements OnApplicationBootstrap, OnModuleD
         if (alerts.length === 0) return 'ignored';
 
         this.logger.error(
-            `Message ${message.message_id} (${message.type}) FAILED after ${attempts} attempts: ${detail}`,
+            `Message ${message.message_id} (${message.type}) FAILED after ${attempts} attempts and ` +
+                `${this.config.giveUpAfterMinutes} min: ${detail}`,
         );
         return 'failed';
     }

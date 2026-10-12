@@ -9,7 +9,11 @@ import { MemoryMessageBusAdapter } from '../../../plugins/messaging/memory/memor
 import { InboundMessage } from '../inbound-messages/entities/inbound-message.entity.js';
 import { InboundMessagesService } from '../inbound-messages/services/inbound-messages.service.js';
 import { OutboundMessage } from './entities/outbound-message.entity.js';
-import { OUTBOUND_MESSAGE_FAILED_ACTION, OutboxPublisherConfig } from './services/outbox-publisher.config.js';
+import {
+    OUTBOUND_MESSAGE_DELAYED_ACTION,
+    OUTBOUND_MESSAGE_FAILED_ACTION,
+    OutboxPublisherConfig,
+} from './services/outbox-publisher.config.js';
 import { OutboxPublisherService } from './services/outbox-publisher.service.js';
 import { OutboxService } from './services/outbox.service.js';
 
@@ -34,7 +38,8 @@ const config = (overrides: Record<string, number> = {}): OutboxPublisherConfig =
             get: (key: string) =>
                 ({
                     OUTBOX_POLL_INTERVAL_MS: 0,
-                    OUTBOX_MAX_ATTEMPTS: 3,
+                    OUTBOX_SLOW_RETRY_SECONDS: 60,
+                    OUTBOX_GIVE_UP_AFTER_MINUTES: 240,
                     OUTBOX_BATCH_SIZE: 20,
                     OUTBOX_LEASE_SECONDS: 60,
                     OUTBOX_PUBLISH_TIMEOUT_MS: 2000,
@@ -85,8 +90,8 @@ describe.skipIf(!PORT)('outbox against PostgreSQL', () => {
     afterEach(async () => {
         await dataSource.query(`DELETE FROM outbound_messages WHERE message_id = ANY($1::uuid[])`, [created]);
         await dataSource.query(`DELETE FROM inbound_messages WHERE message_id = ANY($1::uuid[])`, [created]);
-        await dataSource.query(`DELETE FROM audit_logs WHERE action = $1 AND detail LIKE ANY($2::text[])`, [
-            OUTBOUND_MESSAGE_FAILED_ACTION,
+        await dataSource.query(`DELETE FROM audit_logs WHERE action = ANY($1::text[]) AND detail LIKE ANY($2::text[])`, [
+            [OUTBOUND_MESSAGE_FAILED_ACTION, OUTBOUND_MESSAGE_DELAYED_ACTION],
             created.map((id) => `%${id}%`),
         ]);
         created.length = 0;
@@ -158,24 +163,72 @@ describe.skipIf(!PORT)('outbox against PostgreSQL', () => {
         expect(await row(envelope.messageId)).toMatchObject({ status: 'sent', attempts: 2 });
     });
 
-    it('leaves the message failed and writes an alert in audit_logs after 3 failed attempts', async () => {
+    const alertsOf = async (messageId: string, action: string) =>
+        (await dataSource.query(`SELECT user_id, detail FROM audit_logs WHERE action = $1 AND detail LIKE $2`, [
+            action,
+            `%${messageId}%`,
+        ])) as { user_id: number | null; detail: string }[];
+
+    const failRound = async (bus: { publish: unknown }, messageId: string) => {
+        await publisher(bus).publishPending();
+        await makeDue(messageId);
+    };
+
+    it('after the 3 fast failures raises one alert, keeps the message pending and sends it when the broker is back', async () => {
         const envelope = newDeparted();
         await outbox().enqueue(envelope);
         const bus = { publish: vi.fn().mockRejectedValue(new Error('broker down')), subscribe: vi.fn() };
 
-        for (let attempt = 1; attempt <= 3; attempt++) {
-            await publisher(bus).publishPending();
-            await makeDue(envelope.messageId);
-        }
+        for (let failure = 1; failure <= 3; failure++) await failRound(bus, envelope.messageId);
 
-        expect(await row(envelope.messageId)).toMatchObject({ status: 'failed', attempts: 3 });
-        const alerts = (await dataSource.query(`SELECT user_id, detail FROM audit_logs WHERE action = $1 AND detail LIKE $2`, [
-            OUTBOUND_MESSAGE_FAILED_ACTION,
-            `%${envelope.messageId}%`,
-        ])) as { user_id: number | null; detail: string }[];
-        expect(alerts).toHaveLength(1);
-        expect(alerts[0].user_id).toBeNull();
-        expect(JSON.parse(alerts[0].detail)).toMatchObject({ messageId: envelope.messageId, type: DEPARTED, attempts: 3 });
+        expect(await row(envelope.messageId)).toMatchObject({ status: 'pending', attempts: 3 });
+        const delayed = await alertsOf(envelope.messageId, OUTBOUND_MESSAGE_DELAYED_ACTION);
+        expect(delayed).toHaveLength(1);
+        expect(delayed[0].user_id).toBeNull();
+        expect(JSON.parse(delayed[0].detail)).toMatchObject({ messageId: envelope.messageId, type: DEPARTED, attempts: 3 });
+
+        // Slow phase: the 4th failure waits a minute (not claimed again until then), is not alerted
+        // again, and the message is not lost.
+        await publisher(bus).publishPending();
+        expect(await row(envelope.messageId)).toMatchObject({ status: 'pending', attempts: 4, waiting: true });
+        const callsBefore = bus.publish.mock.calls.length;
+        await publisher(bus).publishPending();
+        expect(bus.publish.mock.calls.length).toBe(callsBefore);
+        await makeDue(envelope.messageId);
+        await failRound(bus, envelope.messageId);
+        expect(await row(envelope.messageId)).toMatchObject({ status: 'pending', attempts: 5 });
+        expect(await alertsOf(envelope.messageId, OUTBOUND_MESSAGE_DELAYED_ACTION)).toHaveLength(1);
+        expect(await alertsOf(envelope.messageId, OUTBOUND_MESSAGE_FAILED_ACTION)).toHaveLength(0);
+
+        // Broker restored, much later: the message goes out.
+        bus.publish.mockResolvedValue(undefined);
+        await publisher(bus).publishPending();
+        expect(await row(envelope.messageId)).toMatchObject({ status: 'sent', attempts: 6 });
+    });
+
+    it('gives up after the window: leaves the message failed and writes one alert in audit_logs', async () => {
+        const envelope = newDeparted();
+        await outbox().enqueue(envelope);
+        const bus = { publish: vi.fn().mockRejectedValue(new Error('broker down')), subscribe: vi.fn() };
+        for (let failure = 1; failure <= 4; failure++) await failRound(bus, envelope.messageId);
+        expect(await row(envelope.messageId)).toMatchObject({ status: 'pending', attempts: 4 });
+
+        // The message has been waiting longer than the window (240 min).
+        await dataSource.query(`UPDATE outbound_messages SET created_at = NOW() - interval '241 minutes' WHERE message_id = $1`, [
+            envelope.messageId,
+        ]);
+        await publisher(bus).publishPending();
+
+        expect(await row(envelope.messageId)).toMatchObject({ status: 'failed', attempts: 5 });
+        const failed = await alertsOf(envelope.messageId, OUTBOUND_MESSAGE_FAILED_ACTION);
+        expect(failed).toHaveLength(1);
+        expect(failed[0].user_id).toBeNull();
+        expect(JSON.parse(failed[0].detail)).toMatchObject({
+            messageId: envelope.messageId,
+            type: DEPARTED,
+            attempts: 5,
+            lastError: 'broker down',
+        });
 
         // `failed` is terminal: it is never claimed again.
         bus.publish.mockClear();

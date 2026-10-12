@@ -45,9 +45,11 @@ export const envValidation = Joi.object({
     MESSAGING_CONTRACTS_DIR:    Joi.string().default('contracts/messages'),
 
     // -- Outbox publisher (outbound_messages) ------------------------------------
-    // 0 disables the timer. The waits between attempts are 1 s, 2 s and 4 s (see outbox-publisher.config.ts).
+    // 0 disables the timer. Fast retries after 1 s, 2 s and 4 s, then one every OUTBOX_SLOW_RETRY_SECONDS until the
+    // message is OUTBOX_GIVE_UP_AFTER_MINUTES old and is left in `failed` (see outbox-publisher.config.ts).
     OUTBOX_POLL_INTERVAL_MS:    Joi.number().integer().min(0).default(2000),
-    OUTBOX_MAX_ATTEMPTS:        Joi.number().integer().min(1).default(3),
+    OUTBOX_SLOW_RETRY_SECONDS:  Joi.number().integer().min(1).default(60),
+    OUTBOX_GIVE_UP_AFTER_MINUTES: Joi.number().integer().min(1).default(240),
     OUTBOX_BATCH_SIZE:          Joi.number().integer().min(1).default(20),
     OUTBOX_LEASE_SECONDS:       Joi.number().integer().min(1).default(60),
     OUTBOX_PUBLISH_TIMEOUT_MS:  Joi.number().integer().min(1).default(10000),
