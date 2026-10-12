@@ -10,7 +10,7 @@ import { CurrentUser } from '../../../../shared/decorators/index.js';
 
 /**
  * Error dictionary for this module:
- *   DISPATCH_NOT_RESERVABLE    409 — An order does not exist, or is neither pending nor rescheduled for today.
+ *   DISPATCH_NOT_RESERVABLE    409 — An order does not exist, is in address review, or is not pending, in planning or rescheduled for today.
  *   DISPATCH_ALREADY_RESERVED  409 — Another coordinator holds a live reservation on an order.
  *   INVALID_TOKEN              401 — JWT is missing, malformed, or expired.
  *   INSUFFICIENT_PERMISSIONS   403 — Authenticated but role does not meet the endpoint requirement.
@@ -32,7 +32,7 @@ export class DispatchReservationsController {
     @ApiBadRequests({ validation: true, example: ["The 'dispatchIds' field must contain at least one ID."] })
     @ApiCreatedResponse({ type: ReserveResultDto })
     @ApiConflict(
-        { code: 'DISPATCH_NOT_RESERVABLE',   message: 'These orders are not available for planning (missing, or neither pending nor rescheduled for today): 4.' },
+        { code: 'DISPATCH_NOT_RESERVABLE',   message: 'These orders are not available for planning (missing, in address review, or not pending, in planning or rescheduled for today): 4.' },
         { code: 'DISPATCH_ALREADY_RESERVED', message: 'These orders are already being planned by another coordinator: 4.' },
     )
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })

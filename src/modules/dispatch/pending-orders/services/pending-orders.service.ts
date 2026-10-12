@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { BUSINESS_TIME_ZONE, INBOX_ELIGIBILITY_SQL } from '../../dispatches/utils/inbox-eligibility.js';
+import { BUSINESS_TIME_ZONE, INBOX_LISTING_SQL } from '../../dispatches/utils/inbox-eligibility.js';
 import { FindPendingOrdersParamsDto, PendingOrderSortBy } from '../dto/find-pending-orders-params.dto.js';
 import { FindPendingOrdersResponseDto, PendingOrderDto } from '../dto/pending-order.dto.js';
 import { escapeLike } from '../../../../shared/utils/like.util.js';
@@ -46,7 +46,7 @@ interface Row {
     reserved_by: number | null; reserved_by_name: string | null; reservation_expires_at: Date | null;
 }
 
-/** ST-48.2 / RF-A40 — the coordinator's inbox of orders waiting to be planned. */
+/** ST-48.2 / RF-A40 — the coordinator's inbox of orders waiting to be planned (plus `address_review`, read-only). */
 @Injectable()
 export class PendingOrdersService {
     constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
@@ -56,7 +56,7 @@ export class PendingOrdersService {
         const args: unknown[] = [];
         const bind = (value: unknown): string => { args.push(value); return `$${args.length}`; };
 
-        const where: string[] = [INBOX_ELIGIBILITY_SQL];
+        const where: string[] = [INBOX_LISTING_SQL];
         if (params.delivery_zone_id !== undefined) where.push(`d.delivery_zone_id = ${bind(params.delivery_zone_id)}`);
         if (params.priority) where.push(`d.priority = ${bind(params.priority)}`);
         if (params.shift) where.push(`(${SHIFT_SQL}) = ${bind(params.shift)}`);
@@ -92,7 +92,9 @@ export class PendingOrdersService {
     }
 
     private toDto(row: Row, userId: number): PendingOrderDto {
-        const reserved = row.reserved_by !== null;
+        // address_review orders are read-only (D-19): no reservation, not selectable, never in a batch.
+        const readOnly = row.status === DispatchStatusEnum.ADDRESS_REVIEW;
+        const reserved = !readOnly && row.reserved_by !== null;
         const mine = reserved && row.reserved_by === userId;
         return {
             id: row.id,
@@ -115,6 +117,7 @@ export class PendingOrdersService {
             weightKg: Number(row.weight_kg),
             volumeM3: Number(row.volume_m3),
             locked: reserved && !mine,
+            readOnly,
             reservation: reserved
                 ? {
                     reservedById: row.reserved_by!,

@@ -184,7 +184,7 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
 
     // ── Qué entra a la bandeja ─────────────────────────────────────────────────
     describe('estados incluidos y excluidos', () => {
-        it('incluye pending, in_planning propuesto y rescheduled de hoy; excluye cualquier otro estado y los reprogramados para otro día', async () => {
+        it('incluye pending, in_planning propuesto y rescheduled de hoy; excluye cualquier otro estado (address_review se lista aparte, solo lectura) y los reprogramados para otro día', async () => {
             const pending = await insert({ status: 'pending' });
             const pendingNoWindow = await insert({ status: 'pending', days: null });
             const proposed = await insert({ status: 'in_planning' });
@@ -193,7 +193,7 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
             const rescheduledYesterday = await insert({ status: 'rescheduled', days: -1 });
             const rescheduledNoDate = await insert({ status: 'rescheduled', days: null });
             const others: number[] = [];
-            for (const status of ['address_review', 'scheduled', 'assigned', 'out_for_delivery', 'in_transit',
+            for (const status of ['scheduled', 'assigned', 'out_for_delivery', 'in_transit',
                 'delivered', 'not_delivered', 'incident', 'returned', 'pickup_scheduled']) {
                 others.push(await insert({ status }));
             }
@@ -224,12 +224,12 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
             const res = await mine(`search=${encodeURIComponent(tag + ' Campos')}`);
             const row = res.body.data.find((r: any) => r.id === id);
             expect(Object.keys(row).sort()).toEqual([
-                'address', 'id', 'inbox', 'locked', 'orderNumber', 'packagesCount', 'priority', 'recipient', 'recipientPhone', 'reservation',
+                'address', 'id', 'inbox', 'locked', 'orderNumber', 'packagesCount', 'priority', 'readOnly', 'recipient', 'recipientPhone', 'reservation',
                 'shift', 'slaDueAt', 'status', 'trackingCode', 'volumeM3', 'weightKg', 'windowEnd', 'windowStart', 'zoneId', 'zoneName',
             ].sort());
             expect(row).toMatchObject({
                 recipient: `${tag} Campos`, zoneId: zones[0], zoneName: `${tag} Zona A`, priority: 'urgent', status: 'pending',
-                shift: 'morning', packagesCount: 2, locked: false, reservation: null,
+                shift: 'morning', packagesCount: 2, locked: false, readOnly: false, reservation: null,
             });
             expect(row.weightKg).toBeCloseTo(14.75, 3);
             expect(row.volumeM3).toBeCloseTo(0.3, 6); // 0.2 + 0.1
@@ -783,6 +783,124 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
             }
             expect(seen.sort((x, y) => x - y)).toEqual([...created].sort((x, y) => x - y));
             expect((await mine(`${q}&page=4`)).body.data).toEqual([]);
+        });
+    });
+
+    // ── address_review: visible pero solo lectura (descripción vigente de ST-48.2, D-19) ──
+    // Se listan para que el coordinador los vea, pero no se seleccionan, no se reservan y quedan fuera de todo lote.
+    describe('address_review en solo lectura', () => {
+        const rowFor = async (id: number, role: string, name: string) =>
+            (await mine(`search=${encodeURIComponent(name)}`, role)).body.data.find((r: any) => r.id === id);
+        const dbRow = async (id: number) =>
+            (await dataSource.query(
+                `SELECT s.name AS status, d.route_batch_id,
+                        (SELECT COUNT(*)::int FROM dispatch_reservations r WHERE r.dispatch_id = d.dispatch_id) AS reservations
+                   FROM dispatches d JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
+                  WHERE d.dispatch_id = $1`,
+                [id],
+            ))[0];
+
+        it('aparece en la bandeja marcado como solo lectura, sin reserva ni bloqueo', async () => {
+            const name = `${tag} Rev1`;
+            const review = await insert({ name, status: 'address_review' });
+            for (const role of ['coordinator', 'supervisor']) {
+                expect(await rowFor(review, role, name), role).toMatchObject({
+                    status: 'address_review', readOnly: true, inbox: null, locked: false, reservation: null,
+                });
+            }
+        });
+
+        it('los demás pedidos de la bandeja no son de solo lectura y lo seleccionable deja afuera al de dirección en revisión', async () => {
+            const name = `${tag} Rev2`;
+            const pending = await insert({ name });
+            const proposed = await insert({ name, status: 'in_planning' });
+            const rescheduled = await insert({ name, status: 'rescheduled', days: 0 });
+            const review = await insert({ name, status: 'address_review' });
+            await reserve([pending]);
+
+            const res = await mine(`search=${encodeURIComponent(name)}`, 'coordinator2');
+            const byId = new Map<number, any>(res.body.data.map((r: any) => [r.id, r]));
+            for (const id of [pending, proposed, rescheduled]) expect(byId.get(id).readOnly, `dispatch ${id}`).toBe(false);
+            expect(byId.get(review).readOnly).toBe(true);
+            // Seleccionable = ni solo lectura ni bloqueado por otro coordinador.
+            const selectable = res.body.data.filter((r: any) => !r.readOnly && !r.locked).map((r: any) => r.id);
+            expect(selectable.sort((x: number, y: number) => x - y)).toEqual([proposed, rescheduled].sort((x, y) => x - y));
+        });
+
+        it('no cambia los demás estados: un rescheduled de otro día y los estados fuera de la bandeja siguen sin aparecer', async () => {
+            const name = `${tag} Rev3`;
+            const review = await insert({ name, status: 'address_review' });
+            const tomorrow = await insert({ name, status: 'rescheduled', days: 1 });
+            const scheduled = await insert({ name, status: 'scheduled' });
+            const got = ids(await mine(`search=${encodeURIComponent(name)}`));
+            expect(got).toContain(review);
+            expect(got).not.toContain(tomorrow);
+            expect(got).not.toContain(scheduled);
+        });
+
+        it('respeta filtros, búsqueda, total y paginación como cualquier otro pedido', async () => {
+            const name = `${tag} Rev4`;
+            const reviewA = await insert({ name, status: 'address_review', zone: zones[0], priority: 'urgent' });
+            const pendingB = await insert({ name, zone: zones[1], priority: 'normal' });
+            const q = `search=${encodeURIComponent(name)}`;
+
+            expect((await mine(q)).body.total).toBe(2);
+            expect(ids(await mine(`${q}&delivery_zone_id=${zones[0]}`))).toEqual([reviewA]);
+            expect(ids(await mine(`${q}&priority=urgent`))).toEqual([reviewA]);
+            expect(ids(await mine(`${q}&delivery_zone_id=${zones[1]}`))).toEqual([pendingB]);
+            const page1 = await mine(`${q}&limit=1&page=1`);
+            const page2 = await mine(`${q}&limit=1&page=2`);
+            expect([...ids(page1), ...ids(page2)].sort((x, y) => x - y)).toEqual([reviewA, pendingB].sort((x, y) => x - y));
+        });
+
+        it('no se puede reservar: 409 DISPATCH_NOT_RESERVABLE y no queda ninguna reserva', async () => {
+            const name = `${tag} Rev5`;
+            const review = await insert({ name, status: 'address_review' });
+            const res = await reserve([review]);
+            expect(res.status).toBe(409);
+            expect(res.body.error).toBe('DISPATCH_NOT_RESERVABLE');
+            expect(res.body.message).toContain(String(review));
+            expect(await dbRow(review)).toMatchObject({ status: 'address_review', reservations: 0 });
+            expect(await rowFor(review, 'coordinator', name)).toMatchObject({ readOnly: true, inbox: null, locked: false, reservation: null });
+        });
+
+        it('mezclado con pedidos reservables, la reserva es todo o nada: ninguno queda reservado', async () => {
+            const name = `${tag} Rev6`;
+            const ok = await insert({ name });
+            const review = await insert({ name, status: 'address_review' });
+            const res = await reserve([ok, review]);
+            expect(res.status).toBe(409);
+            expect(res.body.error).toBe('DISPATCH_NOT_RESERVABLE');
+            expect(res.body.message).toContain(String(review));
+            expect(res.body.message).not.toContain(String(ok));
+            expect((await dbRow(ok)).reservations).toBe(0);
+            expect((await dbRow(review)).reservations).toBe(0);
+        });
+
+        it('queda fuera de todo lote: sin lote, sin reserva y con el estado intacto tras reservar, renovar y liberar', async () => {
+            const name = `${tag} Rev7`;
+            const review = await insert({ name, status: 'address_review' });
+            const free = await insert({ name });
+
+            expect((await reserve([free])).status).toBe(201);
+            expect((await reserve([review, free])).status).toBe(409);
+            expect((await renew()).body.renewed).toBe(1); // solo la del pedido libre
+            expect((await release()).body.released).toBe(1);
+
+            expect(await dbRow(review)).toEqual({ status: 'address_review', route_batch_id: null, reservations: 0 });
+        });
+
+        it('aunque exista una reserva suelta sobre él, se sigue mostrando de solo lectura y sin reserva', async () => {
+            const name = `${tag} Rev8`;
+            const review = await insert({ name, status: 'address_review' });
+            await dataSource.query(
+                `INSERT INTO dispatch_reservations (dispatch_id, reserved_by, reserved_at, last_activity_at, expires_at)
+                 VALUES ($1, $2, NOW(), NOW(), NOW() + INTERVAL '10 minutes')`,
+                [review, userIds.coordinator],
+            );
+            expect(await rowFor(review, 'coordinator2', name)).toMatchObject({
+                status: 'address_review', readOnly: true, inbox: null, locked: false, reservation: null,
+            });
         });
     });
 });
