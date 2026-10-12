@@ -17,6 +17,7 @@ import { AppModule } from '../src/app.module.js';
 import { AppConfig } from '../src/config/services/app.config.js';
 import { HttpExceptionFilter } from '../src/shared/filters/index.js';
 import { hashPassword } from '../src/shared/utils/crypto.util.js';
+import { withEventPurge } from './helpers/purge-append-only-events.js';
 
 describe('Motivos de incidencia (e2e, RF-A32)', () => {
     let app: INestApplication;
@@ -75,10 +76,12 @@ describe('Motivos de incidencia (e2e, RF-A32)', () => {
     });
 
     afterAll(async () => {
-        await dataSource.query(`DELETE FROM dispatch_incidents WHERE incident_reason_id IN (SELECT incident_reason_id FROM incident_reasons WHERE code LIKE $1)`, [`${tag}%`]);
-        await dataSource.query(`DELETE FROM dispatches WHERE source_order_ref LIKE $1`, [`ir-${run}-%`]);
-        await dataSource.query(`DELETE FROM incident_reasons WHERE code LIKE $1`, [`${tag}%`]);
-        await dataSource.query(`DELETE FROM users WHERE username LIKE $1`, [`e2e_ir_%_${run}`]);
+        await withEventPurge(dataSource, { dispatchRefs: [`ir-${run}-%`], userNames: [`e2e_ir_%_${run}`] }, async (manager) => {
+            await manager.query(`DELETE FROM dispatch_incidents WHERE incident_reason_id IN (SELECT incident_reason_id FROM incident_reasons WHERE code LIKE $1)`, [`${tag}%`]);
+            await manager.query(`DELETE FROM dispatches WHERE source_order_ref LIKE $1`, [`ir-${run}-%`]);
+            await manager.query(`DELETE FROM incident_reasons WHERE code LIKE $1`, [`${tag}%`]);
+            await manager.query(`DELETE FROM users WHERE username LIKE $1`, [`e2e_ir_%_${run}`]);
+        });
         await app.close();
     });
 

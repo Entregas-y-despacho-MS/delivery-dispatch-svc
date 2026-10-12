@@ -22,6 +22,9 @@ export class DispatchReschedule extends BaseCreated {
     @Column({ name: 'rescheduled_by', type: 'int', nullable: true })
     rescheduledBy: number | null;
 
+    @Column({ name: 'rescheduled_by_type', type: 'varchar', length: 20 })
+    rescheduledByType: 'customer' | 'coordinator' | 'system';
+
     @Column({ name: 'previous_route_batch_id', type: 'int', nullable: true })
     previousRouteBatchId: number | null;
 

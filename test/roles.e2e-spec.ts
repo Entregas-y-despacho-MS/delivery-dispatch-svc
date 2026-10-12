@@ -11,6 +11,7 @@ import { AppModule } from '../src/app.module.js';
 import { AppConfig } from '../src/config/services/app.config.js';
 import { HttpExceptionFilter } from '../src/shared/filters/index.js';
 import { hashPassword } from '../src/shared/utils/crypto.util.js';
+import { withEventPurge } from './helpers/purge-append-only-events.js';
 
 const NAMES = ['root', 'admin', 'coordinator', 'supervisor', 'driver'];
 
@@ -50,6 +51,7 @@ describe('Roles (e2e)', () => {
     });
 
     afterAll(async () => {
+        await withEventPurge(ds, { userNames: [`rl\\_%\\_${run}`] });
         await ds.query(`DELETE FROM users WHERE username LIKE $1`, [`rl\\_%\\_${run}`]);
         await app.close();
     });
@@ -121,6 +123,7 @@ describe('Roles (e2e)', () => {
         });
 
         afterAll(async () => {
+            await withEventPurge(ds, { userNames: [`rl\\_%\\_${run}`] });
             await ds.query(`DELETE FROM users WHERE role_id = ANY($1)`, [[roleId[cntA], roleId[cntB]]]);
             await ds.query(`DELETE FROM roles WHERE role_id = ANY($1)`, [[roleId[cntA], roleId[cntB]]]);
         });
