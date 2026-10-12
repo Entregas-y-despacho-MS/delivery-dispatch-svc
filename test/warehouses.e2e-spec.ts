@@ -17,6 +17,7 @@ import { AppModule } from '../src/app.module.js';
 import { AppConfig } from '../src/config/services/app.config.js';
 import { HttpExceptionFilter } from '../src/shared/filters/index.js';
 import { hashPassword } from '../src/shared/utils/crypto.util.js';
+import { withEventPurge } from './helpers/purge-append-only-events.js';
 
 describe('Almacenes (e2e, corrección de ES-26/ST-26.1)', () => {
     let app: INestApplication;
@@ -81,6 +82,7 @@ describe('Almacenes (e2e, corrección de ES-26/ST-26.1)', () => {
     });
 
     afterAll(async () => {
+        await withEventPurge(dataSource, { userNames: [`e2e_wh_%_${run}`] });
         await dataSource.query(`DELETE FROM warehouses WHERE code LIKE $1`, [`${tag}%`]);
         await dataSource.query(`DELETE FROM users WHERE username LIKE $1`, [`e2e_wh_%_${run}`]);
         await app.close();

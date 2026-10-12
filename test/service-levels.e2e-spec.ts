@@ -17,6 +17,7 @@ import { AppModule } from '../src/app.module.js';
 import { AppConfig } from '../src/config/services/app.config.js';
 import { HttpExceptionFilter } from '../src/shared/filters/index.js';
 import { hashPassword } from '../src/shared/utils/crypto.util.js';
+import { withEventPurge } from './helpers/purge-append-only-events.js';
 
 describe('Niveles de servicio (e2e, RF-A31)', () => {
     let app: INestApplication;
@@ -86,6 +87,7 @@ describe('Niveles de servicio (e2e, RF-A31)', () => {
     });
 
     afterAll(async () => {
+        await withEventPurge(dataSource, { dispatchRefs: [`sl-${run}-%`], userNames: [`e2e_sl_%_${run}`] });
         await dataSource.query(`DELETE FROM dispatches WHERE source_order_ref LIKE $1`, [`sl-${run}-%`]);
         await dataSource.query(`DELETE FROM service_levels WHERE name LIKE $1`, [`${tag}%`]);
         await dataSource.query(`DELETE FROM users WHERE username LIKE $1`, [`e2e_sl_%_${run}`]);

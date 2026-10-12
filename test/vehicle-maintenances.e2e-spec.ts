@@ -18,6 +18,7 @@ import { AppModule } from '../src/app.module.js';
 import { AppConfig } from '../src/config/services/app.config.js';
 import { HttpExceptionFilter } from '../src/shared/filters/index.js';
 import { hashPassword } from '../src/shared/utils/crypto.util.js';
+import { withEventPurge } from './helpers/purge-append-only-events.js';
 
 describe('Registro de incidente sobre un vehículo — transición de estado (e2e, RF-A34, Escenario 2)', () => {
     let app: INestApplication;
@@ -88,6 +89,7 @@ describe('Registro de incidente sobre un vehículo — transición de estado (e2
     });
 
     afterAll(async () => {
+        await withEventPurge(dataSource, { userNames: [`e2e_vm_%_${run}`] });
         await dataSource.query(`DELETE FROM vehicle_maintenances WHERE description LIKE $1`, [`${tag}%`]);
         await dataSource.query(`DELETE FROM vehicles WHERE plate LIKE $1`, [`${tag}%`]);
         await dataSource.query(`DELETE FROM vehicle_incident_types WHERE name LIKE $1`, [`${tag}%`]);
