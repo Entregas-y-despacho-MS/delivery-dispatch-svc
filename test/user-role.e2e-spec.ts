@@ -18,6 +18,7 @@ import { AppModule } from '../src/app.module.js';
 import { AppConfig } from '../src/config/services/app.config.js';
 import { HttpExceptionFilter } from '../src/shared/filters/index.js';
 import { hashPassword } from '../src/shared/utils/crypto.util.js';
+import { withEventPurge } from './helpers/purge-append-only-events.js';
 
 const PASSWORD = 'E2eTest1234';
 
@@ -60,6 +61,7 @@ describe('Cambio de rol (e2e, RF-A27)', () => {
     });
 
     afterAll(async () => {
+        await withEventPurge(ds, { userNames: [`ur\\_%\\_${run}`] });
         await ds.query(`DELETE FROM users WHERE username LIKE $1`, [`ur\\_%\\_${run}`]);
         await app.close();
     });

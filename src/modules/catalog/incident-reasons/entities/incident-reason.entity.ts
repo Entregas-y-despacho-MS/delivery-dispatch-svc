@@ -17,6 +17,9 @@ export class IncidentReason extends BaseEntitySoftDelete {
     @Column({ name: 'requires_evidence', type: 'boolean', default: false })
     requiresEvidence: boolean;
 
+    @Column({ name: 'counts_as_attempt', type: 'boolean', default: false })
+    countsAsAttempt: boolean;
+
     @Column({ name: 'active', type: 'boolean', default: true })
     active: boolean;
 }
