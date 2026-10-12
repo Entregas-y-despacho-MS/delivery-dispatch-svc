@@ -57,7 +57,7 @@ export class MessageConsumer {
         handler: MessageHandler,
         messageId: string | null,
     ): Promise<ConsumeOutcome> {
-        if (messageId && (await this.log.exists(messageId))) {
+        if (messageId && (await this.log.wasProcessed(messageId))) {
             this.logger.debug(`Ignored repeated message ${messageId} on ${topic}.`);
             return 'duplicate';
         }

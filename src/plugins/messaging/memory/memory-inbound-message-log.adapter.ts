@@ -5,12 +5,14 @@ import { InboundMessageLog, type InboundMessageRecord } from '../inbound-message
 export class MemoryInboundMessageLogAdapter extends InboundMessageLog {
     private readonly records = new Map<string, InboundMessageRecord>();
 
-    async exists(messageId: string): Promise<boolean> {
-        return this.records.has(messageId);
+    async wasProcessed(messageId: string): Promise<boolean> {
+        return this.records.get(messageId)?.status === 'processed';
     }
 
     async record(record: InboundMessageRecord): Promise<boolean> {
-        if (this.records.has(record.messageId)) return false;
+        const existing = this.records.get(record.messageId);
+        const replacesRejection = existing?.status === 'rejected' && record.status === 'processed';
+        if (existing && !replacesRejection) return false;
         this.records.set(record.messageId, { ...record });
         return true;
     }

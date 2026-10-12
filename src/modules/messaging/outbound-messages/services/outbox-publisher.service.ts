@@ -14,6 +14,7 @@ interface ClaimedMessage {
     type: string;
     payload: MessageEnvelope;
     attempts: number;
+    created_at: Date | string;
 }
 
 export interface OutboxRunResult {
@@ -77,13 +78,33 @@ export class OutboxPublisherService implements OnApplicationBootstrap, OnModuleD
         for (const message of await this.claim()) {
             try {
                 await this.publishWithTimeout(message);
-                await this.markSent(message);
-                result.sent++;
             } catch (error) {
                 const detail = error instanceof Error ? error.message : String(error);
-                const exhausted = await this.registerFailure(message, detail);
-                if (exhausted) result.failed++;
-                else result.retried++;
+                try {
+                    const outcome = await this.registerFailure(message, detail);
+                    if (outcome === 'failed') result.failed++;
+                    else if (outcome === 'retried') result.retried++;
+                } catch (dbError) {
+                    // The database failed too: the lease expires and the message is picked up again.
+                    this.logger.error(
+                        `Could not register the failure of message ${message.message_id}: ` +
+                            (dbError instanceof Error ? dbError.message : String(dbError)),
+                    );
+                }
+                continue;
+            }
+
+            // Published. A failure to mark it is NOT a publish failure: it must not count as an attempt
+            // (nor end in a false alert). The lease expires and the message is published again; the
+            // consumers deduplicate by messageId.
+            try {
+                await this.markSent(message);
+                result.sent++;
+            } catch (dbError) {
+                this.logger.error(
+                    `Message ${message.message_id} was published but could not be marked as sent: ` +
+                        (dbError instanceof Error ? dbError.message : String(dbError)),
+                );
             }
         }
         return result;
@@ -99,12 +120,13 @@ export class OutboxPublisherService implements OnApplicationBootstrap, OnModuleD
                      ORDER BY next_attempt_at, created_at
                      LIMIT $2
                        FOR UPDATE SKIP LOCKED)
-          RETURNING message_id, type, payload, attempts`,
-            [this.config.leaseSeconds, this.config.batchSize],
+          RETURNING message_id, type, payload, attempts, created_at`,
+            [this.config.effectiveLeaseSeconds, this.config.batchSize],
         );
         // An UPDATE ... RETURNING comes back as [rows, affectedCount] with the postgres driver.
-        const rows = Array.isArray(result) && Array.isArray(result[0]) ? result[0] : result;
-        return rows as ClaimedMessage[];
+        const rows = (Array.isArray(result) && Array.isArray(result[0]) ? result[0] : result) as ClaimedMessage[];
+        // RETURNING has no order: publish the oldest first so messages of one entity go out in order.
+        return [...rows].sort((a, b) => Number(new Date(a.created_at)) - Number(new Date(b.created_at)));
     }
 
     private async publishWithTimeout(message: ClaimedMessage): Promise<void> {
@@ -131,8 +153,11 @@ export class OutboxPublisherService implements OnApplicationBootstrap, OnModuleD
         );
     }
 
-    /** Returns `true` when the attempts are exhausted and the message was left in `failed`. */
-    private async registerFailure(message: ClaimedMessage, detail: string): Promise<boolean> {
+    /**
+     * `retried`: another attempt was scheduled. `failed`: the attempts are exhausted and the message
+     * was left in `failed`. `ignored`: it was no longer pending (another instance resolved it).
+     */
+    private async registerFailure(message: ClaimedMessage, detail: string): Promise<'retried' | 'failed' | 'ignored'> {
         const attempts = message.attempts + 1;
         if (attempts < this.config.maxAttempts) {
             const delayMs = OUTBOX_RETRY_DELAYS_MS[Math.min(attempts - 1, OUTBOX_RETRY_DELAYS_MS.length - 1)];
@@ -147,25 +172,32 @@ export class OutboxPublisherService implements OnApplicationBootstrap, OnModuleD
                 `Message ${message.message_id} (${message.type}) not published, attempt ${attempts}/` +
                     `${this.config.maxAttempts}; retrying in ${delayMs} ms: ${detail}`,
             );
-            return false;
+            return 'retried';
         }
 
-        // Terminal failure: the status change and the alert are one unit.
-        await this.dataSource.transaction(async (manager) => {
-            await manager.query(
-                `UPDATE outbound_messages
+        // Terminal failure: one statement, so the status change and the alert are atomic, and the alert
+        // is written only if THIS call moved the message to `failed` (another instance may have sent it).
+        const alerts: unknown[] = await this.dataSource.query(
+            `WITH failed AS (
+                 UPDATE outbound_messages
                     SET status = 'failed', attempts = $2, updated_at = NOW()
-                  WHERE message_id = $1 AND status = 'pending'`,
-                [message.message_id, attempts],
-            );
-            await manager.query(`INSERT INTO audit_logs (user_id, action, detail) VALUES (NULL, $1, $2)`, [
+                  WHERE message_id = $1 AND status = 'pending'
+              RETURNING message_id)
+             INSERT INTO audit_logs (user_id, action, detail)
+             SELECT NULL, $3, $4 FROM failed
+             RETURNING audit_log_id`,
+            [
+                message.message_id,
+                attempts,
                 OUTBOUND_MESSAGE_FAILED_ACTION,
                 JSON.stringify({ messageId: message.message_id, type: message.type, attempts, lastError: detail }),
-            ]);
-        });
+            ],
+        );
+        if (alerts.length === 0) return 'ignored';
+
         this.logger.error(
             `Message ${message.message_id} (${message.type}) FAILED after ${attempts} attempts: ${detail}`,
         );
-        return true;
+        return 'failed';
     }
 }

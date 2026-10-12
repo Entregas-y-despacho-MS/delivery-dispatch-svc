@@ -1,4 +1,5 @@
 import { DynamicModule, Global, Module } from '@nestjs/common';
+import { UnknownMessagingAdapterException } from './exceptions/index.js';
 import { MemoryMessagingModule } from './memory/memory-messaging.module.js';
 import { PubsubMessagingModule } from './pubsub/pubsub-messaging.module.js';
 
@@ -27,6 +28,6 @@ export class MessagingModule {
     private static adapterModule(adapter: string): typeof MemoryMessagingModule | typeof PubsubMessagingModule {
         if (adapter === 'pubsub') return PubsubMessagingModule;
         if (adapter === 'memory') return MemoryMessagingModule;
-        throw new Error(`Unknown MESSAGING_ADAPTER "${adapter}". Valid values: pubsub, memory.`);
+        throw new UnknownMessagingAdapterException(adapter);
     }
 }

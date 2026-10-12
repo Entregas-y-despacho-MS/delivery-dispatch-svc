@@ -10,11 +10,23 @@ export interface InboundMessageRecord {
     errorDetail?: string;
 }
 
-/** Append-only receipt log; the message UUID is the idempotency key. */
+/**
+ * Receipt log of incoming messages; the message UUID is the idempotency key.
+ *
+ * Delivery is at-least-once: the receipt is written after the handler finishes, so a crash between
+ * the two (or two instances receiving the same message at once) can run a handler twice. Handlers
+ * must therefore be idempotent on their own — the `recordVersion` rule of the contracts does that.
+ */
 export abstract class InboundMessageLog {
-    /** Whether a message with this id was already received (processed or rejected). */
-    abstract exists(messageId: string): Promise<boolean>;
+    /**
+     * Whether the message was already **processed**. A rejected message does not count: the sender
+     * may fix it and resend it with the same `messageId`, and that resend must reach the handler.
+     */
+    abstract wasProcessed(messageId: string): Promise<boolean>;
 
-    /** Stores the receipt. Returns `false` and changes nothing if the `messageId` already exists. */
+    /**
+     * Stores the receipt. Returns `false` and changes nothing if one already exists, except that a
+     * `processed` receipt replaces a `rejected` one (the corrected resend).
+     */
     abstract record(record: InboundMessageRecord): Promise<boolean>;
 }

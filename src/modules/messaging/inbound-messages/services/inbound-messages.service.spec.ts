@@ -10,12 +10,12 @@ describe('InboundMessagesService', () => {
         return { rawRepo, dataSource, service: new InboundMessagesService(rawRepo as never, dataSource as never) };
     };
 
-    it('exists asks the table by message id', async () => {
+    it('wasProcessed asks the table for a processed receipt', async () => {
         const { service, rawRepo } = build();
         rawRepo.existsBy.mockResolvedValue(true);
 
-        await expect(service.exists(MESSAGE_ID)).resolves.toBe(true);
-        expect(rawRepo.existsBy).toHaveBeenCalledWith({ messageId: MESSAGE_ID });
+        await expect(service.wasProcessed(MESSAGE_ID)).resolves.toBe(true);
+        expect(rawRepo.existsBy).toHaveBeenCalledWith({ messageId: MESSAGE_ID, status: 'processed' });
     });
 
     it('records a processed message without an error detail', async () => {
@@ -31,7 +31,7 @@ describe('InboundMessagesService', () => {
 
         expect(stored).toBe(true);
         const [sql, params] = dataSource.query.mock.calls[0];
-        expect(sql).toContain('ON CONFLICT (message_id) DO NOTHING');
+        expect(sql).toContain('ON CONFLICT (message_id) DO UPDATE');
         expect(params).toEqual([MESSAGE_ID, 'processed', 'inventory.shipment.ready', 'inventory', null]);
     });
 

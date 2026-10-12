@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import Ajv2020Module from 'ajv/dist/2020.js';
 import type { ValidateFunction } from 'ajv/dist/2020.js';
 import addFormatsModule from 'ajv-formats';
-import { MessagingContractsNotFoundException } from '../exceptions/index.js';
+import { InvalidMessageContractException, MessagingContractsNotFoundException } from '../exceptions/index.js';
 
 // ajv and ajv-formats are CommonJS: under ESM the default import may be the module object itself.
 const Ajv2020 = ((Ajv2020Module as { default?: unknown }).default ?? Ajv2020Module) as typeof Ajv2020Module.default;
@@ -12,6 +12,7 @@ const addFormats = ((addFormatsModule as { default?: unknown }).default ?? addFo
 const ENVELOPE_FILE = 'envelope.schema.json';
 const SCHEMAS_FOLDER = 'schemas';
 const SCHEMA_SUFFIX = '.schema.json';
+const MAX_REPORTED_ERRORS = 50;
 
 /** Folder with the JSON Schemas of the topics, relative to the working directory of the process. */
 export const DEFAULT_CONTRACTS_DIR = 'contracts/messages';
@@ -51,8 +52,11 @@ export class MessageValidator {
         for (const file of readdirSync(schemasDir)) {
             if (!file.endsWith(SCHEMA_SUFFIX)) continue;
             const schema = MessageValidator.readJson(resolve(schemasDir, file));
+            if (typeof schema.$id !== 'string' || schema.$id.length === 0) {
+                throw new InvalidMessageContractException(file, 'it has no $id');
+            }
             ajv.addSchema(schema);
-            topicSchemas.set(file.slice(0, -SCHEMA_SUFFIX.length), schema.$id as string);
+            topicSchemas.set(file.slice(0, -SCHEMA_SUFFIX.length), schema.$id);
         }
         if (topicSchemas.size === 0) {
             throw new MessagingContractsNotFoundException(directory);
@@ -84,11 +88,24 @@ export class MessageValidator {
         }
         if (validator(message)) return { valid: true };
 
-        const errors = (validator.errors ?? []).map((error) => ({
+        const all = (validator.errors ?? []).map((error) => ({
             path: error.instancePath,
             message: error.message ?? 'Invalid value.',
             keyword: error.keyword,
         }));
+        // A huge malformed payload can produce thousands of errors; they are copied to the dead-letter
+        // and to a TEXT column, so only the first ones are kept.
+        const errors =
+            all.length > MAX_REPORTED_ERRORS
+                ? [
+                      ...all.slice(0, MAX_REPORTED_ERRORS),
+                      {
+                          path: '',
+                          message: `${all.length - MAX_REPORTED_ERRORS} more error(s) omitted.`,
+                          keyword: 'truncated',
+                      },
+                  ]
+                : all;
         return { valid: false, errors };
     }
 

@@ -10,6 +10,8 @@
 //   PUBSUB_PROJECT_ID     proyecto del emulador             (por defecto delivery-dispatch-local)
 //   SCHEMAS_DIR           carpeta con los *.schema.json     (por defecto ../../contracts/messages/schemas)
 //   PUBSUB_MAX_DELIVERY_ATTEMPTS  entregas antes del dead-letter (por defecto 5)
+//   PUBSUB_SUBSCRIPTION_SUFFIX    sufijo de la suscripción del servicio (por defecto dispatch-svc)
+//   PUBSUB_MIN_BACKOFF / PUBSUB_MAX_BACKOFF  espera entre reentregas de un mensaje cuyo manejador falló (10s / 600s)
 
 import { readdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -25,7 +27,11 @@ const MAX_DELIVERY_ATTEMPTS = Number(process.env.PUBSUB_MAX_DELIVERY_ATTEMPTS ??
 const SCHEMA_SUFFIX = '.schema.json';
 /** Los tópicos que publica Despachos no tienen suscripción propia: la crea quien los consume. */
 const OUTBOUND_PREFIX = 'dispatch.';
-const SERVICE_SUBSCRIBER = 'dispatch-svc';
+const SERVICE_SUBSCRIBER = process.env.PUBSUB_SUBSCRIPTION_SUFFIX ?? 'dispatch-svc';
+// Sin retryPolicy el broker reentrega de inmediato y las entregas se agotan en milisegundos: una caída
+// breve de la base de datos mandaría al dead-letter mensajes válidos.
+const MIN_BACKOFF = process.env.PUBSUB_MIN_BACKOFF ?? '10s';
+const MAX_BACKOFF = process.env.PUBSUB_MAX_BACKOFF ?? '600s';
 const DEAD_LETTER_SUFFIX = '.dead-letter';
 const DEAD_LETTER_INSPECT = 'inspect';
 
@@ -99,6 +105,7 @@ async function main() {
         await createTopic(deadLetter);
         await createSubscription(`${deadLetter}.${DEAD_LETTER_INSPECT}`, deadLetter);
         await createSubscription(`${topic}.${SERVICE_SUBSCRIBER}`, topic, {
+            retryPolicy: { minimumBackoff: MIN_BACKOFF, maximumBackoff: MAX_BACKOFF },
             deadLetterPolicy: {
                 deadLetterTopic: topicPath(deadLetter),
                 maxDeliveryAttempts: MAX_DELIVERY_ATTEMPTS,

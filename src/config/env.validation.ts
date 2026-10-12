@@ -25,7 +25,18 @@ export const envValidation = Joi.object({
     // -- Plugin: messaging (Google Cloud Pub/Sub) -------------------------------
     // pubsub = emulator in development (PUBSUB_EMULATOR_HOST) or real Pub/Sub; memory = in-process, tests only.
     MESSAGING_ADAPTER:          Joi.string().valid('pubsub', 'memory').default('pubsub'),
-    PUBSUB_PROJECT_ID:          Joi.string().default('delivery-dispatch-local'),
+    // Default only for local work: in production without an emulator the project must be explicit, or
+    // the service would talk to the real Pub/Sub with the project name of the emulator.
+    /* oxlint-disable unicorn/no-thenable -- `then`/`otherwise` are Joi's own conditional keys */
+    PUBSUB_PROJECT_ID:          Joi.string().when('NODE_ENV', {
+        is:        EnvironmentEnum.PRODUCTION,
+        then:      Joi.when('PUBSUB_EMULATOR_HOST', {
+            is:        Joi.string().min(1).required(),
+            then:      Joi.string().default('delivery-dispatch-local'),
+            otherwise: Joi.string().required(),
+        }),
+        otherwise: Joi.string().default('delivery-dispatch-local'),
+    }),
     // host:port of the emulator; leave empty to use real Pub/Sub with application default credentials.
     PUBSUB_EMULATOR_HOST:       Joi.string().allow('').optional(),
     // Subscription of this service on every incoming topic: <topic>.<suffix>.

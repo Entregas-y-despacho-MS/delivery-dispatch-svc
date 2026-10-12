@@ -24,6 +24,17 @@ export class OutboxService {
      * Throws `InvalidOutboundMessageException` when the message does not match the schema of its topic.
      */
     async enqueue(envelope: MessageEnvelope, options?: MutationOptions): Promise<boolean> {
+        // Only what Despachos itself publishes goes through the outbox: queuing an incoming topic
+        // (`inventory.*`, ...) would publish a forged message to a topic this service also consumes.
+        if (envelope.source !== 'dispatch' || !envelope.type.startsWith('dispatch.')) {
+            throw new InvalidOutboundMessageException(envelope.type, [
+                {
+                    path: '/source',
+                    message: 'Only messages from source "dispatch" with a "dispatch.*" type can be queued.',
+                    keyword: 'outboxScope',
+                },
+            ]);
+        }
         const result = this.validator.validate(envelope.type, envelope);
         if (!result.valid) throw new InvalidOutboundMessageException(envelope.type, result.errors);
 

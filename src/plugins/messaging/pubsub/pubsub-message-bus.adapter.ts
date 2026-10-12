@@ -26,6 +26,7 @@ export class PubsubMessageBusAdapter extends MessageBus implements OnModuleDestr
     private readonly logger = new Logger(PubsubMessageBusAdapter.name);
     private readonly topics = new Map<string, Topic>();
     private readonly subscriptions = new Map<string, Subscription>();
+    private readonly inFlight = new Set<Promise<void>>();
     private readonly consumer: MessageConsumer;
 
     constructor(
@@ -59,7 +60,8 @@ export class PubsubMessageBusAdapter extends MessageBus implements OnModuleDestr
         if (!exists) throw new SubscriptionNotFoundException(name);
 
         subscription.on('message', (message: Message) => {
-            void this.onMessage(topic, handler, message);
+            const work = this.onMessage(topic, handler, message).finally(() => this.inFlight.delete(work));
+            this.inFlight.add(work);
         });
         subscription.on('error', (error: Error) => {
             this.logger.error(`Subscription ${name} failed: ${error.message}`, error.stack);
@@ -69,8 +71,10 @@ export class PubsubMessageBusAdapter extends MessageBus implements OnModuleDestr
     }
 
     async onModuleDestroy(): Promise<void> {
+        // Stop receiving, let the handlers in progress finish and ack, and only then close the client.
         await Promise.all([...this.subscriptions.values()].map((subscription) => subscription.close()));
         this.subscriptions.clear();
+        await Promise.allSettled(this.inFlight);
         await this.client.close();
     }
 

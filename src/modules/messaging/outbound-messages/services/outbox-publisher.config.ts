@@ -27,4 +27,14 @@ export class OutboxPublisherConfig {
         this.leaseSeconds = config.get<number>('OUTBOX_LEASE_SECONDS')!;
         this.publishTimeoutMs = config.get<number>('OUTBOX_PUBLISH_TIMEOUT_MS')!;
     }
+
+    /**
+     * The messages of a batch are published one after another, so the lease must outlast the worst
+     * case (every publish timing out); otherwise another instance would claim a message that is
+     * still waiting its turn and publish it twice.
+     */
+    get effectiveLeaseSeconds(): number {
+        const worstCaseSeconds = Math.ceil((this.batchSize * this.publishTimeoutMs) / 1000) + 5;
+        return Math.max(this.leaseSeconds, worstCaseSeconds);
+    }
 }

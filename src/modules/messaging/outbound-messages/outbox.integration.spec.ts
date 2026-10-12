@@ -9,7 +9,7 @@ import { MemoryMessageBusAdapter } from '../../../plugins/messaging/memory/memor
 import { InboundMessage } from '../inbound-messages/entities/inbound-message.entity.js';
 import { InboundMessagesService } from '../inbound-messages/services/inbound-messages.service.js';
 import { OutboundMessage } from './entities/outbound-message.entity.js';
-import { OUTBOUND_MESSAGE_FAILED_ACTION, type OutboxPublisherConfig } from './services/outbox-publisher.config.js';
+import { OUTBOUND_MESSAGE_FAILED_ACTION, OutboxPublisherConfig } from './services/outbox-publisher.config.js';
 import { OutboxPublisherService } from './services/outbox-publisher.service.js';
 import { OutboxService } from './services/outbox.service.js';
 
@@ -27,8 +27,21 @@ const READY = 'inventory.shipment.ready';
 const exampleData = (topic: string): Record<string, unknown> =>
     (JSON.parse(readFileSync(resolve(CONTRACTS_DIR, 'examples', `${topic}.example.json`), 'utf8')) as MessageEnvelope).data;
 
-const config = (overrides: Partial<OutboxPublisherConfig> = {}): OutboxPublisherConfig =>
-    ({ pollIntervalMs: 0, maxAttempts: 3, batchSize: 20, leaseSeconds: 60, publishTimeoutMs: 2000, ...overrides }) as OutboxPublisherConfig;
+/** The real config class (its lease is derived from the batch size), fed by a plain getter. */
+const config = (overrides: Record<string, number> = {}): OutboxPublisherConfig =>
+    Object.assign(
+        new OutboxPublisherConfig({
+            get: (key: string) =>
+                ({
+                    OUTBOX_POLL_INTERVAL_MS: 0,
+                    OUTBOX_MAX_ATTEMPTS: 3,
+                    OUTBOX_BATCH_SIZE: 20,
+                    OUTBOX_LEASE_SECONDS: 60,
+                    OUTBOX_PUBLISH_TIMEOUT_MS: 2000,
+                })[key],
+        } as never),
+        overrides,
+    );
 
 describe.skipIf(!PORT)('outbox against PostgreSQL', () => {
     let dataSource: DataSource;
@@ -208,7 +221,7 @@ describe.skipIf(!PORT)('outbox against PostgreSQL', () => {
 
         expect(first).toBe(true);
         expect(second).toBe(false);
-        expect(await log.exists(messageId)).toBe(true);
+        expect(await log.wasProcessed(messageId)).toBe(true);
         const [stored] = (await dataSource.query(`SELECT status, error_detail FROM inbound_messages WHERE message_id = $1`, [
             messageId,
         ])) as { status: string; error_detail: string | null }[];

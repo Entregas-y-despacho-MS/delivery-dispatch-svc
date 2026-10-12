@@ -44,6 +44,15 @@ describe('OutboxService', () => {
         await expect(service.enqueue(validEnvelope())).resolves.toBe(false);
     });
 
+    it('refuses to queue a message of an incoming topic', async () => {
+        const dataSource = { manager: { query: vi.fn() } };
+        const service = new OutboxService(dataSource as never, validator);
+        const incoming = buildEnvelope({ type: 'inventory.shipment.cancelled', source: 'inventory', data: {} });
+
+        await expect(service.enqueue(incoming)).rejects.toThrow(InvalidOutboundMessageException);
+        expect(dataSource.manager.query).not.toHaveBeenCalled();
+    });
+
     it('refuses a message that does not match the schema of its topic and writes nothing', async () => {
         const dataSource = { manager: { query: vi.fn() } };
         const service = new OutboxService(dataSource as never, validator);

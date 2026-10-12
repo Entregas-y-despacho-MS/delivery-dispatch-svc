@@ -93,13 +93,18 @@ describe('MemoryMessageBusAdapter', () => {
         expect(outcomes.sort()).toEqual(['duplicate', 'processed']);
     });
 
-    it('does not send the same invalid message to the dead-letter twice', async () => {
-        const message = { ...validMessage(), source: 'marketplace' } as MessageEnvelope;
+    it('lets the sender fix a rejected message and resend it with the same messageId', async () => {
+        const message = validMessage();
+        const broken = { ...message, source: 'marketplace' } as MessageEnvelope;
 
-        await bus.publishRaw(TOPIC, message);
-        await bus.publishRaw(TOPIC, message);
+        await expect(bus.publishRaw(TOPIC, broken)).resolves.toBe('rejected');
+        expect(log.get(message.messageId)?.status).toBe('rejected');
 
-        expect(bus.deadLettersOf(TOPIC)).toHaveLength(1);
+        await expect(bus.publishRaw(TOPIC, message)).resolves.toBe('processed');
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(log.get(message.messageId)?.status).toBe('processed');
+        // From now on it is a plain duplicate.
+        await expect(bus.publishRaw(TOPIC, message)).resolves.toBe('duplicate');
     });
 
     it('does not record a message whose handler failed, so a redelivery is processed', async () => {
