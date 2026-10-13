@@ -60,6 +60,10 @@ export const envValidation = Joi.object({
     OUTBOX_LEASE_SECONDS:       Joi.number().integer().min(1).default(60),
     OUTBOX_PUBLISH_TIMEOUT_MS:  Joi.number().integer().min(1).default(10000),
 
+    // -- Scheduler (app/scheduler) --------------------------------------------
+    // false turns the minute tick off (e2e, or an instance that must not run tasks); manual triggers still work.
+    SCHEDULER_ENABLED:          Joi.boolean().default(true),
+
     // -- Auth (JWT) -----------------------------------------------------------
     ACTIVE_JWT:              Joi.boolean().default(true),
     JWT_SECRET:              Joi.string().required(),
