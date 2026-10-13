@@ -3,10 +3,12 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { RouteBatch } from '../entities/route-batch.entity.js';
 import { RouteBatchEvent } from '../entities/route-batch-event.entity.js';
-import { RouteBatchNotFoundException, RouteBatchNotProvisionalException } from '../exceptions/index.js';
+import { RouteBatchNotFoundException, RouteBatchNotProvisionalException, RouteBatchReviewerNotEligibleException } from '../exceptions/index.js';
+import { RouteBatchReviewerDto } from '../dto/route-batch-reviewer.dto.js';
 import { RoleEnum, RouteBatchStatusEnum } from '../../../../shared/enums/index.js';
 
 export const REVIEWER_ASSIGNED_EVENT   = 'reviewer_assigned';
+export const REVIEWER_REASSIGNED_EVENT = 'reviewer_reassigned';
 export const REVIEWER_UNASSIGNED_EVENT = 'reviewer_unassigned';
 
 // Serializes every "who reviews this batch?" decision: two batches created at once must see each other's count.
@@ -32,6 +34,42 @@ export class RouteBatchReviewerService {
     async assignReviewer(routeBatchId: number, options?: { manager?: EntityManager }): Promise<ReviewerAssignment> {
         if (options?.manager) return await this.assign(options.manager, routeBatchId);
         return await this.dataSource.transaction((manager) => this.assign(manager, routeBatchId));
+    }
+
+    /**
+     * Manual handover of the whole batch to another coordinator or supervisor (D-42). The target must be an
+     * active, not deleted coordinator or supervisor. Asking for the current reviewer is a no-op (no write, no
+     * event). The batch `version` is not touched: it only moves on approve, move, merge and freeze (§5.2).
+     */
+    async reassignReviewer(routeBatchId: number, reviewerUserId: number, actorUserId: number, reason?: string | null): Promise<RouteBatchReviewerDto> {
+        return await this.dataSource.transaction(async (manager) => {
+            const [batch]: { reviewer_user_id: number | null; status: string; version: number }[] = await manager.query(
+                `SELECT reviewer_user_id, status, version FROM route_batches WHERE route_batch_id = $1 FOR UPDATE`,
+                [routeBatchId],
+            );
+            if (!batch) throw new RouteBatchNotFoundException();
+            if (batch.status !== RouteBatchStatusEnum.PROVISIONAL) throw new RouteBatchNotProvisionalException(batch.status);
+
+            const result = { id: routeBatchId, status: batch.status, reviewerUserId, version: batch.version };
+            if (batch.reviewer_user_id === reviewerUserId) return result;
+
+            const eligible = await manager.query(
+                `SELECT 1
+                   FROM users u
+                   JOIN roles r ON r.role_id = u.role_id
+                  WHERE u.user_id = $1 AND u.active = TRUE AND u.deleted_at IS NULL AND r.name = ANY($2)`,
+                [reviewerUserId, [RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR]],
+            );
+            if (eligible.length === 0) throw new RouteBatchReviewerNotEligibleException();
+
+            await manager.getRepository(RouteBatch).update(routeBatchId, { reviewerUserId });
+            const events = manager.getRepository(RouteBatchEvent);
+            await events.save(events.create({
+                routeBatchId, eventType: REVIEWER_REASSIGNED_EVENT, actorUserId, actorType: 'user',
+                reason: reason ?? null, metadata: { from: batch.reviewer_user_id, to: reviewerUserId, mode: 'manual' },
+            }));
+            return result;
+        });
     }
 
     /** Active, not deleted coordinator with the fewest `provisional` batches assigned; ties → lowest id. */
