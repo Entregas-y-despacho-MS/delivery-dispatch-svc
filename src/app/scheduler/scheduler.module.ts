@@ -7,6 +7,8 @@ import { TaskRunLog } from './ports/task-run-log.port.js';
 import { SchedulerConfig } from './scheduler.config.js';
 import { ScheduledTaskRegistry } from './services/scheduled-task-registry.service.js';
 import { ScheduledTaskRunner } from './services/scheduled-task-runner.service.js';
+import { ManualTaskTriggerService } from './services/manual-task-trigger.service.js';
+import { PlanningController } from './controllers/planning.controller.js';
 import { SchedulerTicker } from './services/scheduler-ticker.service.js';
 
 // No own table (runs are traced in audit_logs through raw SQL): "system logic", like app/sync.
@@ -15,12 +17,14 @@ import { SchedulerTicker } from './services/scheduler-ticker.service.js';
 @Global()
 @Module({
     imports: [ScheduleModule.forRoot()],
+    controllers: [PlanningController],
     providers: [
         SchedulerConfig,
         { provide: TaskLock, useClass: PostgresTaskLock },
         { provide: TaskRunLog, useClass: AuditLogTaskRunLog },
         ScheduledTaskRegistry,
         ScheduledTaskRunner,
+        ManualTaskTriggerService,
         SchedulerTicker,
     ],
     exports: [ScheduledTaskRegistry, ScheduledTaskRunner],
