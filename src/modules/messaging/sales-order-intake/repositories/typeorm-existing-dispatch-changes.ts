@@ -232,6 +232,17 @@ export class TypeOrmExistingDispatchChanges extends ExistingDispatchChanges {
         };
     }
 
+    /**
+     * The SQL of this operation comes in the next stage of ST-72.5. Until then it fails loudly
+     * instead of silently ignoring a package change, and nothing calls it yet.
+     */
+    async applyShipmentChange(
+        _input: Parameters<ExistingDispatchChanges['applyShipmentChange']>[0],
+        _options: TransactionOptions,
+    ): Promise<DispatchChangeOutcome> {
+        throw new Error('applyShipmentChange is not implemented for PostgreSQL yet (ST-72.5, stage 3).');
+    }
+
     private managerOf(options: TransactionOptions): EntityManager {
         return options.manager ?? this.dataSource.manager;
     }

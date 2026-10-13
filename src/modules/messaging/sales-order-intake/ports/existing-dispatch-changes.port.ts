@@ -1,5 +1,6 @@
 import type { TransactionOptions } from '../../../../plugins/messaging/inbound-message-transaction.port.js';
 import type { DeliveryChangeBlocks } from '../domain/dispatch-change.rules.js';
+import type { ShipmentChangeBlocks } from '../domain/shipment-change.rules.js';
 
 /** Origin of the change. */
 export type ChangeSource = 'marketplace' | 'inventory';
@@ -60,6 +61,24 @@ export abstract class ExistingDispatchChanges {
     /** Almacén reported `isReady: false` (`ready: false`) or that the order is ready again. */
     abstract setShipmentReady(
         input: { salesOrderId: string; source: ChangeSource; ready: boolean; receivedAt: string; reason?: string },
+        options: TransactionOptions,
+    ): Promise<DispatchChangeOutcome>;
+
+    /**
+     * A `ready` or `updated` of Almacén, after the order became a dispatch, changed its packages,
+     * the handling conditions, the evidence policy or the physical packing (ST-72.5).
+     *
+     * - Nothing differs from the dispatch: `ignored` / `no_change`; nothing is written and no event is
+     *   returned, so a resent `ready` never alters the planning.
+     * - `pending`, `address_review`, `in_planning`: `applied`; the whole list of `dispatch_packages` is
+     *   replaced and a dispatch of a proposed batch leaves it when its packages or conditions changed.
+     * - `scheduled` and anything after it: `attention_required`; the dispatch is not modified.
+     * - `cancelled`: `ignored`.
+     *
+     * `warehouseId` and `availableFrom` are not applied here (they have their own rule).
+     */
+    abstract applyShipmentChange(
+        input: { salesOrderId: string; source: ChangeSource; blocks: ShipmentChangeBlocks; receivedAt: string },
         options: TransactionOptions,
     ): Promise<DispatchChangeOutcome>;
 }
