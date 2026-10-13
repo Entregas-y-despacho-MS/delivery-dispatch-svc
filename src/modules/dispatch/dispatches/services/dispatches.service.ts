@@ -10,12 +10,11 @@ import { DtoRepository } from '../../../../shared/orm/index.js';
 import { MutationOptions } from '../../../../shared/dto/options.dto.js';
 import { DispatchStatusEnum } from '../../../../shared/enums/index.js';
 
-// Statuses a dispatch never leaves: a delivered or returned order is finished.
-export const FINAL_STATUSES: string[] = [DispatchStatusEnum.DELIVERED, DispatchStatusEnum.RETURNED];
+// Terminal statuses for dispatch workflows; cancelled orders also leave planning permanently.
+export const FINAL_STATUSES: string[] = [DispatchStatusEnum.DELIVERED, DispatchStatusEnum.RETURNED, DispatchStatusEnum.CANCELLED];
 
-// A dispatch is "active" (in progress) until it reaches a final state. `not_delivered` is left out on
-// purpose: it is a failed attempt that can still be rescheduled, but the business definition used for
-// RF-A31 is "en proceso de entrega" = pending or in transit. Change it here if that ever widens.
+// RF-A31 defines an active dispatch narrowly as pending or in transit for service-level checks.
+// Other non-terminal planning states do not change that existing rule.
 const ACTIVE_STATUSES = [DispatchStatusEnum.PENDING, DispatchStatusEnum.IN_TRANSIT];
 
 // Generic, direct operations only — no business logic. Orchestration (idempotency, ordering,

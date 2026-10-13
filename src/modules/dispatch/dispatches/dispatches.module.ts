@@ -9,6 +9,10 @@ import { ServiceLevel } from '../../catalog/service-levels/entities/service-leve
 import { RouteBatch } from '../route-batches/entities/route-batch.entity.js';
 import { Vehicle } from '../../fleet/vehicles/entities/vehicle.entity.js';
 import { VehicleStatus } from '../../fleet/vehicle-statuses/entities/vehicle-status.entity.js';
+import { DispatchGenerator } from '../../messaging/sales-order-intake/ports/dispatch-generator.port.js';
+import { TypeOrmDispatchGenerator } from './services/typeorm-dispatch-generator.service.js';
+import { DispatchPackage } from './entities/dispatch-package.entity.js';
+import { RouteBatchEvent } from '../route-batches/entities/route-batch-event.entity.js';
 
 // autoLoadEntities only registers an entity's TypeORM metadata once it's part of SOME
 // forFeature() call — Dispatch's own @ManyToOne relations (directly or transitively via
@@ -18,10 +22,10 @@ import { VehicleStatus } from '../../fleet/vehicle-statuses/entities/vehicle-sta
 // DeliveryZone isn't listed here — already registered by DeliveryZonesModule.
 @Module({
     imports: [
-        TypeOrmModule.forFeature([Dispatch, DispatchType, DispatchStatus, ServiceLevel, RouteBatch, Vehicle, VehicleStatus]),
+        TypeOrmModule.forFeature([Dispatch, DispatchPackage, DispatchType, DispatchStatus, ServiceLevel, RouteBatch, RouteBatchEvent, Vehicle, VehicleStatus]),
     ],
     controllers: [DispatchesController],
-    providers: [DispatchesService],
-    exports:   [DispatchesService],
+    providers: [DispatchesService, { provide: DispatchGenerator, useClass: TypeOrmDispatchGenerator }],
+    exports:   [DispatchesService, DispatchGenerator],
 })
 export class DispatchesModule {}

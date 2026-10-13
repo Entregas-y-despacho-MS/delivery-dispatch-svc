@@ -14,6 +14,7 @@ import { AppConfig } from '../src/config/services/app.config.js';
 import { HttpExceptionFilter } from '../src/shared/filters/index.js';
 import { hashPassword } from '../src/shared/utils/crypto.util.js';
 import { SettingsService } from '../src/modules/settings/services/settings.service.js';
+import { withEventPurge } from './helpers/purge-append-only-events.js';
 
 const TZ = 'America/La_Paz';
 
@@ -149,6 +150,7 @@ describe('Bandeja de pedidos pendientes y reserva suave (e2e, ST-48.2)', () => {
     });
 
     afterAll(async () => {
+        await withEventPurge(dataSource, { dispatchRefs: [`${tag}%`], userNames: [`e2e_po_%_${run}`] });
         await dataSource.query(`DELETE FROM dispatches WHERE source_order_ref LIKE $1`, [`${tag}%`]);
         await dataSource.query(`DELETE FROM delivery_zones WHERE code LIKE $1`, [`${tag}%`]);
         await dataSource.query(`DELETE FROM service_levels WHERE name LIKE $1`, [`${tag}%`]);

@@ -12,6 +12,7 @@ import { AppModule } from '../src/app.module.js';
 import { AppConfig } from '../src/config/services/app.config.js';
 import { HttpExceptionFilter } from '../src/shared/filters/index.js';
 import { hashPassword } from '../src/shared/utils/crypto.util.js';
+import { withEventPurge } from './helpers/purge-append-only-events.js';
 
 describe('roleId inexistente y comodines de búsqueda (e2e)', () => {
     let app: INestApplication;
@@ -49,6 +50,7 @@ describe('roleId inexistente y comodines de búsqueda (e2e)', () => {
     });
 
     afterAll(async () => {
+        await withEventPurge(dataSource, { userNames: [`%_rs_%_${run}`, `e2e_new_%_${run}`] });
         await dataSource.query(`DELETE FROM users WHERE username LIKE $1`, [`%_rs_%_${run}`]);
         await dataSource.query(`DELETE FROM users WHERE username LIKE $1`, [`e2e_new_%_${run}`]);
         await dataSource.query(`DELETE FROM delivery_zones WHERE code LIKE $1`, [`RS${run}%`]);

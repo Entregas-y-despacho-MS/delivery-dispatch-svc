@@ -14,6 +14,7 @@ import { AppConfig } from '../src/config/services/app.config.js';
 import { HttpExceptionFilter } from '../src/shared/filters/index.js';
 import { hashPassword } from '../src/shared/utils/crypto.util.js';
 import { todayInOperatingTimeZone } from '../src/modules/dispatch/dispatches/utils/operating-date.util.js';
+import { withEventPurge } from './helpers/purge-append-only-events.js';
 
 describe('Mi Jornada del repartidor (e2e, RF-U02)', () => {
     let app: INestApplication;
@@ -30,7 +31,7 @@ describe('Mi Jornada del repartidor (e2e, RF-U02)', () => {
     const get = (role: string, query = '') => request(app.getHttpServer()).get(url(query)).set({ Authorization: `Bearer ${tokens[role]}` });
 
     const newBatch = async (driver: string, date: string) =>
-        (await dataSource.query(`INSERT INTO route_batches (driver_id, shift_date) VALUES ($1, $2) RETURNING route_batch_id`, [userIds[driver], date]))[0].route_batch_id as number;
+        (await dataSource.query(`INSERT INTO route_batches (driver_id, shift_date, status) VALUES ($1, $2, 'confirmed') RETURNING route_batch_id`, [userIds[driver], date]))[0].route_batch_id as number;
     const newStop = async (batchId: number, seq: number | null, status: string, ref: string, over: { lat?: string | null } = {}) =>
         (await dataSource.query(
             `INSERT INTO dispatches (dispatch_type_id, dispatch_status_id, route_batch_id, sequence_order, source_order_ref, delivery_address, delivery_latitude, delivery_longitude, estimated_weight_kg)
@@ -66,9 +67,11 @@ describe('Mi Jornada del repartidor (e2e, RF-U02)', () => {
     });
 
     afterAll(async () => {
-        await dataSource.query(`DELETE FROM dispatches WHERE source_order_ref LIKE $1`, [`asg-${run}-%`]);
-        if (batches.length) await dataSource.query(`DELETE FROM route_batches WHERE route_batch_id = ANY($1)`, [batches]);
-        await dataSource.query(`DELETE FROM users WHERE username LIKE $1`, [`e2e_asg_%_${run}`]);
+        await withEventPurge(dataSource, { dispatchRefs: [`asg-${run}-%`], routeBatchIds: batches, userNames: [`e2e_asg_%_${run}`] }, async (manager) => {
+            await manager.query(`DELETE FROM dispatches WHERE source_order_ref LIKE $1`, [`asg-${run}-%`]);
+            if (batches.length) await manager.query(`DELETE FROM route_batches WHERE route_batch_id = ANY($1)`, [batches]);
+            await manager.query(`DELETE FROM users WHERE username LIKE $1`, [`e2e_asg_%_${run}`]);
+        });
         await app.close();
     });
 

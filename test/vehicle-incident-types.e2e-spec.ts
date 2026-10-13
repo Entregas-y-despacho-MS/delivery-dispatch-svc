@@ -18,6 +18,7 @@ import { AppModule } from '../src/app.module.js';
 import { AppConfig } from '../src/config/services/app.config.js';
 import { HttpExceptionFilter } from '../src/shared/filters/index.js';
 import { hashPassword } from '../src/shared/utils/crypto.util.js';
+import { withEventPurge } from './helpers/purge-append-only-events.js';
 
 describe('Catálogo de tipos de incidente vehicular (e2e, RF-A34)', () => {
     let app: INestApplication;
@@ -76,6 +77,7 @@ describe('Catálogo de tipos de incidente vehicular (e2e, RF-A34)', () => {
     });
 
     afterAll(async () => {
+        await withEventPurge(dataSource, { userNames: [`e2e_vit_%_${run}`] });
         await dataSource.query(`DELETE FROM vehicle_incident_types WHERE name LIKE $1`, [`${tag}%`]);
         await dataSource.query(`DELETE FROM users WHERE username LIKE $1`, [`e2e_vit_%_${run}`]);
         await app.close();

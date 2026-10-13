@@ -26,6 +26,15 @@ export class Vehicle extends BaseEntitySoftDelete {
     @Column({ name: 'capacity_m3', type: 'numeric', precision: 10, scale: 2, transformer: numericTransformer })
     capacityM3: number;
 
+    @Column({ name: 'max_package_length_cm', type: 'numeric', precision: 8, scale: 2, nullable: true, transformer: numericTransformer })
+    maxPackageLengthCm: number | null;
+
+    @Column({ name: 'max_package_width_cm', type: 'numeric', precision: 8, scale: 2, nullable: true, transformer: numericTransformer })
+    maxPackageWidthCm: number | null;
+
+    @Column({ name: 'max_package_height_cm', type: 'numeric', precision: 8, scale: 2, nullable: true, transformer: numericTransformer })
+    maxPackageHeightCm: number | null;
+
     @ManyToOne(() => VehicleStatus)
     @JoinColumn({ name: 'vehicle_status_id' })
     vehicleStatus: VehicleStatus;
