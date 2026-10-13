@@ -4,8 +4,21 @@ import { DispatchesController } from './dispatches.controller.js';
 
 function build() {
     const service = { findDriverAssignments: vi.fn().mockResolvedValue({ date: 'x', lastModifiedAt: null, data: [] }) };
-    return { controller: new DispatchesController(service as any), service };
+    const priority = { changePriority: vi.fn().mockResolvedValue({ id: 5, priority: 'urgent', status: 'pending' }) };
+    return { controller: new DispatchesController(service as any, priority as any), service, priority };
 }
+
+// ST-58.2 — el usuario que cambia la prioridad sale siempre del token.
+describe('DispatchesController.changePriority', () => {
+    it('delega en el servicio con el id, la prioridad pedida y el usuario del token', async () => {
+        const { controller, priority } = build();
+
+        const result = await controller.changePriority(5, { priority: 'urgent' as any }, 9);
+
+        expect(priority.changePriority).toHaveBeenCalledWith(5, 'urgent', 9);
+        expect(result).toEqual({ id: 5, priority: 'urgent', status: 'pending' });
+    });
+});
 
 describe('DispatchesController.findMyAssignments', () => {
     afterEach(() => vi.useRealTimers());

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Dispatch } from './entities/dispatch.entity.js';
 import { DispatchesService } from './services/dispatches.service.js';
+import { DispatchPriorityService } from './services/dispatch-priority.service.js';
 import { DispatchesController } from './controllers/dispatches.controller.js';
 import { DispatchType } from '../dispatch-types/entities/dispatch-type.entity.js';
 import { DispatchStatus } from '../dispatch-statuses/entities/dispatch-status.entity.js';
@@ -25,7 +26,7 @@ import { RouteBatchEvent } from '../route-batches/entities/route-batch-event.ent
         TypeOrmModule.forFeature([Dispatch, DispatchPackage, DispatchType, DispatchStatus, ServiceLevel, RouteBatch, RouteBatchEvent, Vehicle, VehicleStatus]),
     ],
     controllers: [DispatchesController],
-    providers: [DispatchesService, { provide: DispatchGenerator, useClass: TypeOrmDispatchGenerator }],
+    providers: [DispatchesService, DispatchPriorityService, { provide: DispatchGenerator, useClass: TypeOrmDispatchGenerator }],
     exports:   [DispatchesService, DispatchGenerator],
 })
 export class DispatchesModule {}
