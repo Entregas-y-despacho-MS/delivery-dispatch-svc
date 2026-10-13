@@ -85,3 +85,12 @@ export function evaluateSchedule(
 export function occurrenceKey(taskName: string, moment: LocalMoment): string {
     return `${taskName}@${moment.date}T${moment.time}`;
 }
+
+/**
+ * The minute boundary closest to `instant`. The cron timer fires at second 0 but a Node timer can
+ * wake up a millisecond early (12:29:59.999): without this that tick would evaluate 12:29 and the
+ * 12:30 occurrence would be missed.
+ */
+export function nearestMinute(instant: Date): Date {
+    return new Date(Math.round(instant.getTime() / 60_000) * 60_000);
+}

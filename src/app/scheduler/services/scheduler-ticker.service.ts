@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { SettingsService } from '../../../modules/settings/services/settings.service.js';
-import { evaluateSchedule, occurrenceKey, toLocalMoment } from '../domain/task-schedule.js';
+import { evaluateSchedule, nearestMinute, occurrenceKey, toLocalMoment } from '../domain/task-schedule.js';
 import { SchedulerConfig } from '../scheduler.config.js';
 import { ScheduledTaskRegistry } from './scheduled-task-registry.service.js';
 import { ScheduledTaskRunner } from './scheduled-task-runner.service.js';
@@ -18,8 +18,8 @@ import { ScheduledTaskRunner } from './scheduled-task-runner.service.js';
 export class SchedulerTicker implements OnModuleDestroy {
     private readonly logger = new Logger(SchedulerTicker.name);
     private readonly inFlight = new Set<Promise<unknown>>();
-    /** `task:value` pairs already reported as invalid, so a bad setting warns once, not every minute. */
-    private readonly reportedInvalid = new Set<string>();
+    /** Task name → the invalid value already reported, so a bad setting warns once, not every minute. */
+    private readonly reportedInvalid = new Map<string, string | null>();
 
     constructor(
         private readonly config: SchedulerConfig,
@@ -30,7 +30,7 @@ export class SchedulerTicker implements OnModuleDestroy {
 
     @Cron(CronExpression.EVERY_MINUTE)
     async handleCron(): Promise<void> {
-        await this.tick(new Date());
+        await this.tick(nearestMinute(new Date()));
     }
 
     /** Evaluates every task at `instant` and waits for the ones that were due. Exposed for tests. */
@@ -49,7 +49,7 @@ export class SchedulerTicker implements OnModuleDestroy {
                 this.warnInvalidOnce(task.name, settingKey, settingValue);
                 continue;
             }
-            this.reportedInvalid.delete(`${task.name}:${settingValue}`);
+            this.reportedInvalid.delete(task.name);
             if (evaluation !== 'due') continue;
 
             const run = this.runner
@@ -67,9 +67,8 @@ export class SchedulerTicker implements OnModuleDestroy {
     }
 
     private warnInvalidOnce(taskName: string, settingKey: string | null, value: string | null): void {
-        const marker = `${taskName}:${value}`;
-        if (this.reportedInvalid.has(marker)) return;
-        this.reportedInvalid.add(marker);
+        if (this.reportedInvalid.has(taskName) && this.reportedInvalid.get(taskName) === value) return;
+        this.reportedInvalid.set(taskName, value);
         this.logger.warn(
             settingKey !== null
                 ? `Task "${taskName}" will not run: setting "${settingKey}" is missing or invalid (${JSON.stringify(value)}).`

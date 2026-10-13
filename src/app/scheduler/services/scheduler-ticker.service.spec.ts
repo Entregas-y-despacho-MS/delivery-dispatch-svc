@@ -90,6 +90,20 @@ describe('SchedulerTicker', () => {
         expect(warn).toHaveBeenCalledTimes(1);
     });
 
+    it('warns again when a setting that was fixed breaks again', async () => {
+        const settings = settingsOf({ plan_generation_times: 'whenever' });
+        const ticker = instance([generation()], settings);
+        const warn = vi.spyOn((ticker as unknown as { logger: { warn: () => void } }).logger, 'warn').mockImplementation(() => {});
+
+        await ticker.tick(LA_PAZ_0831);
+        settings.values.plan_generation_times = '08:30';
+        await ticker.tick(LA_PAZ_0831);
+        settings.values.plan_generation_times = 'whenever';
+        await ticker.tick(LA_PAZ_0831);
+
+        expect(warn).toHaveBeenCalledTimes(2);
+    });
+
     it('runs interval tasks on clock-aligned minutes', async () => {
         const entry = task('incomplete-orders-recovery', { kind: 'every-minutes', minutes: 15 });
         const ticker = instance([entry], settingsOf({}));

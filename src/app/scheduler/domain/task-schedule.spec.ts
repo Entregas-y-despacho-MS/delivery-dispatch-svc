@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     evaluateSchedule,
+    nearestMinute,
     occurrenceKey,
     parseTimeList,
     toLocalMoment,
@@ -118,5 +119,19 @@ describe('occurrenceKey', () => {
         expect(occurrenceKey('route-cutoff', at('15:01'))).not.toBe(key);
         expect(occurrenceKey('route-reminder', at('15:00'))).not.toBe(key);
         expect(occurrenceKey('route-cutoff', at('15:00', '2026-10-14'))).not.toBe(key);
+    });
+});
+
+describe('nearestMinute', () => {
+    it('keeps an exact minute', () => {
+        expect(nearestMinute(new Date('2026-10-13T12:30:00.000Z')).toISOString()).toBe('2026-10-13T12:30:00.000Z');
+    });
+
+    it('rounds a timer that woke up a millisecond early to the minute it was meant for', () => {
+        expect(nearestMinute(new Date('2026-10-13T12:29:59.999Z')).toISOString()).toBe('2026-10-13T12:30:00.000Z');
+    });
+
+    it('rounds a slightly late timer back to its minute', () => {
+        expect(nearestMinute(new Date('2026-10-13T12:30:00.250Z')).toISOString()).toBe('2026-10-13T12:30:00.000Z');
     });
 });
