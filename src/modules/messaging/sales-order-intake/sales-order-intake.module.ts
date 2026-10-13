@@ -1,5 +1,10 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { DispatchesModule } from '../../dispatch/dispatches/dispatches.module.js';
+import { SalesOrderSyncModule } from '../sales-order-sync/sales-order-sync.module.js';
+import { ShipmentIntakeModule } from '../shipment-intake/shipment-intake.module.js';
+import { ShipmentConsolidator } from '../shipment-intake/ports/shipment-consolidator.port.js';
+import { ShipmentOrderConsumer } from '../shipment-intake/services/shipment-order-consumer.service.js';
 import { PendingSalesOrder } from './entities/pending-sales-order.entity.js';
 import { ConsolidationRecord } from './ports/consolidation-record.port.js';
 import { ExistingDispatchChanges } from './ports/existing-dispatch-changes.port.js';
@@ -15,26 +20,22 @@ import { OrderConsolidator } from './services/order-consolidator.service.js';
 /**
  * Marketplace side of the sales-order intake (ST-72.2).
  *
- * It needs four providers that other subtasks bring, none of which is wired yet:
- * - `OrderSyncStatePort` and `ShipmentBlocksReader`: the Almacén side (ST-72.1, PR #12).
- * - `InboundMessageTransaction`: the TypeORM adapter of the follow-up of ST-72.0 (ST-72.4).
- * - `DispatchGenerator`: the creation of the dispatch (ST-49.1, PR #13).
- * `MessageBus` is already global, and so is `EventEmitter2`. Until they exist this module is not
- * imported by `AppModule`: wiring it earlier would stop the application at startup.
- *
- * `OrderConsolidator` and `ExistingDispatchChanges` are exported because the Almacén consumer
- * calls `tryConsolidate` and the same dispatch rules too (a single copy of them, here).
+ * The Marketplace and Inventory consumers share the same order lock, consolidator and rules for
+ * existing dispatches. The inbound transaction port comes from global InboundMessagesModule
+ * (ST-72.4); this module is activated after that PR is integrated.
  */
 @Module({
-    imports:   [TypeOrmModule.forFeature([PendingSalesOrder])],
+    imports:   [TypeOrmModule.forFeature([PendingSalesOrder]), SalesOrderSyncModule, ShipmentIntakeModule, DispatchesModule],
     providers: [
         { provide: PendingSalesOrderStore, useClass: TypeOrmPendingSalesOrderStore },
         { provide: ConsolidationRecord, useClass: TypeOrmConsolidationRecord },
         { provide: ExistingDispatchChanges, useClass: TypeOrmExistingDispatchChanges },
         MarketplaceOrderRepository,
         OrderConsolidator,
+        { provide: ShipmentConsolidator, useExisting: OrderConsolidator },
         DispatchChangeEvents,
         MarketplaceOrderConsumer,
+        ShipmentOrderConsumer,
     ],
     exports:   [MarketplaceOrderRepository, OrderConsolidator, ExistingDispatchChanges, DispatchChangeEvents],
 })

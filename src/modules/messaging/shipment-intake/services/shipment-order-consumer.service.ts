@@ -25,7 +25,7 @@ export const SHIPMENT_TOPICS = {
 /**
  * Inventory handler. MessageBus validates the published JSON Schema before these callbacks run.
  * State, consolidation and the processed receipt share the same transaction and order lock.
- * Registration waits for ST-72.2's consolidator and ST-72.4's transaction/rejection pipeline.
+ * AppModule activates it once ST-72.4 provides the transaction and rejection pipeline.
  */
 @Injectable()
 export class ShipmentOrderConsumer implements OnModuleInit {
