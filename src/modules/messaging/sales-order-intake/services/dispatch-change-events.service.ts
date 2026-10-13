@@ -20,8 +20,15 @@ export class DispatchChangeEvents {
     constructor(private readonly emitter: EventEmitter2) {}
 
     emitAfterCommit(outcomes: DispatchChangeOutcome[]): void {
+        // One message can ask for attention twice (a package change and a readiness change); the
+        // payload is the same, so the coordinators are told once. The detail of each lives in
+        // `dispatch_events`.
+        const emitted = new Set<string>();
         for (const outcome of outcomes) {
             if (outcome.status !== 'attention_required') continue;
+            const key = JSON.stringify(outcome.event);
+            if (emitted.has(key)) continue;
+            emitted.add(key);
             try {
                 this.emitter.emit(DISPATCH_CHANGE_REQUIRES_ATTENTION, outcome.event);
             } catch (error) {
