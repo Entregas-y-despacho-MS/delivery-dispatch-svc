@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, type EntityManager } from 'typeorm';
+import { RejectedMessageException } from '../../../../plugins/messaging/exceptions/rejected-message.exception.js';
 import type { TransactionOptions } from '../../../../plugins/messaging/inbound-message-transaction.port.js';
 import {
     isUsableLocation,
@@ -11,6 +12,7 @@ import {
     type ColumnChanges,
     type DispatchSnapshot,
 } from '../domain/dispatch-change.rules.js';
+import { planShipmentChange, type ShipmentDispatchSnapshot } from '../domain/shipment-change.rules.js';
 import {
     ExistingDispatchChanges,
     type ChangeSource,
@@ -232,6 +234,165 @@ export class TypeOrmExistingDispatchChanges extends ExistingDispatchChanges {
         };
     }
 
+    async applyShipmentChange(
+        input: Parameters<ExistingDispatchChanges['applyShipmentChange']>[0],
+        options: TransactionOptions,
+    ): Promise<DispatchChangeOutcome> {
+        const manager = this.managerOf(options);
+        const delivery = await this.lock(manager, input.salesOrderId);
+        if (!delivery) return { status: 'no_dispatch' };
+
+        const snapshot = await this.shipmentSnapshotOf(manager, delivery);
+        const plan = planShipmentChange(snapshot, input.blocks);
+
+        if (plan.kind === 'ignore') return { status: 'ignored', dispatchId: snapshot.dispatchId, reason: plan.reason };
+        if (plan.kind === 'noop') return { status: 'ignored', dispatchId: snapshot.dispatchId, reason: 'no_change' };
+        if (plan.kind === 'attention') {
+            return await this.raiseAttention(manager, delivery, {
+                source: input.source,
+                changeType: 'order_changed',
+                receivedAt: input.receivedAt,
+                changedBlocks: plan.changedBlocks,
+                changes: plan.diff,
+            });
+        }
+
+        // The code of the new origin warehouse is resolved before anything is written; a code that does
+        // not exist (or is inactive) is a rejected message, so the transaction rolls back.
+        let originWarehouseId: number | null = null;
+        if (plan.warehouseCode !== null) {
+            const [warehouse]: { id: number }[] = await manager.query(
+                `SELECT warehouse_id AS id FROM warehouses WHERE code = $1 AND active = TRUE AND deleted_at IS NULL`,
+                [plan.warehouseCode],
+            );
+            if (!warehouse) {
+                throw new RejectedMessageException(
+                    [
+                        {
+                            path: '/data/warehouseId',
+                            keyword: 'unknownWarehouse',
+                            message: `Warehouse code ${plan.warehouseCode} does not exist or is inactive.`,
+                        },
+                    ],
+                    'unknown_warehouse',
+                );
+            }
+            originWarehouseId = warehouse.id;
+        }
+
+        // The packages are upserted by `external_package_id` and the ones that are no longer sent are
+        // deleted, so a package that did not change keeps its row (and its id).
+        if (plan.packages !== null) {
+            for (const item of plan.packages) {
+                await manager.query(
+                    `INSERT INTO dispatch_packages
+                        (dispatch_id, external_package_id, length_cm, width_cm, height_cm, gross_weight_kg, handling_conditions)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)
+                     ON CONFLICT (dispatch_id, external_package_id) DO UPDATE SET
+                        length_cm = EXCLUDED.length_cm,
+                        width_cm = EXCLUDED.width_cm,
+                        height_cm = EXCLUDED.height_cm,
+                        gross_weight_kg = EXCLUDED.gross_weight_kg,
+                        handling_conditions = EXCLUDED.handling_conditions,
+                        updated_at = NOW()`,
+                    [
+                        snapshot.dispatchId,
+                        item.packageId,
+                        item.lengthCm,
+                        item.widthCm,
+                        item.heightCm,
+                        item.grossWeightKg,
+                        item.handlingConditions,
+                    ],
+                );
+            }
+            await manager.query(
+                `DELETE FROM dispatch_packages WHERE dispatch_id = $1 AND external_package_id <> ALL($2::text[])`,
+                [snapshot.dispatchId, plan.packages.map((item) => item.packageId)],
+            );
+        }
+
+        const params: unknown[] = [snapshot.dispatchId];
+        const sets: string[] = ['updated_at = NOW()'];
+        if (plan.evidencePolicy !== null) {
+            params.push(plan.evidencePolicy);
+            sets.push(`evidence_policy = $${params.length}`);
+        }
+        if (plan.fillPackageReadyAt) sets.push('package_ready_at = NOW()');
+        if (originWarehouseId !== null) {
+            params.push(originWarehouseId);
+            sets.push(`origin_warehouse_id = $${params.length}`);
+        }
+        if (plan.statusAfter !== snapshot.status) {
+            params.push(plan.statusAfter);
+            sets.push(`dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $${params.length})`);
+        }
+        if (plan.removeFromProposal) await this.leaveBatch(manager, delivery, sets);
+
+        await manager.query(`UPDATE dispatches SET ${sets.join(', ')} WHERE dispatch_id = $1`, params);
+        await this.recordEvent(manager, snapshot.dispatchId, 'shipment_changed', {
+            source: input.source,
+            receivedAt: input.receivedAt,
+            changedBlocks: plan.changedBlocks,
+            changes: plan.diff,
+            statusBefore: snapshot.status,
+            statusAfter: plan.statusAfter,
+            removedFromProposal: plan.removeFromProposal,
+        });
+
+        return {
+            status: 'applied',
+            dispatchId: snapshot.dispatchId,
+            statusBefore: snapshot.status,
+            statusAfter: plan.statusAfter,
+            removedFromProposal: plan.removeFromProposal,
+            changedFields: plan.changedBlocks,
+        };
+    }
+
+    /** The package side of a dispatch that `lock` already locked: its policy, packing moment and rows. */
+    private async shipmentSnapshotOf(
+        manager: EntityManager,
+        delivery: DispatchSnapshot,
+    ): Promise<ShipmentDispatchSnapshot> {
+        const [header]: { evidence_policy: string; package_ready_at: Date | null; warehouse_code: string | null }[] =
+            await manager.query(
+            `SELECT d.evidence_policy, d.package_ready_at, w.code AS warehouse_code
+               FROM dispatches d
+               LEFT JOIN warehouses w ON w.warehouse_id = d.origin_warehouse_id
+              WHERE d.dispatch_id = $1`,
+            [delivery.dispatchId],
+        );
+        const rows: {
+            external_package_id: string;
+            length_cm: string;
+            width_cm: string;
+            height_cm: string;
+            gross_weight_kg: string;
+            handling_conditions: string[];
+        }[] = await manager.query(
+            `SELECT external_package_id, length_cm, width_cm, height_cm, gross_weight_kg, handling_conditions
+               FROM dispatch_packages WHERE dispatch_id = $1 ORDER BY external_package_id`,
+            [delivery.dispatchId],
+        );
+        return {
+            dispatchId: delivery.dispatchId,
+            status: delivery.status,
+            routeBatchId: delivery.routeBatchId,
+            evidencePolicy: header.evidence_policy,
+            packageReadyAt: header.package_ready_at,
+            originWarehouseCode: header.warehouse_code,
+            packages: rows.map((row) => ({
+                packageId: row.external_package_id,
+                lengthCm: Number(row.length_cm),
+                widthCm: Number(row.width_cm),
+                heightCm: Number(row.height_cm),
+                grossWeightKg: Number(row.gross_weight_kg),
+                handlingConditions: row.handling_conditions,
+            })),
+        };
+    }
+
     private managerOf(options: TransactionOptions): EntityManager {
         return options.manager ?? this.dataSource.manager;
     }
@@ -303,6 +464,8 @@ export class TypeOrmExistingDispatchChanges extends ExistingDispatchChanges {
             receivedAt: string;
             changedBlocks?: string[];
             reason?: string;
+            /** Before and after of what changed, when the caller has it (package changes do). */
+            changes?: unknown;
         },
     ): Promise<DispatchChangeOutcome> {
         await this.recordEvent(manager, snapshot.dispatchId, 'change_requires_attention', {
@@ -312,6 +475,7 @@ export class TypeOrmExistingDispatchChanges extends ExistingDispatchChanges {
             changedBlocks: data.changedBlocks ?? [],
             reason: data.reason ?? null,
             status: snapshot.status,
+            ...(data.changes !== undefined ? { changes: data.changes } : {}),
         });
         return {
             status: 'attention_required',

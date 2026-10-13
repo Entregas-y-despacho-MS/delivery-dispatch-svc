@@ -59,6 +59,30 @@ describe('DispatchChangeEvents', () => {
         expect(emitter.emit).toHaveBeenCalledTimes(2);
     });
 
+    it('tells the coordinators once when one message asked for attention twice', () => {
+        const emitter = { emit: vi.fn() };
+        const events = new DispatchChangeEvents(emitter as never);
+
+        events.emitAfterCommit([attention(7), attention(7), attention(9)]);
+
+        expect(emitter.emit).toHaveBeenCalledTimes(2);
+        expect(emitter.emit.mock.calls.map(([, payload]) => payload.dispatchId)).toEqual([7, 9]);
+    });
+
+    it('still emits events that differ for the same dispatch', () => {
+        const emitter = { emit: vi.fn() };
+        const events = new DispatchChangeEvents(emitter as never);
+        const cancelled: DispatchChangeOutcome = {
+            status: 'attention_required',
+            dispatchId: 7,
+            event: { dispatchId: 7, source: 'marketplace', changeType: 'order_cancelled', receivedAt: '2026-10-12T15:00:00Z' },
+        };
+
+        events.emitAfterCommit([attention(7), cancelled]);
+
+        expect(emitter.emit).toHaveBeenCalledTimes(2);
+    });
+
     it('uses the name of the catalog', () => {
         expect(DISPATCH_CHANGE_REQUIRES_ATTENTION).toBe('dispatch.change_requires_attention');
     });

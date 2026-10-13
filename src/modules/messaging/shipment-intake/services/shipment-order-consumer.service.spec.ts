@@ -27,6 +27,7 @@ describe('ShipmentOrderConsumer', () => {
     const warehouses = { exists: vi.fn().mockResolvedValue(true) };
     const consolidator = { tryConsolidate: vi.fn().mockResolvedValue({ status: 'waiting', waitingFor: ['marketplace_base'] }) };
     const dispatchChanges = {
+        applyShipmentChange: vi.fn().mockResolvedValue({ status: 'ignored', dispatchId: 42, reason: 'no_change' }),
         cancel: vi.fn().mockResolvedValue({ status: 'applied', dispatchId: 42 }),
         setShipmentReady: vi.fn().mockResolvedValue({ status: 'applied', dispatchId: 42 }),
     };
@@ -44,6 +45,7 @@ describe('ShipmentOrderConsumer', () => {
         orders.find.mockResolvedValue(null);
         warehouses.exists.mockResolvedValue(true);
         consolidator.tryConsolidate.mockResolvedValue({ status: 'waiting', waitingFor: ['marketplace_base'] });
+        dispatchChanges.applyShipmentChange.mockResolvedValue({ status: 'ignored', dispatchId: 42, reason: 'no_change' });
         dispatchChanges.cancel.mockResolvedValue({ status: 'applied', dispatchId: 42 });
         dispatchChanges.setShipmentReady.mockResolvedValue({ status: 'applied', dispatchId: 42 });
         transaction.process.mockImplementation(async (_message, _order, handle) => {
@@ -68,6 +70,7 @@ describe('ShipmentOrderConsumer', () => {
         }), { manager: undefined });
         expect(consolidator.tryConsolidate).toHaveBeenCalledWith(ORDER, { manager: undefined });
         expect(dispatchChanges.setShipmentReady).not.toHaveBeenCalled();
+        expect(dispatchChanges.applyShipmentChange).not.toHaveBeenCalled();
         expect(events.emitAfterCommit).toHaveBeenCalledWith([]);
     });
 
@@ -81,7 +84,10 @@ describe('ShipmentOrderConsumer', () => {
             salesOrderId: ORDER, source: 'inventory', ready: false,
             receivedAt: updated.updatedAt, reason: 'warehouse hold',
         }, { manager: undefined });
-        expect(events.emitAfterCommit).toHaveBeenCalledWith([{ status: 'applied', dispatchId: 42 }]);
+        expect(events.emitAfterCommit).toHaveBeenCalledWith([
+            { status: 'ignored', dispatchId: 42, reason: 'no_change' },
+            { status: 'applied', dispatchId: 42 },
+        ]);
     });
 
     it('a later ready restores readiness on an existing dispatch', async () => {
@@ -127,7 +133,7 @@ describe('ShipmentOrderConsumer', () => {
         await expect(send(SHIPMENT_TOPICS.ready, readyData)).rejects.toThrow('database unavailable');
         expect(events.emitAfterCommit).not.toHaveBeenCalled();
 
-        transaction.process.mockResolvedValueOnce('duplicate');
+        transaction.process.mockResolvedValueOnce('duplicate' as never);
         expect(await send(SHIPMENT_TOPICS.ready, readyData)).toBe('duplicate');
         expect(events.emitAfterCommit).not.toHaveBeenCalled();
     });
@@ -154,5 +160,130 @@ describe('ShipmentOrderConsumer', () => {
         expect(orders.save).not.toHaveBeenCalled();
         expect(consolidator.tryConsolidate).not.toHaveBeenCalled();
         expect(dispatchChanges.setShipmentReady).not.toHaveBeenCalled();
+        expect(dispatchChanges.applyShipmentChange).not.toHaveBeenCalled();
+    });
+
+    describe('package changes over an existing dispatch (ST-72.5)', () => {
+        beforeEach(() => {
+            consolidator.tryConsolidate.mockResolvedValue({ status: 'already_consolidated', dispatchId: 42 });
+        });
+
+        it('applies the packages, the policy and the packing of a ready, then its readiness', async () => {
+            const calls: string[] = [];
+            dispatchChanges.applyShipmentChange.mockImplementation(async () => {
+                calls.push('shipment');
+                return { status: 'ignored', dispatchId: 42, reason: 'no_change' };
+            });
+            dispatchChanges.setShipmentReady.mockImplementation(async () => {
+                calls.push('readiness');
+                return { status: 'ignored', dispatchId: 42, reason: 'no_change' };
+            });
+
+            await send(SHIPMENT_TOPICS.ready, {
+                ...readyData,
+                handlingConditions: ['FRAGILE'],
+                evidencePolicy: 'contactless_delivery',
+                physicallyPacked: true,
+            });
+
+            expect(calls).toEqual(['shipment', 'readiness']);
+            expect(dispatchChanges.applyShipmentChange).toHaveBeenCalledWith({
+                salesOrderId: ORDER,
+                source: 'inventory',
+                receivedAt: readyData.updatedAt,
+                blocks: {
+                    packages: readyData.packages,
+                    handlingConditions: ['FRAGILE'],
+                    evidencePolicy: 'contactless_delivery',
+                    physicallyPacked: true,
+                    warehouseId: 'WH-LPZ-01',
+                },
+            }, { manager: undefined });
+        });
+
+        it('sends what the order now is, with the contract defaults a ready leaves out', async () => {
+            await send(SHIPMENT_TOPICS.ready, readyData);
+
+            expect(dispatchChanges.applyShipmentChange).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    blocks: {
+                        packages: readyData.packages,
+                        evidencePolicy: 'hand_delivery_standard',
+                        physicallyPacked: false,
+                        warehouseId: 'WH-LPZ-01',
+                    },
+                }),
+                { manager: undefined },
+            );
+        });
+
+        it('passes the origin warehouse code but not availableFrom (it has no column)', async () => {
+            await send(SHIPMENT_TOPICS.ready, { ...readyData, availableFrom: '2026-10-13T06:00:00Z' });
+
+            const [{ blocks }] = dispatchChanges.applyShipmentChange.mock.calls[0];
+            expect(blocks).toHaveProperty('warehouseId', 'WH-LPZ-01');
+            expect(blocks).not.toHaveProperty('availableFrom');
+        });
+
+        it('applies the new packages of an updated that also stops being ready, in the same transaction', async () => {
+            orders.find.mockResolvedValue({
+                salesOrderId: ORDER, lastRecordVersion: 1, baseReceived: true,
+                cancelledAt: null, cancelledVersion: null,
+                blocks: { warehouseId: 'WH-LPZ-01', packages: readyData.packages, isReady: true },
+            });
+            const heavier = [{ ...readyData.packages[0], grossWeightKg: 9 }];
+
+            await send(SHIPMENT_TOPICS.updated, { ...readyData, recordVersion: 2, isReady: false, packages: heavier });
+
+            expect(dispatchChanges.applyShipmentChange).toHaveBeenCalledWith(
+                expect.objectContaining({ blocks: expect.objectContaining({ packages: heavier }) }),
+                { manager: undefined },
+            );
+            expect(dispatchChanges.setShipmentReady).toHaveBeenCalledWith(
+                expect.objectContaining({ ready: false }),
+                { manager: undefined },
+            );
+            expect(transaction.process).toHaveBeenCalledTimes(1);
+        });
+
+        it('hands every result to the events after the commit, so a scheduled dispatch alerts', async () => {
+            const attention: DispatchChangeOutcome = {
+                status: 'attention_required', dispatchId: 42,
+                event: { dispatchId: 42, source: 'inventory', changeType: 'order_changed', receivedAt: readyData.updatedAt },
+            };
+            dispatchChanges.applyShipmentChange.mockResolvedValue(attention);
+            dispatchChanges.setShipmentReady.mockResolvedValue(attention);
+
+            await send(SHIPMENT_TOPICS.ready, readyData);
+
+            expect(events.emitAfterCommit).toHaveBeenCalledWith([attention, attention]);
+        });
+
+        it('does not change an order that was not a dispatch yet', async () => {
+            consolidator.tryConsolidate.mockResolvedValue({ status: 'waiting', waitingFor: ['marketplace_base'] });
+
+            await send(SHIPMENT_TOPICS.ready, readyData);
+
+            expect(dispatchChanges.applyShipmentChange).not.toHaveBeenCalled();
+        });
+
+        it('does not apply a shipment change for a cancellation', async () => {
+            await send(SHIPMENT_TOPICS.cancelled, {
+                salesOrderId: ORDER, recordVersion: 2, updatedAt: '2026-10-13T14:00:00Z',
+                cancelledAt: '2026-10-13T14:00:00Z',
+            });
+
+            expect(dispatchChanges.applyShipmentChange).not.toHaveBeenCalled();
+            expect(dispatchChanges.cancel).toHaveBeenCalledTimes(1);
+        });
+
+        it('does not apply anything for a repeated message', async () => {
+            transaction.process.mockResolvedValueOnce('duplicate' as never);
+
+            await send(SHIPMENT_TOPICS.ready, readyData);
+
+            expect(dispatchChanges.applyShipmentChange).not.toHaveBeenCalled();
+            expect(events.emitAfterCommit).not.toHaveBeenCalled();
+        });
     });
 });

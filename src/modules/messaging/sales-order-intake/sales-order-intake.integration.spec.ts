@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { DataSource, type EntityManager, type QueryRunner } from 'typeorm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { RejectedMessageException } from '../../../plugins/messaging/exceptions/rejected-message.exception.js';
 import { PendingSalesOrder } from './entities/pending-sales-order.entity.js';
 import { TypeOrmConsolidationRecord } from './repositories/typeorm-consolidation-record.js';
 import { TypeOrmExistingDispatchChanges } from './repositories/typeorm-existing-dispatch-changes.js';
@@ -46,21 +47,35 @@ describe.skipIf(!PORT)('sales-order intake against PostgreSQL', () => {
     };
 
     const insertDispatch = async (
-        input: { ref?: string; status?: string; routeBatchId?: number | null; type?: string } = {},
+        input: {
+            ref?: string;
+            status?: string;
+            routeBatchId?: number | null;
+            type?: string;
+            originWarehouse?: string;
+        } = {},
         em: EntityManager = manager(),
     ): Promise<{ id: number; ref: string }> => {
         const orderRef = input.ref ?? ref();
         const [row] = await em.query(
             `INSERT INTO dispatches (
                 dispatch_type_id, dispatch_status_id, source_order_ref, delivery_address, delivery_reference,
-                delivery_latitude, delivery_longitude, contact_name, contact_phone, contact_email, route_batch_id
+                delivery_latitude, delivery_longitude, contact_name, contact_phone, contact_email, route_batch_id,
+                origin_warehouse_id
              ) VALUES (
                 (SELECT dispatch_type_id FROM dispatch_types WHERE name = $1),
                 (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $2),
                 $3, 'Av. Arce 2345', 'Edificio azul', -16.5412, -68.0731,
-                'María López', '+59170000000', 'maria@example.com', $4
+                'María López', '+59170000000', 'maria@example.com', $4,
+                (SELECT warehouse_id FROM warehouses WHERE code = $5)
              ) RETURNING dispatch_id AS id`,
-            [input.type ?? 'delivery', input.status ?? 'pending', orderRef, input.routeBatchId ?? null],
+            [
+                input.type ?? 'delivery',
+                input.status ?? 'pending',
+                orderRef,
+                input.routeBatchId ?? null,
+                input.originWarehouse ?? null,
+            ],
         );
         return { id: row.id as number, ref: orderRef };
     };
@@ -402,6 +417,384 @@ describe.skipIf(!PORT)('sales-order intake against PostgreSQL', () => {
         });
     });
 
+    describe('TypeOrmExistingDispatchChanges.applyShipmentChange', () => {
+        const changes = () => new TypeOrmExistingDispatchChanges(dataSource);
+        const PKG_1 = { packageId: 'PKG-1', lengthCm: 40, widthCm: 30, heightCm: 25, grossWeightKg: 6.4 };
+        const PKG_2 = { packageId: 'PKG-2', lengthCm: 10, widthCm: 10, heightCm: 10, grossWeightKg: 1 };
+
+        const insertPackage = async (dispatchId: number, item: typeof PKG_1, conditions: string[] = ['FRAGILE']) => {
+            await manager().query(
+                `INSERT INTO dispatch_packages
+                    (dispatch_id, external_package_id, length_cm, width_cm, height_cm, gross_weight_kg, handling_conditions)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                [dispatchId, item.packageId, item.lengthCm, item.widthCm, item.heightCm, item.grossWeightKg, conditions],
+            );
+        };
+
+        /** A dispatch with PKG-1 already stored, like the generator of ST-49.1 leaves it. */
+        const withPackage = async (input: { status?: string; routeBatchId?: number | null } = {}) => {
+            const dispatch = await insertDispatch(input);
+            await insertPackage(dispatch.id, PKG_1);
+            return dispatch;
+        };
+
+        const packagesOf = async (dispatchId: number) =>
+            (await manager().query(
+                `SELECT dispatch_package_id AS id, external_package_id AS "packageId",
+                        length_cm::float AS length, width_cm::float AS width, height_cm::float AS height,
+                        gross_weight_kg::float AS weight, handling_conditions AS conditions
+                   FROM dispatch_packages WHERE dispatch_id = $1 ORDER BY external_package_id`,
+                [dispatchId],
+            )) as {
+                id: number;
+                packageId: string;
+                length: number;
+                width: number;
+                height: number;
+                weight: number;
+                conditions: string[];
+            }[];
+
+        const change = (salesOrderId: string, blocks: Record<string, unknown>) => ({
+            salesOrderId,
+            source: 'inventory' as const,
+            receivedAt: '2026-10-13T15:00:00Z',
+            blocks: blocks as never,
+        });
+
+        it('reports that there is no dispatch for an order that has none', async () => {
+            await expect(changes().applyShipmentChange(change(ref(), { packages: [PKG_1] }), options())).resolves.toEqual({
+                status: 'no_dispatch',
+            });
+        });
+
+        it('replaces a package of a pending dispatch, keeps the row of the one that did not change and records it', async () => {
+            const dispatch = await withPackage({ status: 'pending' });
+            await insertPackage(dispatch.id, PKG_2);
+            const before = await packagesOf(dispatch.id);
+
+            const outcome = await changes().applyShipmentChange(
+                change(dispatch.ref, {
+                    packages: [PKG_1, { ...PKG_2, grossWeightKg: 3.5 }],
+                    handlingConditions: ['FRAGILE'],
+                }),
+                options(),
+            );
+
+            expect(outcome).toMatchObject({ status: 'applied', statusAfter: 'pending', changedFields: ['packages'] });
+            const after = await packagesOf(dispatch.id);
+            expect(after).toHaveLength(2);
+            expect(after[0].id).toBe(before[0].id); // PKG-1 did not change: same row
+            expect(after[1].id).toBe(before[1].id); // PKG-2 changed its weight in place
+            expect(after[1].weight).toBe(3.5);
+            const [event] = await eventsOf(dispatch.id);
+            expect(event.event_type).toBe('shipment_changed');
+            expect(event.metadata.changedBlocks).toEqual(['packages']);
+            expect(event.metadata.changes.packages.from).toHaveLength(2);
+        });
+
+        it('adds the new packages and deletes the ones Almacén no longer sends', async () => {
+            const dispatch = await withPackage({ status: 'pending' });
+            await insertPackage(dispatch.id, PKG_2);
+
+            await changes().applyShipmentChange(
+                change(dispatch.ref, {
+                    packages: [{ packageId: 'PKG-3', lengthCm: 5, widthCm: 5, heightCm: 5, grossWeightKg: 0.5 }],
+                    handlingConditions: ['FRAGILE'],
+                }),
+                options(),
+            );
+
+            expect((await packagesOf(dispatch.id)).map((item) => item.packageId)).toEqual(['PKG-3']);
+        });
+
+        it('does not write, emit or touch the batch when the message does not differ', async () => {
+            const batchId = await insertBatch();
+            const dispatch = await withPackage({ status: 'in_planning', routeBatchId: batchId });
+            const before = await dispatchRow(dispatch.id);
+
+            const outcome = await changes().applyShipmentChange(
+                change(dispatch.ref, { packages: [PKG_1], handlingConditions: ['FRAGILE'], evidencePolicy: 'hand_delivery_standard' }),
+                options(),
+            );
+
+            expect(outcome).toEqual({ status: 'ignored', dispatchId: dispatch.id, reason: 'no_change' });
+            const after = await dispatchRow(dispatch.id);
+            expect(after.route_batch_id).toBe(batchId);
+            expect(after.version).toBe(before.version);
+            expect(new Date(after.updated_at).getTime()).toBe(new Date(before.updated_at).getTime());
+            expect(await eventsOf(dispatch.id)).toEqual([]);
+            expect(await batchVersion(batchId)).toBe(0);
+        });
+
+        it('does not mistake the extra decimals Almacén sends for a change', async () => {
+            const dispatch = await withPackage({ status: 'pending' });
+
+            const outcome = await changes().applyShipmentChange(
+                change(dispatch.ref, {
+                    packages: [{ ...PKG_1, lengthCm: 40.001, grossWeightKg: 6.4001 }],
+                    handlingConditions: ['FRAGILE'],
+                }),
+                options(),
+            );
+
+            expect(outcome).toEqual({ status: 'ignored', dispatchId: dispatch.id, reason: 'no_change' });
+        });
+
+        it('takes an in_planning dispatch out of its batch when its packages change', async () => {
+            const batchId = await insertBatch();
+            const dispatch = await withPackage({ status: 'in_planning', routeBatchId: batchId });
+
+            const outcome = await changes().applyShipmentChange(
+                change(dispatch.ref, { packages: [{ ...PKG_1, widthCm: 55 }], handlingConditions: ['FRAGILE'] }),
+                options(),
+            );
+
+            expect(outcome).toMatchObject({
+                status: 'applied',
+                statusBefore: 'in_planning',
+                statusAfter: 'pending',
+                removedFromProposal: true,
+            });
+            const row = await dispatchRow(dispatch.id);
+            expect(row.status).toBe('pending');
+            expect(row.route_batch_id).toBeNull();
+            expect(row.version).toBe(1);
+            expect(await batchVersion(batchId)).toBe(1);
+            expect((await packagesOf(dispatch.id))[0].width).toBe(55);
+        });
+
+        it('keeps an in_planning dispatch in its batch when only the evidence policy changes', async () => {
+            const batchId = await insertBatch();
+            const dispatch = await withPackage({ status: 'in_planning', routeBatchId: batchId });
+
+            const outcome = await changes().applyShipmentChange(
+                change(dispatch.ref, { evidencePolicy: 'high_value_control' }),
+                options(),
+            );
+
+            expect(outcome).toMatchObject({ status: 'applied', removedFromProposal: false });
+            const row = await dispatchRow(dispatch.id);
+            expect(row.evidence_policy).toBe('high_value_control');
+            expect(row.route_batch_id).toBe(batchId);
+            expect(row.status).toBe('in_planning');
+            expect(await batchVersion(batchId)).toBe(0);
+        });
+
+        it('applies the handling conditions to every package', async () => {
+            const dispatch = await withPackage({ status: 'pending' });
+            await insertPackage(dispatch.id, PKG_2);
+
+            await changes().applyShipmentChange(
+                change(dispatch.ref, { handlingConditions: ['FRAGILE', 'KEEP_UPRIGHT'] }),
+                options(),
+            );
+
+            const rows = await packagesOf(dispatch.id);
+            expect(rows.map((item) => item.conditions)).toEqual([
+                ['FRAGILE', 'KEEP_UPRIGHT'],
+                ['FRAGILE', 'KEEP_UPRIGHT'],
+            ]);
+        });
+
+        it('fills package_ready_at once and never clears it', async () => {
+            const dispatch = await withPackage({ status: 'pending' });
+
+            const first = await changes().applyShipmentChange(change(dispatch.ref, { physicallyPacked: true }), options());
+            const filled = (await dispatchRow(dispatch.id)).package_ready_at as Date;
+            const again = await changes().applyShipmentChange(change(dispatch.ref, { physicallyPacked: true }), options());
+            const unpacked = await changes().applyShipmentChange(change(dispatch.ref, { physicallyPacked: false }), options());
+
+            expect(first).toMatchObject({ status: 'applied', changedFields: ['physicallyPacked'] });
+            expect(filled).not.toBeNull();
+            expect(again).toMatchObject({ status: 'ignored', reason: 'no_change' });
+            expect(unpacked).toMatchObject({ status: 'ignored', reason: 'no_change' });
+            expect((await dispatchRow(dispatch.id)).package_ready_at).toEqual(filled);
+        });
+
+        it.each(['scheduled', 'assigned', 'out_for_delivery', 'delivered'])(
+            'leaves a %s dispatch untouched and records what would have changed',
+            async (status) => {
+                const batchId = await insertBatch();
+                const dispatch = await withPackage({ status, routeBatchId: batchId });
+                const before = await dispatchRow(dispatch.id);
+
+                const outcome = await changes().applyShipmentChange(
+                    change(dispatch.ref, {
+                        packages: [{ ...PKG_1, grossWeightKg: 12 }],
+                        handlingConditions: ['FRAGILE'],
+                        evidencePolicy: 'high_value_control',
+                    }),
+                    options(),
+                );
+
+                expect(outcome).toEqual({
+                    status: 'attention_required',
+                    dispatchId: dispatch.id,
+                    event: {
+                        dispatchId: dispatch.id,
+                        source: 'inventory',
+                        changeType: 'order_changed',
+                        receivedAt: '2026-10-13T15:00:00Z',
+                    },
+                });
+                const after = await dispatchRow(dispatch.id);
+                expect(after.status).toBe(status);
+                expect(after.evidence_policy).toBe(before.evidence_policy);
+                expect(after.route_batch_id).toBe(batchId);
+                expect((await packagesOf(dispatch.id))[0].weight).toBe(6.4);
+                const [event] = await eventsOf(dispatch.id);
+                expect(event.event_type).toBe('change_requires_attention');
+                expect(event.metadata.changedBlocks).toEqual(['packages', 'evidencePolicy']);
+                expect(event.metadata.changes.packages.to[0].grossWeightKg).toBe(12);
+                expect(await batchVersion(batchId)).toBe(0);
+            },
+        );
+
+        it('ignores a cancelled dispatch', async () => {
+            const dispatch = await withPackage({ status: 'cancelled' });
+
+            const outcome = await changes().applyShipmentChange(
+                change(dispatch.ref, { packages: [{ ...PKG_1, grossWeightKg: 12 }] }),
+                options(),
+            );
+
+            expect(outcome).toEqual({ status: 'ignored', dispatchId: dispatch.id, reason: 'dispatch_cancelled' });
+            expect((await packagesOf(dispatch.id))[0].weight).toBe(6.4);
+        });
+
+        const originOf = async (dispatchId: number): Promise<string | null> => {
+            const [row] = await manager().query(
+                `SELECT w.code FROM dispatches d LEFT JOIN warehouses w ON w.warehouse_id = d.origin_warehouse_id
+                  WHERE d.dispatch_id = $1`,
+                [dispatchId],
+            );
+            return row.code;
+        };
+
+        it('changes the origin warehouse of a pending dispatch and records the codes', async () => {
+            const dispatch = await insertDispatch({ status: 'pending', originWarehouse: 'WH-LPZ-01' });
+
+            const outcome = await changes().applyShipmentChange(
+                change(dispatch.ref, { warehouseId: 'WH-LPZ-02' }),
+                options(),
+            );
+
+            expect(outcome).toMatchObject({ status: 'applied', changedFields: ['warehouseId'] });
+            expect(await originOf(dispatch.id)).toBe('WH-LPZ-02');
+            const [event] = await eventsOf(dispatch.id);
+            expect(event.event_type).toBe('shipment_changed');
+            expect(event.metadata.changes.warehouseId).toEqual({ from: 'WH-LPZ-01', to: 'WH-LPZ-02' });
+        });
+
+        it('takes an in_planning dispatch out of its batch when the origin warehouse changes', async () => {
+            const batchId = await insertBatch();
+            const dispatch = await insertDispatch({
+                status: 'in_planning',
+                routeBatchId: batchId,
+                originWarehouse: 'WH-LPZ-01',
+            });
+
+            const outcome = await changes().applyShipmentChange(
+                change(dispatch.ref, { warehouseId: 'WH-LPZ-02' }),
+                options(),
+            );
+
+            expect(outcome).toMatchObject({ status: 'applied', statusAfter: 'pending', removedFromProposal: true });
+            const row = await dispatchRow(dispatch.id);
+            expect(row.status).toBe('pending');
+            expect(row.route_batch_id).toBeNull();
+            expect(row.version).toBe(1);
+            expect(await batchVersion(batchId)).toBe(1);
+            expect(await originOf(dispatch.id)).toBe('WH-LPZ-02');
+        });
+
+        it('does not touch the warehouse of a scheduled dispatch and asks for attention', async () => {
+            const batchId = await insertBatch();
+            const dispatch = await insertDispatch({
+                status: 'scheduled',
+                routeBatchId: batchId,
+                originWarehouse: 'WH-LPZ-01',
+            });
+
+            const outcome = await changes().applyShipmentChange(
+                change(dispatch.ref, { warehouseId: 'WH-LPZ-02' }),
+                options(),
+            );
+
+            expect(outcome).toMatchObject({ status: 'attention_required', dispatchId: dispatch.id });
+            expect(await originOf(dispatch.id)).toBe('WH-LPZ-01');
+            expect((await dispatchRow(dispatch.id)).route_batch_id).toBe(batchId);
+            const [event] = await eventsOf(dispatch.id);
+            expect(event.event_type).toBe('change_requires_attention');
+            expect(event.metadata.changedBlocks).toEqual(['warehouseId']);
+            expect(await batchVersion(batchId)).toBe(0);
+        });
+
+        it('does nothing for the warehouse the dispatch already has', async () => {
+            const batchId = await insertBatch();
+            const dispatch = await insertDispatch({
+                status: 'in_planning',
+                routeBatchId: batchId,
+                originWarehouse: 'WH-LPZ-01',
+            });
+
+            const outcome = await changes().applyShipmentChange(
+                change(dispatch.ref, { warehouseId: 'WH-LPZ-01' }),
+                options(),
+            );
+
+            expect(outcome).toEqual({ status: 'ignored', dispatchId: dispatch.id, reason: 'no_change' });
+            expect((await dispatchRow(dispatch.id)).route_batch_id).toBe(batchId);
+            expect(await eventsOf(dispatch.id)).toEqual([]);
+        });
+
+        it('fills the warehouse of a dispatch that had none', async () => {
+            const dispatch = await insertDispatch({ status: 'pending' });
+
+            await changes().applyShipmentChange(
+                change(dispatch.ref, { warehouseId: 'WH-LPZ-01' }),
+                options(),
+            );
+
+            expect(await originOf(dispatch.id)).toBe('WH-LPZ-01');
+        });
+
+        it('rejects a code that does not exist, and writes nothing, even with a package change in the message', async () => {
+            const dispatch = await withPackage({ status: 'pending' });
+
+            await expect(
+                changes().applyShipmentChange(
+                    change(dispatch.ref, {
+                        packages: [{ ...PKG_1, grossWeightKg: 12 }],
+                        handlingConditions: ['FRAGILE'],
+                        warehouseId: 'WH-NO-EXISTE',
+                    }),
+                    options(),
+                ),
+            ).rejects.toBeInstanceOf(RejectedMessageException);
+
+            expect((await packagesOf(dispatch.id))[0].weight).toBe(6.4);
+            expect(await eventsOf(dispatch.id)).toEqual([]);
+        });
+
+        it('only touches the delivery dispatch when another type shares the order reference', async () => {
+            const shared = ref();
+            const delivery = await insertDispatch({ ref: shared, type: 'delivery' });
+            await insertPackage(delivery.id, PKG_1);
+            const pickup = await insertDispatch({ ref: shared, type: 'supplier_pickup' });
+            await insertPackage(pickup.id, PKG_1);
+
+            await changes().applyShipmentChange(
+                change(shared, { packages: [{ ...PKG_1, grossWeightKg: 20 }], handlingConditions: ['FRAGILE'] }),
+                options(),
+            );
+
+            expect((await packagesOf(delivery.id))[0].weight).toBe(20);
+            expect((await packagesOf(pickup.id))[0].weight).toBe(6.4);
+        });
+    });
+
     describe('rollback', () => {
         it('leaves the dispatch and its events unchanged when the transaction fails after the change', async () => {
             // Committed on purpose, outside the per-test transaction; removed at the end of the test.
@@ -425,6 +818,52 @@ describe.skipIf(!PORT)('sales-order intake against PostgreSQL', () => {
                 const row = await dispatchRow(dispatch.id, dataSource.manager);
                 expect(row.contact_name).toBe('María López');
                 expect(row.contact_phone).toBe('+59170000000');
+                expect(await eventsOf(dispatch.id, dataSource.manager)).toEqual([]);
+            } finally {
+                await dataSource.query(`DELETE FROM dispatches WHERE dispatch_id = $1`, [dispatch.id]);
+            }
+        });
+
+        it('leaves the packages, the policy and the events unchanged when the transaction fails after a package change', async () => {
+            const dispatch = await insertDispatch({ status: 'pending' }, dataSource.manager);
+            await dataSource.query(
+                `INSERT INTO dispatch_packages
+                    (dispatch_id, external_package_id, length_cm, width_cm, height_cm, gross_weight_kg, handling_conditions)
+                 VALUES ($1, 'PKG-1', 40, 30, 25, 6.4, ARRAY['FRAGILE'])`,
+                [dispatch.id],
+            );
+            try {
+                await expect(
+                    dataSource.transaction(async (tx) => {
+                        const outcome = await new TypeOrmExistingDispatchChanges(dataSource).applyShipmentChange(
+                            {
+                                salesOrderId: dispatch.ref,
+                                source: 'inventory',
+                                receivedAt: '2026-10-13T15:00:00Z',
+                                blocks: {
+                                    packages: [
+                                        { packageId: 'PKG-1', lengthCm: 40, widthCm: 30, heightCm: 25, grossWeightKg: 20 },
+                                        { packageId: 'PKG-9', lengthCm: 5, widthCm: 5, heightCm: 5, grossWeightKg: 1 },
+                                    ],
+                                    handlingConditions: ['FRAGILE'],
+                                    evidencePolicy: 'high_value_control',
+                                },
+                            },
+                            { manager: tx },
+                        );
+                        expect(outcome.status).toBe('applied');
+                        throw new Error('business failure after the change');
+                    }),
+                ).rejects.toThrow('business failure');
+
+                const packages = (await dataSource.query(
+                    `SELECT external_package_id, gross_weight_kg::float AS weight
+                       FROM dispatch_packages WHERE dispatch_id = $1 ORDER BY external_package_id`,
+                    [dispatch.id],
+                )) as { external_package_id: string; weight: number }[];
+                expect(packages).toEqual([{ external_package_id: 'PKG-1', weight: 6.4 }]);
+                const row = await dispatchRow(dispatch.id, dataSource.manager);
+                expect(row.evidence_policy).toBe('hand_delivery_standard');
                 expect(await eventsOf(dispatch.id, dataSource.manager)).toEqual([]);
             } finally {
                 await dataSource.query(`DELETE FROM dispatches WHERE dispatch_id = $1`, [dispatch.id]);

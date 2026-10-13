@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { RejectedMessageException } from '../../../../plugins/messaging/exceptions/rejected-message.exception.js';
 import { TypeOrmExistingDispatchChanges } from './typeorm-existing-dispatch-changes.js';
 
 const ORDER = 'SO-2026-000123';
@@ -21,10 +22,23 @@ const row = (overrides: Record<string, unknown> = {}) => ({
     ...overrides,
 });
 
+const packageRow = (overrides: Record<string, unknown> = {}) => ({
+    external_package_id: 'PKG-1',
+    length_cm: '40.00',
+    width_cm: '30.00',
+    height_cm: '25.00',
+    gross_weight_kg: '6.400',
+    handling_conditions: ['FRAGILE'],
+    ...overrides,
+});
+
 describe('TypeOrmExistingDispatchChanges', () => {
     let calls: { sql: string; params: unknown[] }[];
     let dispatchRow: Record<string, unknown> | null;
     let zoneRow: { id: number } | null;
+    let headerRow: { evidence_policy: string; package_ready_at: Date | null; warehouse_code: string | null };
+    let warehouseRow: { id: number } | null;
+    let packageRows: Record<string, unknown>[];
     let changes: TypeOrmExistingDispatchChanges;
     const options = () => ({ manager: manager as never });
 
@@ -33,6 +47,9 @@ describe('TypeOrmExistingDispatchChanges', () => {
             calls.push({ sql, params });
             if (sql.includes('FOR UPDATE OF d')) return dispatchRow ? [dispatchRow] : [];
             if (sql.includes('FROM delivery_zones')) return zoneRow ? [zoneRow] : [];
+            if (sql.includes('w.code AS warehouse_code')) return [headerRow];
+            if (sql.includes('FROM warehouses WHERE code')) return warehouseRow ? [warehouseRow] : [];
+            if (sql.includes('FROM dispatch_packages WHERE dispatch_id')) return packageRows;
             return [];
         }),
     };
@@ -43,6 +60,9 @@ describe('TypeOrmExistingDispatchChanges', () => {
         calls = [];
         dispatchRow = row();
         zoneRow = { id: 3 };
+        headerRow = { evidence_policy: 'hand_delivery_standard', package_ready_at: null, warehouse_code: 'WH-LPZ-01' };
+        warehouseRow = { id: 2 };
+        packageRows = [packageRow()];
         manager.query.mockClear();
         changes = new TypeOrmExistingDispatchChanges({ manager } as never);
     });
@@ -293,6 +313,220 @@ describe('TypeOrmExistingDispatchChanges', () => {
             const outcome = await changes.setShipmentReady(input(false), options());
 
             expect(outcome).toMatchObject({ status: 'attention_required', event: { changeType: 'order_changed', source: 'inventory' } });
+        });
+    });
+
+    describe('applyShipmentChange', () => {
+        const PKG_1 = { packageId: 'PKG-1', lengthCm: 40, widthCm: 30, heightCm: 25, grossWeightKg: 6.4 };
+        const PKG_2 = { packageId: 'PKG-2', lengthCm: 10, widthCm: 10, heightCm: 10, grossWeightKg: 1 };
+        const input = (blocks: Record<string, unknown>) => ({
+            salesOrderId: ORDER,
+            source: 'inventory' as const,
+            receivedAt: '2026-10-13T15:00:00Z',
+            blocks: blocks as never,
+        });
+
+        it('does nothing when the order is not a dispatch yet', async () => {
+            dispatchRow = null;
+
+            await expect(changes.applyShipmentChange(input({ packages: [PKG_1] }), options())).resolves.toEqual({
+                status: 'no_dispatch',
+            });
+            expect(calls).toHaveLength(1);
+        });
+
+        it('writes nothing when the message does not differ from the dispatch', async () => {
+            const outcome = await changes.applyShipmentChange(
+                input({ packages: [PKG_1], handlingConditions: ['FRAGILE'] }),
+                options(),
+            );
+
+            expect(outcome).toEqual({ status: 'ignored', dispatchId: 7, reason: 'no_change' });
+            expect(sqlOf('INSERT INTO dispatch_packages')).toBeUndefined();
+            expect(sqlOf('DELETE FROM dispatch_packages')).toBeUndefined();
+            expect(sqlOf('UPDATE dispatches')).toBeUndefined();
+            expect(sqlOf('INSERT INTO dispatch_events')).toBeUndefined();
+        });
+
+        it('upserts each package by external id and deletes the ones that are no longer sent', async () => {
+            const outcome = await changes.applyShipmentChange(
+                input({ packages: [{ ...PKG_1, grossWeightKg: 9 }, PKG_2], handlingConditions: ['FRAGILE'] }),
+                options(),
+            );
+
+            expect(outcome).toMatchObject({ status: 'applied', changedFields: ['packages'] });
+            const inserts = calls.filter((call) => call.sql.includes('INSERT INTO dispatch_packages'));
+            expect(inserts).toHaveLength(2);
+            expect(inserts[0].sql).toContain('ON CONFLICT (dispatch_id, external_package_id) DO UPDATE');
+            expect(inserts[0].params).toEqual([7, 'PKG-1', 40, 30, 25, 9, ['FRAGILE']]);
+            expect(inserts[1].params).toEqual([7, 'PKG-2', 10, 10, 10, 1, ['FRAGILE']]);
+            const del = sqlOf('DELETE FROM dispatch_packages')!;
+            expect(del.params).toEqual([7, ['PKG-1', 'PKG-2']]);
+        });
+
+        it('reads the numeric columns as numbers before comparing', async () => {
+            packageRows = [packageRow({ gross_weight_kg: '6.400', length_cm: '40.00' })];
+
+            const outcome = await changes.applyShipmentChange(
+                input({ packages: [{ ...PKG_1, lengthCm: 40.001, grossWeightKg: 6.4001 }], handlingConditions: ['FRAGILE'] }),
+                options(),
+            );
+
+            expect(outcome).toEqual({ status: 'ignored', dispatchId: 7, reason: 'no_change' });
+        });
+
+        it('takes an in_planning dispatch out of its batch, raises both versions and records the change', async () => {
+            dispatchRow = row({ status: 'in_planning', route_batch_id: 4 });
+
+            const outcome = await changes.applyShipmentChange(
+                input({ packages: [{ ...PKG_1, widthCm: 50 }], handlingConditions: ['FRAGILE'] }),
+                options(),
+            );
+
+            expect(outcome).toMatchObject({
+                status: 'applied',
+                statusBefore: 'in_planning',
+                statusAfter: 'pending',
+                removedFromProposal: true,
+            });
+            const update = sqlOf('UPDATE dispatches SET')!;
+            expect(update.sql).toContain('route_batch_id = NULL');
+            expect(update.sql).toContain('version = version + 1');
+            expect(update.params).toContain('pending');
+            expect(sqlOf('UPDATE route_batches SET version')?.params).toEqual([4]);
+            const insert = sqlOf('INSERT INTO dispatch_events')!;
+            expect(insert.params[1]).toBe('shipment_changed');
+            expect(JSON.parse(insert.params[2] as string).removedFromProposal).toBe(true);
+        });
+
+        it('keeps an in_planning dispatch in its batch when only the evidence policy changes', async () => {
+            dispatchRow = row({ status: 'in_planning', route_batch_id: 4 });
+
+            const outcome = await changes.applyShipmentChange(input({ evidencePolicy: 'high_value_control' }), options());
+
+            expect(outcome).toMatchObject({ status: 'applied', removedFromProposal: false, changedFields: ['evidencePolicy'] });
+            const update = sqlOf('UPDATE dispatches SET')!;
+            expect(update.sql).toContain('evidence_policy = $2');
+            expect(update.sql).not.toContain('route_batch_id = NULL');
+            expect(update.params).toEqual([7, 'high_value_control']);
+            expect(sqlOf('UPDATE route_batches')).toBeUndefined();
+            expect(sqlOf('INSERT INTO dispatch_packages')).toBeUndefined();
+        });
+
+        it('fills package_ready_at when the shipment is physically packed', async () => {
+            const outcome = await changes.applyShipmentChange(input({ physicallyPacked: true }), options());
+
+            expect(outcome).toMatchObject({ status: 'applied', changedFields: ['physicallyPacked'] });
+            expect(sqlOf('UPDATE dispatches SET')?.sql).toContain('package_ready_at = NOW()');
+        });
+
+        it('does not fill package_ready_at again when the dispatch already has it', async () => {
+            headerRow = {
+                evidence_policy: 'hand_delivery_standard',
+                package_ready_at: new Date('2026-10-12T10:00:00Z'),
+                warehouse_code: 'WH-LPZ-01',
+            };
+
+            const outcome = await changes.applyShipmentChange(input({ physicallyPacked: true }), options());
+
+            expect(outcome).toEqual({ status: 'ignored', dispatchId: 7, reason: 'no_change' });
+        });
+
+        it('leaves a scheduled dispatch untouched and records what would have changed', async () => {
+            dispatchRow = row({ status: 'scheduled', route_batch_id: 4 });
+
+            const outcome = await changes.applyShipmentChange(
+                input({ packages: [{ ...PKG_1, grossWeightKg: 9 }], handlingConditions: ['FRAGILE'] }),
+                options(),
+            );
+
+            expect(outcome).toEqual({
+                status: 'attention_required',
+                dispatchId: 7,
+                event: {
+                    dispatchId: 7,
+                    source: 'inventory',
+                    changeType: 'order_changed',
+                    receivedAt: '2026-10-13T15:00:00Z',
+                },
+            });
+            expect(sqlOf('INSERT INTO dispatch_packages')).toBeUndefined();
+            expect(sqlOf('DELETE FROM dispatch_packages')).toBeUndefined();
+            expect(sqlOf('UPDATE dispatches')).toBeUndefined();
+            expect(sqlOf('UPDATE route_batches')).toBeUndefined();
+            const insert = sqlOf('INSERT INTO dispatch_events')!;
+            expect(insert.params[1]).toBe('change_requires_attention');
+            const metadata = JSON.parse(insert.params[2] as string);
+            expect(metadata.changedBlocks).toEqual(['packages']);
+            expect(metadata.changes.packages.to[0].grossWeightKg).toBe(9);
+        });
+
+        it('updates the origin warehouse after resolving its code, before writing anything', async () => {
+            const outcome = await changes.applyShipmentChange(
+                input({ warehouseId: 'WH-LPZ-02' }),
+                options(),
+            );
+
+            expect(outcome).toMatchObject({ status: 'applied', changedFields: ['warehouseId'] });
+            const lookup = sqlOf('FROM warehouses WHERE code')!;
+            expect(lookup.sql).toContain('active = TRUE');
+            expect(lookup.params).toEqual(['WH-LPZ-02']);
+            const update = sqlOf('UPDATE dispatches SET')!;
+            expect(update.sql).toContain('origin_warehouse_id = $2');
+            expect(update.params).toEqual([7, 2]);
+            expect(sqlOf('INSERT INTO dispatch_packages')).toBeUndefined();
+            const event = JSON.parse(sqlOf('INSERT INTO dispatch_events')!.params[2] as string);
+            expect(event.changes.warehouseId).toEqual({ from: 'WH-LPZ-01', to: 'WH-LPZ-02' });
+        });
+
+        it('takes an in_planning dispatch out of its batch when the warehouse changes', async () => {
+            dispatchRow = row({ status: 'in_planning', route_batch_id: 4 });
+
+            const outcome = await changes.applyShipmentChange(input({ warehouseId: 'WH-LPZ-02' }), options());
+
+            expect(outcome).toMatchObject({ status: 'applied', statusAfter: 'pending', removedFromProposal: true });
+            expect(sqlOf('UPDATE route_batches SET version')?.params).toEqual([4]);
+        });
+
+        it('rejects the message, without writing, when the warehouse code is unknown or inactive', async () => {
+            warehouseRow = null;
+
+            await expect(
+                changes.applyShipmentChange(input({ packages: [PKG_2], warehouseId: 'WH-XXX' }), options()),
+            ).rejects.toBeInstanceOf(RejectedMessageException);
+            expect(sqlOf('INSERT INTO dispatch_packages')).toBeUndefined();
+            expect(sqlOf('UPDATE dispatches')).toBeUndefined();
+            expect(sqlOf('INSERT INTO dispatch_events')).toBeUndefined();
+        });
+
+        it('does not look the warehouse up when the dispatch is past the promise', async () => {
+            dispatchRow = row({ status: 'scheduled', route_batch_id: 4 });
+
+            const outcome = await changes.applyShipmentChange(input({ warehouseId: 'WH-LPZ-02' }), options());
+
+            expect(outcome).toMatchObject({ status: 'attention_required' });
+            expect(sqlOf('FROM warehouses WHERE code')).toBeUndefined();
+            expect(sqlOf('UPDATE dispatches')).toBeUndefined();
+        });
+
+        it('does nothing for the same warehouse code', async () => {
+            await expect(changes.applyShipmentChange(input({ warehouseId: 'WH-LPZ-01' }), options())).resolves.toEqual({
+                status: 'ignored',
+                dispatchId: 7,
+                reason: 'no_change',
+            });
+            expect(sqlOf('FROM warehouses WHERE code')).toBeUndefined();
+        });
+
+        it('ignores a cancelled dispatch', async () => {
+            dispatchRow = row({ status: 'cancelled' });
+
+            await expect(changes.applyShipmentChange(input({ packages: [PKG_2] }), options())).resolves.toEqual({
+                status: 'ignored',
+                dispatchId: 7,
+                reason: 'dispatch_cancelled',
+            });
+            expect(sqlOf('INSERT INTO dispatch_packages')).toBeUndefined();
         });
     });
 });

@@ -19,7 +19,7 @@ describe.skipIf(process.env.APP_INTEGRATION_DB !== '1')('shipment intake through
     const runId = randomBytes(5).toString('hex');
     const now = '2026-10-12T20:00:00.000Z';
 
-    const envelope = (type: string, source: string, data: Record<string, unknown>): MessageEnvelope => ({
+    const envelope = (type: string, source: MessageEnvelope['source'], data: Record<string, unknown>): MessageEnvelope => ({
         messageId: generateMessageId(),
         type,
         schemaVersion: 1,
@@ -168,5 +168,99 @@ describe.skipIf(process.env.APP_INTEGRATION_DB !== '1')('shipment intake through
             [salesOrderId],
         )).toHaveLength(0);
         expect(await deliveryDispatches(salesOrderId)).toHaveLength(0);
+    });
+    it('applies a later package change of Almacén to the dispatch, once, and only alerts after the promise (ST-72.5)', async () => {
+        const salesOrderId = `IT-${runId}-PK`;
+        const marketMessage = marketplace(salesOrderId);
+        await bus.publish(marketMessage.type, marketMessage);
+        const inventoryMessage = inventory(salesOrderId);
+        await bus.publish(inventoryMessage.type, inventoryMessage);
+        await expectConsolidated(salesOrderId);
+        const [{ dispatch_id: dispatchId }] = await deliveryDispatches(salesOrderId);
+
+        const weightOf = async (): Promise<number> => {
+            const [row] = await dataSource.query(
+                'SELECT gross_weight_kg::float AS weight FROM dispatch_packages WHERE dispatch_id = $1 AND external_package_id = $2',
+                [dispatchId, `PK-${salesOrderId}`],
+            );
+            return row.weight;
+        };
+        const eventsOf = async (type: string): Promise<number> => (
+            await dataSource.query('SELECT 1 FROM dispatch_events WHERE dispatch_id = $1 AND event_type = $2', [dispatchId, type])
+        ).length;
+        const updated = (recordVersion: number, grossWeightKg: number) => envelope(
+            'inventory.shipment.updated',
+            'inventory',
+            {
+                salesOrderId,
+                recordVersion,
+                updatedAt: now,
+                isReady: true,
+                packages: [{ packageId: `PK-${salesOrderId}`, lengthCm: 10, widthCm: 20, heightCm: 30, grossWeightKg }],
+            },
+        );
+
+        // A heavier package arrives while the dispatch is still editable: it reaches dispatch_packages.
+        expect(await weightOf()).toBe(2.5);
+        const heavier = updated(2, 7.5);
+        await bus.publish(heavier.type, heavier);
+        expect(await weightOf()).toBe(7.5);
+        expect(await eventsOf('shipment_changed')).toBe(1);
+
+        // The same packages again, in a newer version: nothing differs, nothing is written or recorded.
+        const again = updated(3, 7.5);
+        await bus.publish(again.type, again);
+        expect(await eventsOf('shipment_changed')).toBe(1);
+
+        // Past the promise the dispatch is not modified; the coordinator is told through its events.
+        await dataSource.query(
+            `UPDATE dispatches SET dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = 'scheduled')
+              WHERE dispatch_id = $1`,
+            [dispatchId],
+        );
+        const lighter = updated(4, 1.5);
+        await bus.publish(lighter.type, lighter);
+        expect(await weightOf()).toBe(7.5);
+        expect(await eventsOf('change_requires_attention')).toBe(1);
+        expect(await eventsOf('shipment_changed')).toBe(1);
+    });
+    it('moves the dispatch to the new origin warehouse of a later updated, and rejects an unknown one', async () => {
+        const salesOrderId = `IT-${runId}-WH`;
+        const marketMessage = marketplace(salesOrderId);
+        await bus.publish(marketMessage.type, marketMessage);
+        const inventoryMessage = inventory(salesOrderId);
+        await bus.publish(inventoryMessage.type, inventoryMessage);
+        await expectConsolidated(salesOrderId);
+        const [{ dispatch_id: dispatchId }] = await deliveryDispatches(salesOrderId);
+
+        const originOf = async (): Promise<string> => {
+            const [row] = await dataSource.query(
+                'SELECT w.code FROM dispatches d JOIN warehouses w ON w.warehouse_id = d.origin_warehouse_id WHERE d.dispatch_id = $1',
+                [dispatchId],
+            );
+            return row.code;
+        };
+
+        expect(await originOf()).toBe('WH-LPZ-01');
+        const moved = envelope('inventory.shipment.updated', 'inventory', {
+            salesOrderId,
+            recordVersion: 2,
+            updatedAt: now,
+            isReady: true,
+            warehouseId: 'WH-LPZ-02',
+        });
+        await bus.publish(moved.type, moved);
+        expect(await originOf()).toBe('WH-LPZ-02');
+
+        // A code that does not exist is rejected before anything is written (dead-letter + receipt).
+        const unknown = envelope('inventory.shipment.updated', 'inventory', {
+            salesOrderId,
+            recordVersion: 3,
+            updatedAt: now,
+            isReady: true,
+            warehouseId: 'WH-NO-EXISTE',
+        });
+        await bus.publish(unknown.type, unknown);
+        expect(await originOf()).toBe('WH-LPZ-02');
     });
 });
