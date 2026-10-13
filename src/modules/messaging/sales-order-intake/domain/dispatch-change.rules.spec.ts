@@ -37,7 +37,7 @@ describe('classifyDispatchStatus', () => {
         expect(classifyDispatchStatus('cancelled')).toBe('cancelled');
     });
 
-    it.each(['scheduled', 'assigned', 'out_for_delivery', 'in_transit', 'delivered', 'not_delivered', 'incident'])(
+    it.each(['scheduled', 'assigned', 'out_for_delivery', 'in_transit', 'delivered', 'not_delivered', 'incident', 'returned'])(
         'treats %s as past the promise',
         (status) => {
             expect(classifyDispatchStatus(status)).toBe('beyond_promise');
@@ -202,10 +202,16 @@ describe('planShipmentReadiness', () => {
         expect(planShipmentReadiness(dispatch({ shipmentReady: false }), false)).toEqual({ kind: 'noop' });
     });
 
-    it('asks for attention when a scheduled dispatch stops being ready, and does nothing when it is ready again', () => {
+    it('asks for attention for any readiness change after the promise, including delivered and returned', () => {
         expect(planShipmentReadiness(dispatch({ status: 'scheduled' }), false)).toEqual({ kind: 'attention' });
         expect(planShipmentReadiness(dispatch({ status: 'scheduled', shipmentReady: false }), true)).toEqual({
-            kind: 'noop',
+            kind: 'attention',
+        });
+        expect(planShipmentReadiness(dispatch({ status: 'delivered', shipmentReady: false }), true)).toEqual({
+            kind: 'attention',
+        });
+        expect(planShipmentReadiness(dispatch({ status: 'returned', shipmentReady: true }), false)).toEqual({
+            kind: 'attention',
         });
     });
 

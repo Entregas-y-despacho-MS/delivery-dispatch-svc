@@ -8,7 +8,7 @@ export type MessagingAdapter = 'pubsub' | 'memory';
 /**
  * Port & Adapter facade for the asynchronous messaging with the ERP.
  * Consumers inject MessageBus — the adapter is resolved at startup from MESSAGING_ADAPTER
- * (`pubsub` by default: the emulator in development, Google Cloud Pub/Sub otherwise).
+ * (`pubsub` by default; local development connects to the emulator configured in `.env.example`).
  */
 @Global()
 @Module({})

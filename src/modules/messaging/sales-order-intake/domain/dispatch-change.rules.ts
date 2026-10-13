@@ -167,8 +167,8 @@ export function planShipmentReadiness(snapshot: DispatchSnapshot, ready: boolean
     if (statusClass === 'cancelled') return { kind: 'ignore', reason: 'dispatch_cancelled' };
     if (snapshot.shipmentReady === ready) return { kind: 'noop' };
     if (statusClass === 'beyond_promise') {
-        // Becoming ready again needs nothing; stopping being ready needs a person.
-        return ready ? { kind: 'noop' } : { kind: 'attention' };
+        // Any readiness change after the promise needs a coordinator, including delivered/returned.
+        return { kind: 'attention' };
     }
     return { kind: 'set', ready, removeFromProposal: !ready && snapshot.routeBatchId !== null };
 }

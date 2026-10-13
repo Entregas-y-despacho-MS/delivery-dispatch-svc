@@ -31,6 +31,7 @@ import { CacheModule } from './plugins/cache/cache.module.js';
 import { MessagingModule } from './plugins/messaging/messaging.module.js';
 import { InboundMessagesModule } from './modules/messaging/inbound-messages/inbound-messages.module.js';
 import { OutboundMessagesModule } from './modules/messaging/outbound-messages/outbound-messages.module.js';
+import { SalesOrderIntakeModule } from './modules/messaging/sales-order-intake/sales-order-intake.module.js';
 
 @Module({
     imports: [
@@ -43,6 +44,7 @@ import { OutboundMessagesModule } from './modules/messaging/outbound-messages/ou
         MessagingModule.register(),
         InboundMessagesModule,
         OutboundMessagesModule,
+        SalesOrderIntakeModule,
         HealthModule,
         DatabaseModule,
         SettingsModule,
