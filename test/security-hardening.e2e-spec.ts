@@ -21,6 +21,7 @@ import { AppConfig } from '../src/config/services/app.config.js';
 import { HttpExceptionFilter } from '../src/shared/filters/index.js';
 import { hashPassword } from '../src/shared/utils/crypto.util.js';
 import { MailerPort } from '../src/plugins/mailer/mailer.port.js';
+import { withEventPurge } from './helpers/purge-append-only-events.js';
 
 const PASSWORD = 'E2eTest1234';
 
@@ -66,14 +67,16 @@ describe('Security hardening (e2e)', () => {
     });
 
     afterAll(async () => {
-        await ds.query(`DELETE FROM dispatch_events    WHERE dispatch_id IN (SELECT dispatch_id FROM dispatches WHERE source_order_ref LIKE $1)`, [`hd-${run}%`]);
-        await ds.query(`DELETE FROM dispatch_incidents WHERE dispatch_id IN (SELECT dispatch_id FROM dispatches WHERE source_order_ref LIKE $1)`, [`hd-${run}%`]);
-        await ds.query(`DELETE FROM delivery_evidences WHERE dispatch_id IN (SELECT dispatch_id FROM dispatches WHERE source_order_ref LIKE $1)`, [`hd-${run}%`]);
-        await ds.query(`DELETE FROM dispatches WHERE source_order_ref LIKE $1`, [`hd-${run}%`]);
-        await ds.query(`DELETE FROM route_batches WHERE driver_id IN (SELECT user_id FROM users WHERE username LIKE $1)`, [`hd\\_%\\_${run}`]);
-        await ds.query(`DELETE FROM delivery_zones WHERE code LIKE $1`, [`HD${run}%`]);
-        await ds.query(`DELETE FROM password_history WHERE user_id IN (SELECT user_id FROM users WHERE username LIKE $1 OR username LIKE $2)`, [`hd\\_%\\_${run}`, `%\\_${run}`]);
-        await ds.query(`DELETE FROM users WHERE username LIKE $1 OR username LIKE $2`, [`hd\\_%\\_${run}`, `hdn\\_%\\_${run}`]);
+        const testUsers = [`hd\\_%\\_${run}`, `hdn\\_%\\_${run}`];
+        await withEventPurge(ds, { dispatchRefs: [`hd-${run}%`], userNames: testUsers }, async (manager) => {
+            await manager.query(`DELETE FROM dispatch_incidents WHERE dispatch_id IN (SELECT dispatch_id FROM dispatches WHERE source_order_ref LIKE $1)`, [`hd-${run}%`]);
+            await manager.query(`DELETE FROM delivery_evidences WHERE dispatch_id IN (SELECT dispatch_id FROM dispatches WHERE source_order_ref LIKE $1)`, [`hd-${run}%`]);
+            await manager.query(`DELETE FROM dispatches WHERE source_order_ref LIKE $1`, [`hd-${run}%`]);
+            await manager.query(`DELETE FROM route_batches WHERE driver_id IN (SELECT user_id FROM users WHERE username LIKE $1)`, [testUsers[0]]);
+            await manager.query(`DELETE FROM delivery_zones WHERE code LIKE $1`, [`HD${run}%`]);
+            await manager.query(`DELETE FROM password_history WHERE user_id IN (SELECT user_id FROM users WHERE username LIKE $1 OR username LIKE $2)`, [testUsers[0], `%\\_${run}`]);
+            await manager.query(`DELETE FROM users WHERE username LIKE $1 OR username LIKE $2`, testUsers);
+        });
         await ds.query(`UPDATE settings SET setting_value = $1 WHERE setting_key = 'max_wait_time_min' AND setting_value = '20'`, ['15']);
         await app.close();
     });
@@ -563,7 +566,7 @@ describe('Security hardening (e2e)', () => {
         beforeAll(async () => {
             driverA = await mkUser('driver', 'drvA'); driverB = await mkUser('driver', 'drvB');
             tokenA = (await login(driverA.username)).body.accessToken; tokenB = (await login(driverB.username)).body.accessToken;
-            const [{ route_batch_id }] = await ds.query(`INSERT INTO route_batches (driver_id, shift_date) VALUES ($1, current_date) RETURNING route_batch_id`, [driverA.id]);
+            const [{ route_batch_id }] = await ds.query(`INSERT INTO route_batches (driver_id, shift_date, status) VALUES ($1, current_date, 'confirmed') RETURNING route_batch_id`, [driverA.id]);
             const [{ dispatch_id }] = await ds.query(
                 `INSERT INTO dispatches (dispatch_type_id, dispatch_status_id, route_batch_id, source_order_ref, delivery_address) VALUES (1, 1, $1, $2, 'Av. Test 1') RETURNING dispatch_id`,
                 [route_batch_id, `hd-${run}-1`],

@@ -21,6 +21,7 @@ import { AppModule } from '../src/app.module.js';
 import { AppConfig } from '../src/config/services/app.config.js';
 import { HttpExceptionFilter } from '../src/shared/filters/index.js';
 import { hashPassword } from '../src/shared/utils/crypto.util.js';
+import { withEventPurge } from './helpers/purge-append-only-events.js';
 
 describe('Tracking GPS del repartidor (e2e, RF-U11)', () => {
     let app: INestApplication;
@@ -89,14 +90,16 @@ describe('Tracking GPS del repartidor (e2e, RF-U11)', () => {
         pendingStatusId = (await dataSource.query(`SELECT dispatch_status_id FROM dispatch_statuses WHERE name = 'pending'`))[0].dispatch_status_id;
 
         const driverIdOf = async (role: string) => (await dataSource.query(`SELECT user_id FROM users WHERE username = $1`, [`e2e_trk_${role}_${run}`]))[0].user_id;
-        [{ route_batch_id: routeBatch1 }] = await dataSource.query(`INSERT INTO route_batches (driver_id, shift_date) VALUES ($1, CURRENT_DATE) RETURNING route_batch_id`, [await driverIdOf('driver1')]);
-        [{ route_batch_id: routeBatch2 }] = await dataSource.query(`INSERT INTO route_batches (driver_id, shift_date) VALUES ($1, CURRENT_DATE) RETURNING route_batch_id`, [await driverIdOf('driver2')]);
+        [{ route_batch_id: routeBatch1 }] = await dataSource.query(`INSERT INTO route_batches (driver_id, shift_date, status) VALUES ($1, CURRENT_DATE, 'confirmed') RETURNING route_batch_id`, [await driverIdOf('driver1')]);
+        [{ route_batch_id: routeBatch2 }] = await dataSource.query(`INSERT INTO route_batches (driver_id, shift_date, status) VALUES ($1, CURRENT_DATE, 'confirmed') RETURNING route_batch_id`, [await driverIdOf('driver2')]);
     });
 
     afterAll(async () => {
-        await dataSource.query(`DELETE FROM dispatches WHERE source_order_ref LIKE $1`, [`trk-${run}-%`]);
-        await dataSource.query(`DELETE FROM route_batches WHERE route_batch_id IN ($1, $2)`, [routeBatch1, routeBatch2]);
-        await dataSource.query(`DELETE FROM users WHERE username LIKE $1`, [`e2e_trk_%_${run}`]);
+        await withEventPurge(dataSource, { dispatchRefs: [`trk-${run}-%`], routeBatchIds: [routeBatch1, routeBatch2], userNames: [`e2e_trk_%_${run}`] }, async (manager) => {
+            await manager.query(`DELETE FROM dispatches WHERE source_order_ref LIKE $1`, [`trk-${run}-%`]);
+            await manager.query(`DELETE FROM route_batches WHERE route_batch_id IN ($1, $2)`, [routeBatch1, routeBatch2]);
+            await manager.query(`DELETE FROM users WHERE username LIKE $1`, [`e2e_trk_%_${run}`]);
+        });
         await app.close();
     });
 

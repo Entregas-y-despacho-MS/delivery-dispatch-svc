@@ -20,6 +20,7 @@ import { AppModule } from '../src/app.module.js';
 import { AppConfig } from '../src/config/services/app.config.js';
 import { HttpExceptionFilter } from '../src/shared/filters/index.js';
 import { hashPassword } from '../src/shared/utils/crypto.util.js';
+import { withEventPurge } from './helpers/purge-append-only-events.js';
 
 const PASSWORD = 'E2eTest1234';
 
@@ -65,6 +66,7 @@ describe('Cierre de sesión — POST /auth/logout (e2e, RF-U08)', () => {
     });
 
     afterAll(async () => {
+        await withEventPurge(ds, { userNames: [`e2e_lo_%_${run}`] });
         await ds.query(`DELETE FROM users WHERE username LIKE $1`, [`e2e_lo_%_${run}`]);
         await app.close();
     });

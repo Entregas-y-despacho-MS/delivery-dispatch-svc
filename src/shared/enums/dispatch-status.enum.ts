@@ -15,4 +15,5 @@ export enum DispatchStatusEnum {
     PICKUP_SCHEDULED      = 'pickup_scheduled',
     PICKED_UP_IN_TRANSIT  = 'picked_up_in_transit',
     RETURNED_TO_WAREHOUSE = 'returned_to_warehouse',
+    CANCELLED             = 'cancelled',
 }
