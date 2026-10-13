@@ -1,4 +1,4 @@
-import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn, Unique } from 'typeorm';
+import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn, Unique, type Relation } from 'typeorm';
 import { BaseCreatedUpdated } from '../../../../database/entities/base.entity.js';
 import { numericTransformer } from '../../../../shared/orm/index.js';
 import { Dispatch } from './dispatch.entity.js';
@@ -32,5 +32,5 @@ export class DispatchPackage extends BaseCreatedUpdated {
 
     @ManyToOne(() => Dispatch, { onDelete: 'CASCADE' })
     @JoinColumn({ name: 'dispatch_id' })
-    dispatch: Dispatch;
+    dispatch: Relation<Dispatch>;
 }
