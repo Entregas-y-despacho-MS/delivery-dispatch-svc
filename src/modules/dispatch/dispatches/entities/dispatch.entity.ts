@@ -83,6 +83,18 @@ export class Dispatch extends BaseCreatedUpdated {
     @Column({ name: 'estimated_weight_kg', type: 'numeric', precision: 10, scale: 2, nullable: true })
     estimatedWeightKg: string | null;
 
+    @Column({ name: 'estimated_boxes', type: 'int', nullable: true })
+    estimatedBoxes: number | null;
+
+    @Column({ name: 'estimated_volume_m3', type: 'numeric', precision: 10, scale: 3, nullable: true })
+    estimatedVolumeM3: string | null;
+
+    @Column({ name: 'transport_conditions', type: 'text', nullable: true })
+    transportConditions: string | null;
+
+    @Column({ name: 'destination_warehouse_id', type: 'int', nullable: true })
+    destinationWarehouseId: number | null;
+
     // Only applies to warehouse_return_pickup / supplier_return.
     @Column({ name: 'return_reason', type: 'text', nullable: true })
     returnReason: string | null;
