@@ -30,6 +30,8 @@ export interface ShipmentDetails {
     packages: DispatchPackageSnapshot[];
     evidencePolicy: string;
     packageReadyAt: Date | null;
+    /** `warehouses.code` of the origin warehouse of the dispatch, or `null`. */
+    warehouseCode: string | null;
 }
 
 /**
@@ -74,12 +76,18 @@ export class MemoryExistingDispatchChanges extends ExistingDispatchChanges {
     /** Registers the packages, evidence policy and packing moment of a dispatch added with `add`. */
     addShipment(
         salesOrderId: string,
-        details: { packages?: DispatchPackageSnapshot[]; evidencePolicy?: string; packageReadyAt?: Date | null },
+        details: {
+            packages?: DispatchPackageSnapshot[];
+            evidencePolicy?: string;
+            packageReadyAt?: Date | null;
+            warehouseCode?: string | null;
+        },
     ): void {
         this.shipments.set(salesOrderId, {
             packages: [],
             evidencePolicy: 'hand_delivery_standard',
             packageReadyAt: null,
+            warehouseCode: null,
             ...structuredClone(details),
         });
     }
@@ -100,12 +108,16 @@ export class MemoryExistingDispatchChanges extends ExistingDispatchChanges {
             packages: [],
             evidencePolicy: 'hand_delivery_standard',
             packageReadyAt: null,
+            warehouseCode: null,
         };
         const snapshot: ShipmentDispatchSnapshot = {
             dispatchId: current.dispatchId,
             status: current.status,
             routeBatchId: current.routeBatchId,
-            ...structuredClone(details),
+            packages: structuredClone(details.packages),
+            evidencePolicy: details.evidencePolicy,
+            packageReadyAt: details.packageReadyAt,
+            originWarehouseCode: details.warehouseCode,
         };
 
         const plan = planShipmentChange(snapshot, input.blocks);
@@ -139,6 +151,7 @@ export class MemoryExistingDispatchChanges extends ExistingDispatchChanges {
             packages: plan.packages ?? snapshot.packages,
             evidencePolicy: plan.evidencePolicy ?? snapshot.evidencePolicy,
             packageReadyAt: plan.fillPackageReadyAt ? new Date() : snapshot.packageReadyAt,
+            warehouseCode: plan.warehouseCode ?? snapshot.originWarehouseCode,
         });
         const next: DispatchSnapshot = { ...current, status: plan.statusAfter };
         if (plan.removeFromProposal) this.leaveBatch(next);

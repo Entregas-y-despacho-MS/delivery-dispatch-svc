@@ -75,7 +75,8 @@ export abstract class ExistingDispatchChanges {
      * - `scheduled` and anything after it: `attention_required`; the dispatch is not modified.
      * - `cancelled`: `ignored`.
      *
-     * `warehouseId` and `availableFrom` are not applied here (they have their own rule).
+     * A different `warehouseId` (origin warehouse code) follows the same rules and always takes a
+     * dispatch of a proposed batch out of it. `availableFrom` has no column and is not applied.
      */
     abstract applyShipmentChange(
         input: { salesOrderId: string; source: ChangeSource; blocks: ShipmentChangeBlocks; receivedAt: string },

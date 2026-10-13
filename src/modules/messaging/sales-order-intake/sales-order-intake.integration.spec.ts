@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { DataSource, type EntityManager, type QueryRunner } from 'typeorm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { RejectedMessageException } from '../../../plugins/messaging/exceptions/rejected-message.exception.js';
 import { PendingSalesOrder } from './entities/pending-sales-order.entity.js';
 import { TypeOrmConsolidationRecord } from './repositories/typeorm-consolidation-record.js';
 import { TypeOrmExistingDispatchChanges } from './repositories/typeorm-existing-dispatch-changes.js';
@@ -46,21 +47,35 @@ describe.skipIf(!PORT)('sales-order intake against PostgreSQL', () => {
     };
 
     const insertDispatch = async (
-        input: { ref?: string; status?: string; routeBatchId?: number | null; type?: string } = {},
+        input: {
+            ref?: string;
+            status?: string;
+            routeBatchId?: number | null;
+            type?: string;
+            originWarehouse?: string;
+        } = {},
         em: EntityManager = manager(),
     ): Promise<{ id: number; ref: string }> => {
         const orderRef = input.ref ?? ref();
         const [row] = await em.query(
             `INSERT INTO dispatches (
                 dispatch_type_id, dispatch_status_id, source_order_ref, delivery_address, delivery_reference,
-                delivery_latitude, delivery_longitude, contact_name, contact_phone, contact_email, route_batch_id
+                delivery_latitude, delivery_longitude, contact_name, contact_phone, contact_email, route_batch_id,
+                origin_warehouse_id
              ) VALUES (
                 (SELECT dispatch_type_id FROM dispatch_types WHERE name = $1),
                 (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $2),
                 $3, 'Av. Arce 2345', 'Edificio azul', -16.5412, -68.0731,
-                'María López', '+59170000000', 'maria@example.com', $4
+                'María López', '+59170000000', 'maria@example.com', $4,
+                (SELECT warehouse_id FROM warehouses WHERE code = $5)
              ) RETURNING dispatch_id AS id`,
-            [input.type ?? 'delivery', input.status ?? 'pending', orderRef, input.routeBatchId ?? null],
+            [
+                input.type ?? 'delivery',
+                input.status ?? 'pending',
+                orderRef,
+                input.routeBatchId ?? null,
+                input.originWarehouse ?? null,
+            ],
         );
         return { id: row.id as number, ref: orderRef };
     };
@@ -646,6 +661,121 @@ describe.skipIf(!PORT)('sales-order intake against PostgreSQL', () => {
 
             expect(outcome).toEqual({ status: 'ignored', dispatchId: dispatch.id, reason: 'dispatch_cancelled' });
             expect((await packagesOf(dispatch.id))[0].weight).toBe(6.4);
+        });
+
+        const originOf = async (dispatchId: number): Promise<string | null> => {
+            const [row] = await manager().query(
+                `SELECT w.code FROM dispatches d LEFT JOIN warehouses w ON w.warehouse_id = d.origin_warehouse_id
+                  WHERE d.dispatch_id = $1`,
+                [dispatchId],
+            );
+            return row.code;
+        };
+
+        it('changes the origin warehouse of a pending dispatch and records the codes', async () => {
+            const dispatch = await insertDispatch({ status: 'pending', originWarehouse: 'WH-LPZ-01' });
+
+            const outcome = await changes().applyShipmentChange(
+                change(dispatch.ref, { warehouseId: 'WH-LPZ-02' }),
+                options(),
+            );
+
+            expect(outcome).toMatchObject({ status: 'applied', changedFields: ['warehouseId'] });
+            expect(await originOf(dispatch.id)).toBe('WH-LPZ-02');
+            const [event] = await eventsOf(dispatch.id);
+            expect(event.event_type).toBe('shipment_changed');
+            expect(event.metadata.changes.warehouseId).toEqual({ from: 'WH-LPZ-01', to: 'WH-LPZ-02' });
+        });
+
+        it('takes an in_planning dispatch out of its batch when the origin warehouse changes', async () => {
+            const batchId = await insertBatch();
+            const dispatch = await insertDispatch({
+                status: 'in_planning',
+                routeBatchId: batchId,
+                originWarehouse: 'WH-LPZ-01',
+            });
+
+            const outcome = await changes().applyShipmentChange(
+                change(dispatch.ref, { warehouseId: 'WH-LPZ-02' }),
+                options(),
+            );
+
+            expect(outcome).toMatchObject({ status: 'applied', statusAfter: 'pending', removedFromProposal: true });
+            const row = await dispatchRow(dispatch.id);
+            expect(row.status).toBe('pending');
+            expect(row.route_batch_id).toBeNull();
+            expect(row.version).toBe(1);
+            expect(await batchVersion(batchId)).toBe(1);
+            expect(await originOf(dispatch.id)).toBe('WH-LPZ-02');
+        });
+
+        it('does not touch the warehouse of a scheduled dispatch and asks for attention', async () => {
+            const batchId = await insertBatch();
+            const dispatch = await insertDispatch({
+                status: 'scheduled',
+                routeBatchId: batchId,
+                originWarehouse: 'WH-LPZ-01',
+            });
+
+            const outcome = await changes().applyShipmentChange(
+                change(dispatch.ref, { warehouseId: 'WH-LPZ-02' }),
+                options(),
+            );
+
+            expect(outcome).toMatchObject({ status: 'attention_required', dispatchId: dispatch.id });
+            expect(await originOf(dispatch.id)).toBe('WH-LPZ-01');
+            expect((await dispatchRow(dispatch.id)).route_batch_id).toBe(batchId);
+            const [event] = await eventsOf(dispatch.id);
+            expect(event.event_type).toBe('change_requires_attention');
+            expect(event.metadata.changedBlocks).toEqual(['warehouseId']);
+            expect(await batchVersion(batchId)).toBe(0);
+        });
+
+        it('does nothing for the warehouse the dispatch already has', async () => {
+            const batchId = await insertBatch();
+            const dispatch = await insertDispatch({
+                status: 'in_planning',
+                routeBatchId: batchId,
+                originWarehouse: 'WH-LPZ-01',
+            });
+
+            const outcome = await changes().applyShipmentChange(
+                change(dispatch.ref, { warehouseId: 'WH-LPZ-01' }),
+                options(),
+            );
+
+            expect(outcome).toEqual({ status: 'ignored', dispatchId: dispatch.id, reason: 'no_change' });
+            expect((await dispatchRow(dispatch.id)).route_batch_id).toBe(batchId);
+            expect(await eventsOf(dispatch.id)).toEqual([]);
+        });
+
+        it('fills the warehouse of a dispatch that had none', async () => {
+            const dispatch = await insertDispatch({ status: 'pending' });
+
+            await changes().applyShipmentChange(
+                change(dispatch.ref, { warehouseId: 'WH-LPZ-01' }),
+                options(),
+            );
+
+            expect(await originOf(dispatch.id)).toBe('WH-LPZ-01');
+        });
+
+        it('rejects a code that does not exist, and writes nothing, even with a package change in the message', async () => {
+            const dispatch = await withPackage({ status: 'pending' });
+
+            await expect(
+                changes().applyShipmentChange(
+                    change(dispatch.ref, {
+                        packages: [{ ...PKG_1, grossWeightKg: 12 }],
+                        handlingConditions: ['FRAGILE'],
+                        warehouseId: 'WH-NO-EXISTE',
+                    }),
+                    options(),
+                ),
+            ).rejects.toBeInstanceOf(RejectedMessageException);
+
+            expect((await packagesOf(dispatch.id))[0].weight).toBe(6.4);
+            expect(await eventsOf(dispatch.id)).toEqual([]);
         });
 
         it('only touches the delivery dispatch when another type shares the order reference', async () => {

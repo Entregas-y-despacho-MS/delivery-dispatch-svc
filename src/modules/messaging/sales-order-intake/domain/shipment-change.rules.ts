@@ -12,8 +12,11 @@ import { classifyDispatchStatus, statusAfterEdit } from './dispatch-change.rules
  * - `scheduled` and anything after it: the dispatch is not modified; the coordinator decides.
  * - `cancelled`: nothing to do.
  *
- * `warehouseId` and `availableFrom` are **not** part of this change: moving the origin warehouse
- * can affect the assignment and the planning, not only the capacity, and has its own rule.
+ * A different `warehouseId` (the code of the origin warehouse) follows the same matrix as the
+ * packages and always takes a planned dispatch out of its batch: a batch leaves from one
+ * warehouse, so the dispatch no longer belongs to the one it was proposed in. The zone does not
+ * change (it comes from the destination). `availableFrom` has no column in `dispatches`: it stays
+ * in the payload of `pending_shipments` and is not applied here.
  */
 
 /** Scale of `dispatch_packages` columns: `length/width/height` NUMERIC(8,2), weight NUMERIC(10,3). */
@@ -39,6 +42,8 @@ export interface ShipmentDispatchSnapshot {
     evidencePolicy: string;
     packageReadyAt: Date | null;
     packages: DispatchPackageSnapshot[];
+    /** `warehouses.code` of the origin warehouse of the dispatch, or `null` if it has none. */
+    originWarehouseCode: string | null;
 }
 
 /** The blocks of `ready` / `updated` of Almacén that can change a dispatch. Absent = no change. */
@@ -47,9 +52,16 @@ export interface ShipmentChangeBlocks {
     handlingConditions?: string[];
     evidencePolicy?: EvidencePolicy;
     physicallyPacked?: boolean;
+    /** Code of the origin warehouse (`warehouses.code`), not its numeric id. */
+    warehouseId?: string;
 }
 
-export type ShipmentBlockName = 'packages' | 'handlingConditions' | 'evidencePolicy' | 'physicallyPacked';
+export type ShipmentBlockName =
+    | 'packages'
+    | 'handlingConditions'
+    | 'evidencePolicy'
+    | 'physicallyPacked'
+    | 'warehouseId';
 
 export type ShipmentDiff = Partial<Record<ShipmentBlockName, { from: unknown; to: unknown }>>;
 
@@ -67,6 +79,8 @@ export type ShipmentChangePlan =
           evidencePolicy: string | null;
           /** `physicallyPacked: true` on a dispatch that did not have `package_ready_at` yet. */
           fillPackageReadyAt: boolean;
+          /** The new origin warehouse code, only when it changed. */
+          warehouseCode: string | null;
           changedBlocks: ShipmentBlockName[];
           diff: ShipmentDiff;
           removeFromProposal: boolean;
@@ -186,19 +200,29 @@ export function planShipmentChange(snapshot: ShipmentDispatchSnapshot, blocks: S
         diff.physicallyPacked = { from: null, to: 'now' };
     }
 
+    // A different origin warehouse. Both sides are `warehouses.code`.
+    let warehouseCode: string | null = null;
+    if (blocks.warehouseId !== undefined && blocks.warehouseId !== snapshot.originWarehouseCode) {
+        warehouseCode = blocks.warehouseId;
+        changedBlocks.push('warehouseId');
+        diff.warehouseId = { from: snapshot.originWarehouseCode, to: blocks.warehouseId };
+    }
+
     if (changedBlocks.length === 0) return { kind: 'noop' };
 
     if (statusClass === 'beyond_promise') return { kind: 'attention', changedBlocks, diff };
 
-    // Only a change that touches the capacity of a planned dispatch takes it out of its batch.
-    const touchesCapacity = packages !== null;
-    const removeFromProposal = touchesCapacity && snapshot.status === 'in_planning' && snapshot.routeBatchId !== null;
+    // Only a change that touches the capacity (packages, conditions) or the origin of a planned
+    // dispatch takes it out of its batch; the evidence policy and the packing moment do not.
+    const touchesPlanning = packages !== null || warehouseCode !== null;
+    const removeFromProposal = touchesPlanning && snapshot.status === 'in_planning' && snapshot.routeBatchId !== null;
 
     return {
         kind: 'update',
         packages,
         evidencePolicy,
         fillPackageReadyAt,
+        warehouseCode,
         changedBlocks,
         diff,
         removeFromProposal,

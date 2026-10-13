@@ -196,6 +196,7 @@ describe('ShipmentOrderConsumer', () => {
                     handlingConditions: ['FRAGILE'],
                     evidencePolicy: 'contactless_delivery',
                     physicallyPacked: true,
+                    warehouseId: 'WH-LPZ-01',
                 },
             }, { manager: undefined });
         });
@@ -209,17 +210,18 @@ describe('ShipmentOrderConsumer', () => {
                         packages: readyData.packages,
                         evidencePolicy: 'hand_delivery_standard',
                         physicallyPacked: false,
+                        warehouseId: 'WH-LPZ-01',
                     },
                 }),
                 { manager: undefined },
             );
         });
 
-        it('does not pass warehouseId or availableFrom: they have their own rule', async () => {
+        it('passes the origin warehouse code but not availableFrom (it has no column)', async () => {
             await send(SHIPMENT_TOPICS.ready, { ...readyData, availableFrom: '2026-10-13T06:00:00Z' });
 
             const [{ blocks }] = dispatchChanges.applyShipmentChange.mock.calls[0];
-            expect(blocks).not.toHaveProperty('warehouseId');
+            expect(blocks).toHaveProperty('warehouseId', 'WH-LPZ-01');
             expect(blocks).not.toHaveProperty('availableFrom');
         });
 

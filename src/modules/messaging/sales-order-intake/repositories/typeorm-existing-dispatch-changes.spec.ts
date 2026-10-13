@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { RejectedMessageException } from '../../../../plugins/messaging/exceptions/rejected-message.exception.js';
 import { TypeOrmExistingDispatchChanges } from './typeorm-existing-dispatch-changes.js';
 
 const ORDER = 'SO-2026-000123';
@@ -35,7 +36,8 @@ describe('TypeOrmExistingDispatchChanges', () => {
     let calls: { sql: string; params: unknown[] }[];
     let dispatchRow: Record<string, unknown> | null;
     let zoneRow: { id: number } | null;
-    let headerRow: { evidence_policy: string; package_ready_at: Date | null };
+    let headerRow: { evidence_policy: string; package_ready_at: Date | null; warehouse_code: string | null };
+    let warehouseRow: { id: number } | null;
     let packageRows: Record<string, unknown>[];
     let changes: TypeOrmExistingDispatchChanges;
     const options = () => ({ manager: manager as never });
@@ -45,7 +47,8 @@ describe('TypeOrmExistingDispatchChanges', () => {
             calls.push({ sql, params });
             if (sql.includes('FOR UPDATE OF d')) return dispatchRow ? [dispatchRow] : [];
             if (sql.includes('FROM delivery_zones')) return zoneRow ? [zoneRow] : [];
-            if (sql.includes('SELECT evidence_policy, package_ready_at')) return [headerRow];
+            if (sql.includes('w.code AS warehouse_code')) return [headerRow];
+            if (sql.includes('FROM warehouses WHERE code')) return warehouseRow ? [warehouseRow] : [];
             if (sql.includes('FROM dispatch_packages WHERE dispatch_id')) return packageRows;
             return [];
         }),
@@ -57,7 +60,8 @@ describe('TypeOrmExistingDispatchChanges', () => {
         calls = [];
         dispatchRow = row();
         zoneRow = { id: 3 };
-        headerRow = { evidence_policy: 'hand_delivery_standard', package_ready_at: null };
+        headerRow = { evidence_policy: 'hand_delivery_standard', package_ready_at: null, warehouse_code: 'WH-LPZ-01' };
+        warehouseRow = { id: 2 };
         packageRows = [packageRow()];
         manager.query.mockClear();
         changes = new TypeOrmExistingDispatchChanges({ manager } as never);
@@ -417,7 +421,11 @@ describe('TypeOrmExistingDispatchChanges', () => {
         });
 
         it('does not fill package_ready_at again when the dispatch already has it', async () => {
-            headerRow = { evidence_policy: 'hand_delivery_standard', package_ready_at: new Date('2026-10-12T10:00:00Z') };
+            headerRow = {
+                evidence_policy: 'hand_delivery_standard',
+                package_ready_at: new Date('2026-10-12T10:00:00Z'),
+                warehouse_code: 'WH-LPZ-01',
+            };
 
             const outcome = await changes.applyShipmentChange(input({ physicallyPacked: true }), options());
 
@@ -451,6 +459,63 @@ describe('TypeOrmExistingDispatchChanges', () => {
             const metadata = JSON.parse(insert.params[2] as string);
             expect(metadata.changedBlocks).toEqual(['packages']);
             expect(metadata.changes.packages.to[0].grossWeightKg).toBe(9);
+        });
+
+        it('updates the origin warehouse after resolving its code, before writing anything', async () => {
+            const outcome = await changes.applyShipmentChange(
+                input({ warehouseId: 'WH-LPZ-02' }),
+                options(),
+            );
+
+            expect(outcome).toMatchObject({ status: 'applied', changedFields: ['warehouseId'] });
+            const lookup = sqlOf('FROM warehouses WHERE code')!;
+            expect(lookup.sql).toContain('active = TRUE');
+            expect(lookup.params).toEqual(['WH-LPZ-02']);
+            const update = sqlOf('UPDATE dispatches SET')!;
+            expect(update.sql).toContain('origin_warehouse_id = $2');
+            expect(update.params).toEqual([7, 2]);
+            expect(sqlOf('INSERT INTO dispatch_packages')).toBeUndefined();
+            const event = JSON.parse(sqlOf('INSERT INTO dispatch_events')!.params[2] as string);
+            expect(event.changes.warehouseId).toEqual({ from: 'WH-LPZ-01', to: 'WH-LPZ-02' });
+        });
+
+        it('takes an in_planning dispatch out of its batch when the warehouse changes', async () => {
+            dispatchRow = row({ status: 'in_planning', route_batch_id: 4 });
+
+            const outcome = await changes.applyShipmentChange(input({ warehouseId: 'WH-LPZ-02' }), options());
+
+            expect(outcome).toMatchObject({ status: 'applied', statusAfter: 'pending', removedFromProposal: true });
+            expect(sqlOf('UPDATE route_batches SET version')?.params).toEqual([4]);
+        });
+
+        it('rejects the message, without writing, when the warehouse code is unknown or inactive', async () => {
+            warehouseRow = null;
+
+            await expect(
+                changes.applyShipmentChange(input({ packages: [PKG_2], warehouseId: 'WH-XXX' }), options()),
+            ).rejects.toBeInstanceOf(RejectedMessageException);
+            expect(sqlOf('INSERT INTO dispatch_packages')).toBeUndefined();
+            expect(sqlOf('UPDATE dispatches')).toBeUndefined();
+            expect(sqlOf('INSERT INTO dispatch_events')).toBeUndefined();
+        });
+
+        it('does not look the warehouse up when the dispatch is past the promise', async () => {
+            dispatchRow = row({ status: 'scheduled', route_batch_id: 4 });
+
+            const outcome = await changes.applyShipmentChange(input({ warehouseId: 'WH-LPZ-02' }), options());
+
+            expect(outcome).toMatchObject({ status: 'attention_required' });
+            expect(sqlOf('FROM warehouses WHERE code')).toBeUndefined();
+            expect(sqlOf('UPDATE dispatches')).toBeUndefined();
+        });
+
+        it('does nothing for the same warehouse code', async () => {
+            await expect(changes.applyShipmentChange(input({ warehouseId: 'WH-LPZ-01' }), options())).resolves.toEqual({
+                status: 'ignored',
+                dispatchId: 7,
+                reason: 'no_change',
+            });
+            expect(sqlOf('FROM warehouses WHERE code')).toBeUndefined();
         });
 
         it('ignores a cancelled dispatch', async () => {

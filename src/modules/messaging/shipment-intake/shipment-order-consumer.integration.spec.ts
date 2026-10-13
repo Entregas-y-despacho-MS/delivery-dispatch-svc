@@ -224,4 +224,43 @@ describe.skipIf(process.env.APP_INTEGRATION_DB !== '1')('shipment intake through
         expect(await eventsOf('change_requires_attention')).toBe(1);
         expect(await eventsOf('shipment_changed')).toBe(1);
     });
+    it('moves the dispatch to the new origin warehouse of a later updated, and rejects an unknown one', async () => {
+        const salesOrderId = `IT-${runId}-WH`;
+        const marketMessage = marketplace(salesOrderId);
+        await bus.publish(marketMessage.type, marketMessage);
+        const inventoryMessage = inventory(salesOrderId);
+        await bus.publish(inventoryMessage.type, inventoryMessage);
+        await expectConsolidated(salesOrderId);
+        const [{ dispatch_id: dispatchId }] = await deliveryDispatches(salesOrderId);
+
+        const originOf = async (): Promise<string> => {
+            const [row] = await dataSource.query(
+                'SELECT w.code FROM dispatches d JOIN warehouses w ON w.warehouse_id = d.origin_warehouse_id WHERE d.dispatch_id = $1',
+                [dispatchId],
+            );
+            return row.code;
+        };
+
+        expect(await originOf()).toBe('WH-LPZ-01');
+        const moved = envelope('inventory.shipment.updated', 'inventory', {
+            salesOrderId,
+            recordVersion: 2,
+            updatedAt: now,
+            isReady: true,
+            warehouseId: 'WH-LPZ-02',
+        });
+        await bus.publish(moved.type, moved);
+        expect(await originOf()).toBe('WH-LPZ-02');
+
+        // A code that does not exist is rejected before anything is written (dead-letter + receipt).
+        const unknown = envelope('inventory.shipment.updated', 'inventory', {
+            salesOrderId,
+            recordVersion: 3,
+            updatedAt: now,
+            isReady: true,
+            warehouseId: 'WH-NO-EXISTE',
+        });
+        await bus.publish(unknown.type, unknown);
+        expect(await originOf()).toBe('WH-LPZ-02');
+    });
 });

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, type EntityManager } from 'typeorm';
+import { RejectedMessageException } from '../../../../plugins/messaging/exceptions/rejected-message.exception.js';
 import type { TransactionOptions } from '../../../../plugins/messaging/inbound-message-transaction.port.js';
 import {
     isUsableLocation,
@@ -256,6 +257,29 @@ export class TypeOrmExistingDispatchChanges extends ExistingDispatchChanges {
             });
         }
 
+        // The code of the new origin warehouse is resolved before anything is written; a code that does
+        // not exist (or is inactive) is a rejected message, so the transaction rolls back.
+        let originWarehouseId: number | null = null;
+        if (plan.warehouseCode !== null) {
+            const [warehouse]: { id: number }[] = await manager.query(
+                `SELECT warehouse_id AS id FROM warehouses WHERE code = $1 AND active = TRUE AND deleted_at IS NULL`,
+                [plan.warehouseCode],
+            );
+            if (!warehouse) {
+                throw new RejectedMessageException(
+                    [
+                        {
+                            path: '/data/warehouseId',
+                            keyword: 'unknownWarehouse',
+                            message: `Warehouse code ${plan.warehouseCode} does not exist or is inactive.`,
+                        },
+                    ],
+                    'unknown_warehouse',
+                );
+            }
+            originWarehouseId = warehouse.id;
+        }
+
         // The packages are upserted by `external_package_id` and the ones that are no longer sent are
         // deleted, so a package that did not change keeps its row (and its id).
         if (plan.packages !== null) {
@@ -295,6 +319,10 @@ export class TypeOrmExistingDispatchChanges extends ExistingDispatchChanges {
             sets.push(`evidence_policy = $${params.length}`);
         }
         if (plan.fillPackageReadyAt) sets.push('package_ready_at = NOW()');
+        if (originWarehouseId !== null) {
+            params.push(originWarehouseId);
+            sets.push(`origin_warehouse_id = $${params.length}`);
+        }
         if (plan.statusAfter !== snapshot.status) {
             params.push(plan.statusAfter);
             sets.push(`dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $${params.length})`);
@@ -327,8 +355,12 @@ export class TypeOrmExistingDispatchChanges extends ExistingDispatchChanges {
         manager: EntityManager,
         delivery: DispatchSnapshot,
     ): Promise<ShipmentDispatchSnapshot> {
-        const [header]: { evidence_policy: string; package_ready_at: Date | null }[] = await manager.query(
-            `SELECT evidence_policy, package_ready_at FROM dispatches WHERE dispatch_id = $1`,
+        const [header]: { evidence_policy: string; package_ready_at: Date | null; warehouse_code: string | null }[] =
+            await manager.query(
+            `SELECT d.evidence_policy, d.package_ready_at, w.code AS warehouse_code
+               FROM dispatches d
+               LEFT JOIN warehouses w ON w.warehouse_id = d.origin_warehouse_id
+              WHERE d.dispatch_id = $1`,
             [delivery.dispatchId],
         );
         const rows: {
@@ -349,6 +381,7 @@ export class TypeOrmExistingDispatchChanges extends ExistingDispatchChanges {
             routeBatchId: delivery.routeBatchId,
             evidencePolicy: header.evidence_policy,
             packageReadyAt: header.package_ready_at,
+            originWarehouseCode: header.warehouse_code,
             packages: rows.map((row) => ({
                 packageId: row.external_package_id,
                 lengthCm: Number(row.length_cm),

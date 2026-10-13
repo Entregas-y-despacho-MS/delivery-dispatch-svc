@@ -23,6 +23,7 @@ function dispatch(overrides: Partial<ShipmentDispatchSnapshot> = {}): ShipmentDi
         evidencePolicy: 'hand_delivery_standard',
         packageReadyAt: null,
         packages: [stored(PKG_1)],
+        originWarehouseCode: 'WH-LPZ-01',
         ...overrides,
     };
 }
@@ -289,5 +290,70 @@ describe('helpers', () => {
     it('reads the conditions of a dispatch as the union of those of its packages', () => {
         expect(currentConditions([stored(PKG_1, ['A']), stored(PKG_2, ['B', 'A'])])).toEqual(['A', 'B']);
         expect(currentConditions([])).toEqual([]);
+    });
+});
+
+describe('planShipmentChange — origin warehouse', () => {
+    it('does nothing when the warehouse is the one the dispatch already has', () => {
+        expect(planShipmentChange(dispatch(), { warehouseId: 'WH-LPZ-01' })).toEqual({ kind: 'noop' });
+    });
+
+    it('updates the origin warehouse of a pending dispatch and reports the codes', () => {
+        const plan = planShipmentChange(dispatch(), { warehouseId: 'WH-LPZ-02' });
+
+        expect(plan).toMatchObject({
+            kind: 'update',
+            warehouseCode: 'WH-LPZ-02',
+            packages: null,
+            changedBlocks: ['warehouseId'],
+            removeFromProposal: false,
+            statusAfter: 'pending',
+        });
+        expect(plan.kind === 'update' && plan.diff.warehouseId).toEqual({ from: 'WH-LPZ-01', to: 'WH-LPZ-02' });
+    });
+
+    it('takes an in_planning dispatch out of its batch even when nothing else changed', () => {
+        const plan = planShipmentChange(dispatch({ status: 'in_planning', routeBatchId: 4 }), {
+            warehouseId: 'WH-LPZ-02',
+        });
+
+        expect(plan).toMatchObject({ kind: 'update', removeFromProposal: true, statusAfter: 'pending' });
+    });
+
+    it('fills the warehouse of a dispatch that had none', () => {
+        const plan = planShipmentChange(dispatch({ originWarehouseCode: null }), { warehouseId: 'WH-LPZ-01' });
+
+        expect(plan).toMatchObject({ kind: 'update', warehouseCode: 'WH-LPZ-01' });
+        expect(plan.kind === 'update' && plan.diff.warehouseId).toEqual({ from: null, to: 'WH-LPZ-01' });
+    });
+
+    it('reports the warehouse together with the packages in the same change', () => {
+        const plan = planShipmentChange(dispatch(), {
+            packages: [{ ...PKG_1, grossWeightKg: 9 }],
+            handlingConditions: ['FRAGILE'],
+            warehouseId: 'WH-LPZ-02',
+        });
+
+        expect(plan.kind === 'update' && plan.changedBlocks).toEqual(['packages', 'warehouseId']);
+    });
+
+    it.each(['scheduled', 'assigned', 'out_for_delivery', 'delivered'])(
+        'does not modify a dispatch in %s: it asks for attention with the warehouses',
+        (status) => {
+            const plan = planShipmentChange(dispatch({ status, routeBatchId: 4 }), { warehouseId: 'WH-LPZ-02' });
+
+            expect(plan).toEqual({
+                kind: 'attention',
+                changedBlocks: ['warehouseId'],
+                diff: { warehouseId: { from: 'WH-LPZ-01', to: 'WH-LPZ-02' } },
+            });
+        },
+    );
+
+    it('ignores a cancelled dispatch', () => {
+        expect(planShipmentChange(dispatch({ status: 'cancelled' }), { warehouseId: 'WH-LPZ-02' })).toEqual({
+            kind: 'ignore',
+            reason: 'dispatch_cancelled',
+        });
     });
 });

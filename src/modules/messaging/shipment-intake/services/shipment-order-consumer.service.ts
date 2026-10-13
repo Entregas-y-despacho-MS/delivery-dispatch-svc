@@ -98,7 +98,8 @@ export class ShipmentOrderConsumer implements OnModuleInit {
      * (`setShipmentReady`). The blocks come from the merged state of Almacén, not from the raw
      * message: a `ready` leaves out what the contract defaults, and the dispatch must mirror what
      * the order now is. `ExistingDispatchChanges` only writes what really differs.
-     * `warehouseId` and `availableFrom` are not applied: they have their own rule.
+     * `availableFrom` is not applied: it has no column in `dispatches`. `warehouseId` is: a
+     * different origin warehouse follows the same rules as the packages.
      */
     private async propagateToDispatch(
         message: ShipmentMessage,
@@ -147,5 +148,6 @@ function shipmentChangeOf(blocks: ShipmentBlocks): ShipmentChangeBlocks | null {
     if (blocks.handlingConditions !== undefined) change.handlingConditions = blocks.handlingConditions;
     if (blocks.evidencePolicy !== undefined) change.evidencePolicy = blocks.evidencePolicy;
     if (blocks.physicallyPacked !== undefined) change.physicallyPacked = blocks.physicallyPacked;
+    if (blocks.warehouseId !== undefined) change.warehouseId = blocks.warehouseId;
     return Object.keys(change).length === 0 ? null : change;
 }

@@ -160,4 +160,48 @@ describe('MemoryExistingDispatchChanges.applyShipmentChange', () => {
         expect(outcome).toMatchObject({ status: 'applied', changedFields: ['packages'] });
         expect(changes.getShipment(ORDER)?.packages).toHaveLength(1);
     });
+
+    describe('origin warehouse', () => {
+        it('updates the warehouse of a pending dispatch', async () => {
+            changes.add(ORDER, { dispatchId: 7, status: 'pending' });
+            changes.addShipment(ORDER, { packages: [stored(PKG_1)], warehouseCode: 'WH-LPZ-01' });
+
+            const outcome = await changes.applyShipmentChange(input({ warehouseId: 'WH-LPZ-02' }), OPTIONS);
+
+            expect(outcome).toMatchObject({ status: 'applied', changedFields: ['warehouseId'] });
+            expect(changes.getShipment(ORDER)?.warehouseCode).toBe('WH-LPZ-02');
+        });
+
+        it('takes an in_planning dispatch out of its batch', async () => {
+            changes.add(ORDER, { dispatchId: 7, status: 'in_planning', routeBatchId: 4 });
+            changes.addShipment(ORDER, { packages: [stored(PKG_1)], warehouseCode: 'WH-LPZ-01' });
+
+            const outcome = await changes.applyShipmentChange(input({ warehouseId: 'WH-LPZ-02' }), OPTIONS);
+
+            expect(outcome).toMatchObject({ status: 'applied', statusAfter: 'pending', removedFromProposal: true });
+            expect(changes.get(ORDER)).toMatchObject({ status: 'pending', routeBatchId: null });
+            expect(changes.batchVersionBumps).toEqual([4]);
+        });
+
+        it('leaves a scheduled dispatch untouched and asks for attention', async () => {
+            changes.add(ORDER, { dispatchId: 7, status: 'scheduled', routeBatchId: 4 });
+            changes.addShipment(ORDER, { packages: [stored(PKG_1)], warehouseCode: 'WH-LPZ-01' });
+
+            const outcome = await changes.applyShipmentChange(input({ warehouseId: 'WH-LPZ-02' }), OPTIONS);
+
+            expect(outcome).toMatchObject({ status: 'attention_required', dispatchId: 7 });
+            expect(changes.getShipment(ORDER)?.warehouseCode).toBe('WH-LPZ-01');
+            expect(changes.get(ORDER)).toMatchObject({ status: 'scheduled', routeBatchId: 4 });
+        });
+
+        it('does nothing for the same warehouse', async () => {
+            changes.add(ORDER, { dispatchId: 7, status: 'in_planning', routeBatchId: 4 });
+            changes.addShipment(ORDER, { packages: [stored(PKG_1)], warehouseCode: 'WH-LPZ-01' });
+
+            const outcome = await changes.applyShipmentChange(input({ warehouseId: 'WH-LPZ-01' }), OPTIONS);
+
+            expect(outcome).toEqual({ status: 'ignored', dispatchId: 7, reason: 'no_change' });
+            expect(changes.get(ORDER)).toMatchObject({ status: 'in_planning', routeBatchId: 4 });
+        });
+    });
 });
