@@ -1,9 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { deadLetterTopicFor, type DeadLetterPayload } from '../dead-letter.js';
 import type { MessageEnvelope } from '../envelope/message-envelope.js';
 import { MessageValidator } from '../envelope/message-validator.js';
 import { TopicAlreadySubscribedException, UnknownTopicException } from '../exceptions/index.js';
 import { InboundMessageLog } from '../inbound-message-log.port.js';
+import { InboundMessageRejection } from '../inbound-message-rejection.port.js';
 import { MessageBus, type MessageHandler } from '../message-bus.port.js';
 import { MessageConsumer, type ConsumeOutcome } from '../message-consumer.js';
 
@@ -31,11 +32,17 @@ export class MemoryMessageBusAdapter extends MessageBus {
     constructor(
         private readonly validator: MessageValidator,
         inboundLog: InboundMessageLog,
+        @Optional() inboundRejection?: InboundMessageRejection,
     ) {
         super();
-        this.consumer = new MessageConsumer(validator, inboundLog, async (topic, payload) => {
-            this.published.push({ topic, payload });
-        });
+        this.consumer = new MessageConsumer(
+            validator,
+            inboundLog,
+            async (topic, payload) => {
+                this.published.push({ topic, payload });
+            },
+            inboundRejection,
+        );
     }
 
     async publish(topic: string, envelope: MessageEnvelope): Promise<void> {

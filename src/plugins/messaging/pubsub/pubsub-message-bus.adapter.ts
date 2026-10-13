@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional, type OnModuleDestroy } from '@nestjs/common';
 import type { Message, PubSub, Subscription, Topic } from '@google-cloud/pubsub';
 import type { MessageEnvelope } from '../envelope/message-envelope.js';
 import { MessageValidator } from '../envelope/message-validator.js';
@@ -8,6 +8,7 @@ import {
     UnknownTopicException,
 } from '../exceptions/index.js';
 import { InboundMessageLog } from '../inbound-message-log.port.js';
+import { InboundMessageRejection } from '../inbound-message-rejection.port.js';
 import { MessageBus, type MessageHandler } from '../message-bus.port.js';
 import { MessageConsumer } from '../message-consumer.js';
 import { PubsubMessagingConfig } from './pubsub-messaging.config.js';
@@ -34,10 +35,14 @@ export class PubsubMessageBusAdapter extends MessageBus implements OnModuleDestr
         private readonly config: PubsubMessagingConfig,
         private readonly validator: MessageValidator,
         inboundLog: InboundMessageLog,
+        @Optional() inboundRejection?: InboundMessageRejection,
     ) {
         super();
-        this.consumer = new MessageConsumer(validator, inboundLog, (topic, payload) =>
-            this.publishJson(topic, payload),
+        this.consumer = new MessageConsumer(
+            validator,
+            inboundLog,
+            (topic, payload) => this.publishJson(topic, payload),
+            inboundRejection,
         );
     }
 
