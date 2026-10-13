@@ -11,6 +11,8 @@ export default defineConfig({
     // local Compose and deployed environments still select Pub/Sub through their own env config.
     env: {
       MESSAGING_ADAPTER: 'memory',
+      // The minute tick must not run tasks while a suite is using the shared database.
+      SCHEDULER_ENABLED: 'false',
     },
     // Every e2e file boots its own app against the SAME database, so files must not run at the same time:
     // one file creating or deleting users/rows changes what another is counting or listing, and the suite

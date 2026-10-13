@@ -32,6 +32,7 @@ import { MessagingModule } from './plugins/messaging/messaging.module.js';
 import { InboundMessagesModule } from './modules/messaging/inbound-messages/inbound-messages.module.js';
 import { OutboundMessagesModule } from './modules/messaging/outbound-messages/outbound-messages.module.js';
 import { SalesOrderIntakeModule } from './modules/messaging/sales-order-intake/sales-order-intake.module.js';
+import { SchedulerModule } from './app/scheduler/scheduler.module.js';
 
 @Module({
     imports: [
@@ -48,6 +49,7 @@ import { SalesOrderIntakeModule } from './modules/messaging/sales-order-intake/s
         HealthModule,
         DatabaseModule,
         SettingsModule,
+        SchedulerModule,
         UsersModule,
         RolesModule,
         DeliveryZonesModule,
