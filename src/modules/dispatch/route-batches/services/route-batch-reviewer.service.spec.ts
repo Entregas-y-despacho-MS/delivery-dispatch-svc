@@ -107,7 +107,7 @@ function buildManual(opts: { batch?: { reviewer_user_id: number | null; status: 
     const batch = opts.batch === undefined ? { reviewer_user_id: 3, status: 'provisional', version: 2 } : opts.batch;
     const batchRepo  = { update: vi.fn().mockResolvedValue(undefined) };
     const eventsRepo = { create: vi.fn((d: object) => d), save: vi.fn().mockResolvedValue(undefined) };
-    const query = vi.fn(async (sql: string) => {
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
         if (/FROM route_batches WHERE/.test(sql)) return batch ? [batch] : [];
         if (/FROM users u/.test(sql)) return opts.eligible === false ? [] : [{ '?column?': 1 }];
         return [];
@@ -188,7 +188,7 @@ function build(opts: { batch?: { reviewer_user_id: number | null; status: string
     const batch = opts.batch === undefined ? { reviewer_user_id: null, status: 'provisional' } : opts.batch;
     const batchRepo  = { update: vi.fn().mockResolvedValue(undefined) };
     const eventsRepo = { create: vi.fn((d: object) => d), save: vi.fn().mockResolvedValue(undefined) };
-    const query = vi.fn(async (sql: string) => {
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
         if (/FROM route_batches WHERE/.test(sql)) return batch ? [batch] : [];
         if (/FROM users u/.test(sql)) return opts.coordinator ? [opts.coordinator] : [];
         return [];
