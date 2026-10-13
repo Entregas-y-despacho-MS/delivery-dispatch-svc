@@ -243,7 +243,7 @@ describe('Prioridad del despacho (e2e, ST-58.2)', () => {
             urgent60 = await insert({ name, level: 's60', priority: 'urgent' });
         });
 
-        const listed = async (qs = '') => (await inbox(`search=${encodeURIComponent(name)}&${qs}`)).body.data.map((r: any) => r.id);
+        const listed = async (qs = '') => (await inbox(`search=${encodeURIComponent(name)}&${qs}`)).body.data.map((r: { id: number }) => r.id);
 
         it('por defecto: urgentes primero y luego por vencimiento de SLA', async () => {
             expect(await listed()).toEqual([urgent60, normal30, normal60, normal120]);
