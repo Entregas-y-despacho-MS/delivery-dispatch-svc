@@ -23,8 +23,14 @@ export const envValidation = Joi.object({
     REDIS_PORT:    Joi.number().port().default(6379),
 
     // -- Plugin: messaging (Google Cloud Pub/Sub) -------------------------------
-    // pubsub = emulator in development (PUBSUB_EMULATOR_HOST) or real Pub/Sub; memory = in-process, tests only.
-    MESSAGING_ADAPTER:          Joi.string().valid('pubsub', 'memory').default('pubsub'),
+    // Production must select Pub/Sub explicitly; local development defaults to the emulator configuration in .env.example.
+    /* oxlint-disable unicorn/no-thenable -- `then`/`otherwise` are Joi's own conditional keys */
+    MESSAGING_ADAPTER: Joi.string().when('NODE_ENV', {
+        is:        EnvironmentEnum.PRODUCTION,
+        then:      Joi.string().valid('pubsub').required(),
+        otherwise: Joi.string().valid('pubsub', 'memory').default('pubsub'),
+    }),
+    /* oxlint-enable unicorn/no-thenable */
     // Default only for local work: in production without an emulator the project must be explicit, or
     // the service would talk to the real Pub/Sub with the project name of the emulator.
     /* oxlint-disable unicorn/no-thenable -- `then`/`otherwise` are Joi's own conditional keys */

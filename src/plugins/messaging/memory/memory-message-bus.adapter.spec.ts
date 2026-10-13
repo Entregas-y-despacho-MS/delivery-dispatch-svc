@@ -8,6 +8,7 @@ import { MessageValidator } from '../envelope/message-validator.js';
 import { TopicAlreadySubscribedException, UnknownTopicException } from '../exceptions/index.js';
 import { MessageBus } from '../message-bus.port.js';
 import { MessagingModule } from '../messaging.module.js';
+import { PubsubMessagingModule } from '../pubsub/pubsub-messaging.module.js';
 import { MemoryInboundMessageLogAdapter } from './memory-inbound-message-log.adapter.js';
 import { MemoryMessageBusAdapter } from './memory-message-bus.adapter.js';
 
@@ -149,5 +150,17 @@ describe('MessagingModule (memory adapter)', () => {
 
     it('fails fast with an unknown adapter', () => {
         expect(() => MessagingModule.register('kafka' as never)).toThrow('Unknown MESSAGING_ADAPTER');
+    });
+
+    it('selects Pub/Sub when no adapter is configured', () => {
+        const previousAdapter = process.env.MESSAGING_ADAPTER;
+        delete process.env.MESSAGING_ADAPTER;
+
+        try {
+            expect(MessagingModule.register().imports).toEqual([PubsubMessagingModule]);
+        } finally {
+            if (previousAdapter === undefined) delete process.env.MESSAGING_ADAPTER;
+            else process.env.MESSAGING_ADAPTER = previousAdapter;
+        }
     });
 });
