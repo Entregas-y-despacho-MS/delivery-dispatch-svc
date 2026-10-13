@@ -1,5 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
+import type { UserEligibilityChangedEvent } from '../events/user-eligibility-changed.event.js';
+import { USER_ELIGIBILITY_CHANGED_EVENT } from '../events/user-eligibility-changed.event.js';
 import { FindOptionsOrder, FindOptionsWhere, ILike, IsNull, LessThanOrEqual, MoreThan, Repository } from 'typeorm';
 import { User } from '../entities/user.entity.js';
 import { PasswordHistory } from '../entities/password-history.entity.js';
@@ -48,6 +51,7 @@ export class UsersService {
         @InjectRepository(Role)
         private readonly roleRepo: Repository<Role>,
         private readonly settings: SettingsService,
+        @Optional() private readonly events?: EventEmitter2,
     ) {
         this.repo = new DtoRepository(rawRepo);
     }
@@ -306,6 +310,7 @@ export class UsersService {
         if (Object.keys(payload).length > 0) {
             await this.saveHandlingDuplicate(() => repo.update(id, payload));
         }
+        if (dto.active === false && current.active) this.emitEligibilityChanged({ userId: id, reason: 'deactivated' });
 
         const result = await new DtoRepository(repo).findOne({ dto: returnDto, where: { id } });
         return result!;
@@ -333,6 +338,7 @@ export class UsersService {
             // DB on every request (see JwtStrategy), so this closes the refresh path, not the only thing
             // making the new role take effect.
             await repo.update(id, { roleId, refreshTokenHash: null });
+            this.emitEligibilityChanged({ userId: id, reason: 'role_changed' });
         }
 
         const result = await new DtoRepository(repo).findOne({ dto: returnDto, where: { id } });
@@ -347,9 +353,19 @@ export class UsersService {
         } else {
             await repo.softDelete(id);
         }
+        this.emitEligibilityChanged({ userId: id, reason: 'deleted' });
     }
 
     // ── Private implementation ────────────────────────────────────────────────
+
+    /** Announces that the user can no longer hold role-bound work (ST-50.4). A failing listener never fails the write. */
+    private emitEligibilityChanged(event: UserEligibilityChangedEvent): void {
+        try {
+            this.events?.emit(USER_ELIGIBILITY_CHANGED_EVENT, event);
+        } catch (error) {
+            new Logger(UsersService.name).error(`A listener of ${USER_ELIGIBILITY_CHANGED_EVENT} failed for user ${event.userId}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
 
     /** Two concurrent requests with the same username/email can both pass the pre-check — map the index error to the same 409. */
     private async saveHandlingDuplicate<R>(write: () => Promise<R>): Promise<R> {

@@ -14,6 +14,15 @@ export const REVIEWER_UNASSIGNED_EVENT = 'reviewer_unassigned';
 // Serializes every "who reviews this batch?" decision: two batches created at once must see each other's count.
 const REVIEWER_BALANCE_LOCK = 'route-batch-reviewer-balance';
 
+// Who may hold a batch under review: the least-loaded pick is coordinators only, but a supervisor who was
+// handed a batch by hand keeps it.
+const REVIEWER_ROLES: string[] = [RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR];
+
+/** SQL predicate: `userColumn` is an active, not deleted user whose role is in the array bound to `rolesParam`. */
+const REVIEWER_ELIGIBLE_SQL = (userColumn: string, rolesParam: string): string =>
+    `EXISTS (SELECT 1 FROM users ru JOIN roles rr ON rr.role_id = ru.role_id
+              WHERE ru.user_id = ${userColumn} AND ru.active = TRUE AND ru.deleted_at IS NULL AND rr.name = ANY(${rolesParam}))`;
+
 export interface ReviewerAssignment {
     routeBatchId:   number;
     reviewerUserId: number | null;
@@ -34,6 +43,65 @@ export class RouteBatchReviewerService {
     async assignReviewer(routeBatchId: number, options?: { manager?: EntityManager }): Promise<ReviewerAssignment> {
         if (options?.manager) return await this.assign(options.manager, routeBatchId);
         return await this.dataSource.transaction((manager) => this.assign(manager, routeBatchId));
+    }
+
+    /**
+     * D-42 — gives every provisional batch whose reviewer stopped being an active coordinator or supervisor
+     * (deactivated, deleted, moved to another role) to the least loaded active coordinator, whole; with none
+     * available the batch is left without reviewer, visible to everyone. Idempotent: it re-reads the state, so
+     * it is safe to run from the user-change listener and, later, from the scheduler as a safety net. Batches are
+     * handled oldest first, each in its own transaction, so the balance sees the previous hand-overs.
+     */
+    async reassignFromIneligibleReviewers(trigger = 'reviewer_inactive'): Promise<ReviewerAssignment[]> {
+        const rows: { id: number }[] = await this.dataSource.query(
+            `SELECT b.route_batch_id AS id
+               FROM route_batches b
+              WHERE b.status = $1 AND b.reviewer_user_id IS NOT NULL
+                AND NOT ${REVIEWER_ELIGIBLE_SQL('b.reviewer_user_id', '$2')}
+              ORDER BY b.route_batch_id`,
+            [RouteBatchStatusEnum.PROVISIONAL, REVIEWER_ROLES],
+        );
+
+        const results: ReviewerAssignment[] = [];
+        for (const { id } of rows) {
+            const result = await this.dataSource.transaction((manager) => this.reassignIneligible(manager, id, trigger));
+            if (result) results.push(result);
+        }
+        return results;
+    }
+
+    private async reassignIneligible(manager: EntityManager, routeBatchId: number, trigger: string): Promise<ReviewerAssignment | null> {
+        const [batch]: { reviewer_user_id: number | null; status: string; eligible: boolean }[] = await manager.query(
+            `SELECT b.reviewer_user_id, b.status, ${REVIEWER_ELIGIBLE_SQL('b.reviewer_user_id', '$2')} AS eligible
+               FROM route_batches b
+              WHERE b.route_batch_id = $1
+                FOR UPDATE OF b`,
+            [routeBatchId, REVIEWER_ROLES],
+        );
+        // Someone fixed it between the scan and the lock (manual hand-over, approval...): nothing to do.
+        if (!batch || batch.status !== RouteBatchStatusEnum.PROVISIONAL || batch.reviewer_user_id === null || batch.eligible) return null;
+
+        await manager.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [REVIEWER_BALANCE_LOCK]);
+        const picked = await this.pickLeastLoadedCoordinator(manager);
+        const events = manager.getRepository(RouteBatchEvent);
+
+        if (!picked) {
+            await manager.getRepository(RouteBatch).update(routeBatchId, { reviewerUserId: null });
+            await events.save(events.create({
+                routeBatchId, eventType: REVIEWER_UNASSIGNED_EVENT, actorUserId: null, actorType: 'system',
+                reason: 'No active coordinators.',
+                metadata: { from: batch.reviewer_user_id, reason: 'no_active_coordinators', mode: 'automatic', trigger },
+            }));
+            return { routeBatchId, reviewerUserId: null, changed: true };
+        }
+
+        await manager.getRepository(RouteBatch).update(routeBatchId, { reviewerUserId: picked.id });
+        await events.save(events.create({
+            routeBatchId, eventType: REVIEWER_REASSIGNED_EVENT, actorUserId: null, actorType: 'system',
+            reason: 'The reviewer is no longer an active coordinator or supervisor.',
+            metadata: { from: batch.reviewer_user_id, to: picked.id, pendingBatches: picked.pending, mode: 'automatic', trigger },
+        }));
+        return { routeBatchId, reviewerUserId: picked.id, changed: true };
     }
 
     /**

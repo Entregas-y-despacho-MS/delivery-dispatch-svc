@@ -3,6 +3,106 @@ import { describe, expect, it, vi } from 'vitest';
 import { RouteBatchReviewerService } from './route-batch-reviewer.service.js';
 import { RouteBatchNotFoundException, RouteBatchNotProvisionalException, RouteBatchReviewerNotEligibleException } from '../exceptions/index.js';
 
+// Reasignación automática: un escaneo (dataSource.query) y una transacción por lote.
+function buildSweep(opts: { scan: number[]; locked?: Record<number, { reviewer_user_id: number | null; status: string; eligible: boolean }>; coordinators?: ({ id: number; pending: string } | null)[] }) {
+    const batchRepo  = { update: vi.fn().mockResolvedValue(undefined) };
+    const eventsRepo = { create: vi.fn((d: object) => d), save: vi.fn().mockResolvedValue(undefined) };
+    const queue = [...(opts.coordinators ?? [])];
+    const manager = {
+        query: vi.fn(async (sql: string, params: unknown[]) => {
+            if (/FROM route_batches b\s+WHERE b\.route_batch_id/.test(sql)) {
+                const row = (opts.locked ?? {})[params[0] as number] ?? { reviewer_user_id: 3, status: 'provisional', eligible: false };
+                return [row];
+            }
+            if (/FROM users u/.test(sql)) { const next = queue.shift(); return next ? [next] : []; }
+            return [];
+        }),
+        getRepository: vi.fn((e: { name: string }) => (e.name === 'RouteBatchEvent' ? eventsRepo : batchRepo)),
+    };
+    const dataSource = {
+        query: vi.fn().mockResolvedValue(opts.scan.map((id) => ({ id }))),
+        transaction: vi.fn(async (fn: (m: unknown) => unknown) => fn(manager)),
+    };
+    return { service: new RouteBatchReviewerService(dataSource as any), dataSource, manager, batchRepo, eventsRepo };
+}
+
+describe('RouteBatchReviewerService.reassignFromIneligibleReviewers', () => {
+    it('reasigna el lote completo por balance y registra el evento del sistema con el revisor anterior', async () => {
+        const { service, batchRepo, eventsRepo } = buildSweep({ scan: [10], coordinators: [{ id: 8, pending: '2' }] });
+
+        const result = await service.reassignFromIneligibleReviewers('user_deactivated');
+
+        expect(result).toEqual([{ routeBatchId: 10, reviewerUserId: 8, changed: true }]);
+        expect(batchRepo.update).toHaveBeenCalledWith(10, { reviewerUserId: 8 });
+        expect(eventsRepo.save).toHaveBeenCalledWith(expect.objectContaining({
+            routeBatchId: 10, eventType: 'reviewer_reassigned', actorUserId: null, actorType: 'system',
+            metadata: { from: 3, to: 8, pendingBatches: 2, mode: 'automatic', trigger: 'user_deactivated' },
+        }));
+    });
+
+    it('el escaneo solo mira lotes provisional con revisor y exige coordinador/supervisor activo', async () => {
+        const { service, dataSource } = buildSweep({ scan: [] });
+
+        await service.reassignFromIneligibleReviewers();
+
+        const [sql, params] = dataSource.query.mock.calls[0];
+        expect(sql).toMatch(/b\.status = \$1 AND b\.reviewer_user_id IS NOT NULL/);
+        expect(sql).toMatch(/ru\.active = TRUE AND ru\.deleted_at IS NULL/);
+        expect(params).toEqual(['provisional', ['coordinator', 'supervisor']]);
+    });
+
+    it('sin coordinadores activos deja el lote sin revisor y registra reviewer_unassigned', async () => {
+        const { service, batchRepo, eventsRepo } = buildSweep({ scan: [10], coordinators: [null] });
+
+        const result = await service.reassignFromIneligibleReviewers();
+
+        expect(result).toEqual([{ routeBatchId: 10, reviewerUserId: null, changed: true }]);
+        expect(batchRepo.update).toHaveBeenCalledWith(10, { reviewerUserId: null });
+        expect(eventsRepo.save).toHaveBeenCalledWith(expect.objectContaining({
+            eventType: 'reviewer_unassigned', actorType: 'system',
+            metadata: expect.objectContaining({ from: 3, reason: 'no_active_coordinators', mode: 'automatic' }),
+        }));
+    });
+
+    it('varios lotes: cada uno en su transacción, así el balance ve el reparto anterior', async () => {
+        const { service, dataSource, batchRepo } = buildSweep({
+            scan: [10, 11],
+            coordinators: [{ id: 8, pending: '0' }, { id: 9, pending: '0' }],
+        });
+
+        const result = await service.reassignFromIneligibleReviewers();
+
+        expect(dataSource.transaction).toHaveBeenCalledTimes(2);
+        expect(result.map((r) => r.reviewerUserId)).toEqual([8, 9]);
+        expect(batchRepo.update).toHaveBeenNthCalledWith(1, 10, { reviewerUserId: 8 });
+        expect(batchRepo.update).toHaveBeenNthCalledWith(2, 11, { reviewerUserId: 9 });
+    });
+
+    it('si entre el escaneo y el lock el lote ya se corrigió (revisor elegible, aprobado) no hace nada', async () => {
+        const { service, batchRepo, eventsRepo } = buildSweep({
+            scan: [10, 11],
+            locked: {
+                10: { reviewer_user_id: 5, status: 'provisional', eligible: true },
+                11: { reviewer_user_id: 3, status: 'confirmed', eligible: false },
+            },
+            coordinators: [{ id: 8, pending: '0' }],
+        });
+
+        const result = await service.reassignFromIneligibleReviewers();
+
+        expect(result).toEqual([]);
+        expect(batchRepo.update).not.toHaveBeenCalled();
+        expect(eventsRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('sin lotes con revisor inelegible no abre ninguna transacción', async () => {
+        const { service, dataSource } = buildSweep({ scan: [] });
+
+        expect(await service.reassignFromIneligibleReviewers()).toEqual([]);
+        expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+});
+
 function buildManual(opts: { batch?: { reviewer_user_id: number | null; status: string; version: number } | null; eligible?: boolean }) {
     const batch = opts.batch === undefined ? { reviewer_user_id: 3, status: 'provisional', version: 2 } : opts.batch;
     const batchRepo  = { update: vi.fn().mockResolvedValue(undefined) };
