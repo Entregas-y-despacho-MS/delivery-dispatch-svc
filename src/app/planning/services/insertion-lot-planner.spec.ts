@@ -28,12 +28,7 @@ describe('InsertionLotPlanner', () => {
             expect(proposal.batches).toHaveLength(1);
             const [batch] = proposal.batches;
             expect(batch).toMatchObject({ shiftDate: WEDNESDAY, zoneId: 1, warehouseId: 1, vehicleId: 2, proposedDriverId: 10 });
-            expect(batch.stops).toEqual([
-                { dispatchId: 2, sequence: 1 },
-                { dispatchId: 4, sequence: 2 },
-                { dispatchId: 3, sequence: 3 },
-                { dispatchId: 1, sequence: 4 },
-            ]);
+            expect(batch.stops.map((stop) => [stop.dispatchId, stop.sequence])).toEqual([[2, 1], [4, 2], [3, 3], [1, 4]]);
         });
 
         it('asks OSRM once per zone and warehouse, with the depot first', async () => {

@@ -14,7 +14,7 @@ const proposal = (overrides: Partial<ProposedBatch> = {}): ProposedBatch => ({
     vehicleId: 7,
     alternativeVehicleIds: [],
     proposedDriverId: 10,
-    stops: [{ dispatchId: 101, sequence: 1 }, { dispatchId: 102, sequence: 2 }, { dispatchId: 103, sequence: 3 }],
+    stops: [101, 102, 103].map((dispatchId, index) => ({ dispatchId, sequence: index + 1, windowStart: null, windowEnd: null })),
     splitReason: null,
     rescheduledDispatchIds: [],
     ...overrides,
@@ -84,7 +84,7 @@ describe('PlanWriterService.writeNewBatch', () => {
         expect(update[1][0]).toBe(900);
         expect(update[1][1]).toEqual([101, 102, 103]);
         expect(update[1][2]).toEqual([1, 2, 3]);
-        expect(update[1][3]).toBe('in_planning');
+        expect(update[1][5]).toBe('in_planning');
         expect(update[0]).toContain('version = d.version + 1');
     });
 

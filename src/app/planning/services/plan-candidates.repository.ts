@@ -5,6 +5,8 @@ import { RoleEnum, VehicleStatusEnum } from '../../../shared/enums/index.js';
 import { addDays, fixedDateOfRescheduled } from '../domain/operating-calendar.js';
 import type {
     ExistingBatchSummary,
+    OpenBatch,
+    OpenBatchStop,
     PlanDispatch,
     PlanVehicle,
     PlanWarehouse,
@@ -24,7 +26,32 @@ interface CandidateRow {
     status: 'pending' | 'rescheduled';
     estimated_weight_kg: string | null;
     scheduled_window_start: Date | null;
+    scheduled_window_end: Date | null;
     reschedule_window_start: Date | null;
+    reschedule_window_end: Date | null;
+}
+
+interface OpenStopRow {
+    route_batch_id: number;
+    version: number;
+    shift_date: string;
+    delivery_zone_id: number;
+    zone_code: string;
+    zone_name: string;
+    zone_deleted: boolean;
+    origin_warehouse_id: number;
+    vehicle_id: number;
+    dispatch_id: number;
+    sequence_order: number | null;
+    status: string;
+    priority: string;
+    confirmed_at: Date;
+    delivery_latitude: string | null;
+    delivery_longitude: string | null;
+    estimated_weight_kg: string | null;
+    scheduled_window_start: Date | null;
+    scheduled_window_end: Date | null;
+    promise_notified_at: Date | null;
 }
 
 interface PackageRow {
@@ -53,8 +80,9 @@ export class PlanCandidatesRepository {
                     (z.deleted_at IS NOT NULL) AS zone_deleted, d.origin_warehouse_id,
                     d.delivery_latitude, d.delivery_longitude, d.priority,
                     COALESCE(d.order_confirmed_at, d.created_at) AS confirmed_at,
-                    s.name AS status, d.estimated_weight_kg, d.scheduled_window_start,
-                    lr.new_window_start AS reschedule_window_start
+                    s.name AS status, d.estimated_weight_kg,
+                    d.scheduled_window_start, d.scheduled_window_end,
+                    lr.new_window_start AS reschedule_window_start, lr.new_window_end AS reschedule_window_end
                FROM dispatches d
                JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
                JOIN dispatch_types t ON t.dispatch_type_id = d.dispatch_type_id
@@ -62,7 +90,7 @@ export class PlanCandidatesRepository {
                -- catalog changed; a deleted zone is planned and warned about.
                JOIN delivery_zones z ON z.delivery_zone_id = d.delivery_zone_id
           LEFT JOIN LATERAL (
-                    SELECT r.new_window_start
+                    SELECT r.new_window_start, r.new_window_end
                       FROM dispatch_reschedules r
                      WHERE r.dispatch_id = d.dispatch_id AND r.new_window_start IS NOT NULL
                      ORDER BY r.created_at DESC, r.dispatch_reschedule_id DESC
@@ -81,18 +109,7 @@ export class PlanCandidatesRepository {
         );
         if (rows.length === 0) return [];
 
-        const packages: PackageRow[] = await this.dataSource.query(
-            `SELECT dispatch_id, dispatch_package_id, length_cm, width_cm, height_cm, gross_weight_kg
-               FROM dispatch_packages
-              WHERE dispatch_id = ANY($1)
-              ORDER BY dispatch_id, dispatch_package_id`,
-            [rows.map((row) => row.dispatch_id)],
-        );
-        const packagesByDispatch = new Map<number, PackageRow[]>();
-        for (const pkg of packages) {
-            if (!packagesByDispatch.has(pkg.dispatch_id)) packagesByDispatch.set(pkg.dispatch_id, []);
-            packagesByDispatch.get(pkg.dispatch_id)!.push(pkg);
-        }
+        const packagesByDispatch = await this.findPackages(rows.map((row) => row.dispatch_id));
 
         return rows.map((row) => ({
             dispatchId: row.dispatch_id,
@@ -109,16 +126,119 @@ export class PlanCandidatesRepository {
             fixedDate: row.status === 'rescheduled'
                 ? fixedDateOfRescheduled(row.reschedule_window_start, row.scheduled_window_start)
                 : null,
+            // The window agreed with the customer (the reschedule's, else the one the order has).
+            agreedWindow: row.status === 'rescheduled'
+                ? agreedWindow(
+                    row.reschedule_window_start ?? row.scheduled_window_start,
+                    row.reschedule_window_start ? row.reschedule_window_end : row.scheduled_window_end,
+                )
+                : null,
             estimatedWeightKg: row.estimated_weight_kg === null ? null : Number(row.estimated_weight_kg),
-            packages: (packagesByDispatch.get(row.dispatch_id) ?? []).map((pkg) => ({
-                dispatchId: row.dispatch_id,
+            packages: packagesByDispatch.get(row.dispatch_id) ?? [],
+        }));
+    }
+
+    /**
+     * Provisional batches from today on, with their stops in visiting order: the ones a late order
+     * may still be inserted into (the planner drops those whose cutoff has passed). A batch with a
+     * stop that has no sequence or no point on the map is left out: it cannot be simulated.
+     */
+    async findOpenBatches(today: string): Promise<OpenBatch[]> {
+        const rows: OpenStopRow[] = await this.dataSource.query(
+            `SELECT b.route_batch_id, b.version, b.shift_date::text AS shift_date, b.delivery_zone_id,
+                    z.code AS zone_code, z.name AS zone_name, (z.deleted_at IS NOT NULL) AS zone_deleted,
+                    b.origin_warehouse_id, b.vehicle_id,
+                    d.dispatch_id, d.sequence_order, s.name AS status, d.priority,
+                    COALESCE(d.order_confirmed_at, d.created_at) AS confirmed_at,
+                    d.delivery_latitude, d.delivery_longitude, d.estimated_weight_kg,
+                    d.scheduled_window_start, d.scheduled_window_end, d.promise_notified_at
+               FROM route_batches b
+               JOIN delivery_zones z ON z.delivery_zone_id = b.delivery_zone_id
+               JOIN dispatches d ON d.route_batch_id = b.route_batch_id
+               JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
+              WHERE b.status = 'provisional' AND b.shift_date >= $1::date
+                AND b.vehicle_id IS NOT NULL AND b.origin_warehouse_id IS NOT NULL
+              ORDER BY b.route_batch_id, d.sequence_order, d.dispatch_id`,
+            [today],
+        );
+        if (rows.length === 0) return [];
+
+        const packagesByDispatch = await this.findPackages(rows.map((row) => row.dispatch_id));
+        const batches = new Map<number, { batch: OpenBatch; complete: boolean }>();
+        for (const row of rows) {
+            if (!batches.has(row.route_batch_id)) {
+                batches.set(row.route_batch_id, {
+                    complete: true,
+                    batch: {
+                        routeBatchId: row.route_batch_id,
+                        version: row.version,
+                        shiftDate: row.shift_date,
+                        zoneId: row.delivery_zone_id,
+                        zoneCode: row.zone_code,
+                        zoneName: row.zone_name,
+                        warehouseId: row.origin_warehouse_id,
+                        vehicleId: row.vehicle_id,
+                        stops: [],
+                    },
+                });
+            }
+            const entry = batches.get(row.route_batch_id)!;
+            if (row.sequence_order === null || row.delivery_latitude === null || row.delivery_longitude === null) {
+                entry.complete = false;
+                continue;
+            }
+            const stop: OpenBatchStop = {
+                dispatch: {
+                    dispatchId: row.dispatch_id,
+                    zoneId: row.delivery_zone_id,
+                    zoneCode: row.zone_code,
+                    zoneName: row.zone_name,
+                    zoneDeleted: row.zone_deleted,
+                    warehouseId: row.origin_warehouse_id,
+                    latitude: Number(row.delivery_latitude),
+                    longitude: Number(row.delivery_longitude),
+                    priority: row.priority,
+                    orderConfirmedAt: row.confirmed_at,
+                    status: row.status === 'scheduled' ? 'scheduled' : 'in_planning',
+                    fixedDate: null,
+                    agreedWindow: null,
+                    estimatedWeightKg: row.estimated_weight_kg === null ? null : Number(row.estimated_weight_kg),
+                    packages: packagesByDispatch.get(row.dispatch_id) ?? [],
+                },
+                sequence: row.sequence_order,
+                // D-10: once the customer was told the window, it is fixed.
+                notified: row.promise_notified_at !== null,
+                window: agreedWindow(row.scheduled_window_start, row.scheduled_window_end),
+            };
+            entry.batch.stops.push(stop);
+        }
+
+        return [...batches.values()]
+            .filter((entry) => entry.complete && entry.batch.stops.length > 0)
+            .map((entry) => entry.batch);
+    }
+
+    private async findPackages(dispatchIds: number[]): Promise<Map<number, PlanDispatch['packages']>> {
+        const rows: PackageRow[] = await this.dataSource.query(
+            `SELECT dispatch_id, dispatch_package_id, length_cm, width_cm, height_cm, gross_weight_kg
+               FROM dispatch_packages
+              WHERE dispatch_id = ANY($1)
+              ORDER BY dispatch_id, dispatch_package_id`,
+            [dispatchIds],
+        );
+        const byDispatch = new Map<number, PlanDispatch['packages']>();
+        for (const pkg of rows) {
+            if (!byDispatch.has(pkg.dispatch_id)) byDispatch.set(pkg.dispatch_id, []);
+            byDispatch.get(pkg.dispatch_id)!.push({
+                dispatchId: pkg.dispatch_id,
                 packageId: pkg.dispatch_package_id,
                 lengthCm: Number(pkg.length_cm),
                 widthCm: Number(pkg.width_cm),
                 heightCm: Number(pkg.height_cm),
                 grossWeightKg: Number(pkg.gross_weight_kg),
-            })),
-        }));
+            });
+        }
+        return byDispatch;
     }
 
     /** Active, not deleted vehicles with their capacities. */
@@ -190,4 +310,8 @@ export class PlanCandidatesRepository {
             proposedDriverId: row.proposed_driver_id,
         }));
     }
+}
+
+function agreedWindow(start: Date | null, end: Date | null): { start: Date; end: Date } | null {
+    return start && end ? { start, end } : null;
 }

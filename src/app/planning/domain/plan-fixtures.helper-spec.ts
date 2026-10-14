@@ -5,7 +5,7 @@
 import { OsrmPort, type Coordinate, type DurationMatrix, type RouteResult, type TripResult } from '../../../plugins/osrm/osrm.port.js';
 import { localInstant } from './operating-calendar.js';
 import { parsePlanningSettings, type PlanningSettings, type RawSettings } from './planning-settings.js';
-import type { PlanDispatch, PlanInput, PlanVehicle, PlanWarehouse } from './plan-types.js';
+import type { OpenBatch, OpenBatchStop, PlanDispatch, PlanInput, PlanVehicle, PlanWarehouse } from './plan-types.js';
 
 export const RAW_SETTINGS: RawSettings = {
     stop_service_minutes: '15',
@@ -58,6 +58,7 @@ export function dispatch(id: number, overrides: Partial<PlanDispatch> & { km?: n
         orderConfirmedAt: MONDAY_ORDER,
         status: 'pending',
         fixedDate: null,
+        agreedWindow: null,
         estimatedWeightKg: 10,
         packages: [],
         ...rest,
@@ -85,11 +86,12 @@ export function planInput(overrides: Partial<PlanInput> = {}): PlanInput {
         driverIds: [10, 11, 12],
         warehouses: [WAREHOUSE],
         existingBatches: [],
+        openBatches: [],
         ...overrides,
     };
 }
 
-/** OSRM double: durations grow with the straight distance, one request is recorded per call. */
+/** OSRM double: 1 km of the fixtures (0.01 degrees) is 60 seconds of driving; one request is recorded per call. */
 export class FakeOsrm extends OsrmPort {
     readonly calls: Coordinate[][] = [];
     failWith: Error | null = null;
@@ -103,7 +105,7 @@ export class FakeOsrm extends OsrmPort {
         if (this.failWith) throw this.failWith;
         return {
             durations: coordinates.map((from, i) => coordinates.map((to, j) =>
-                i === j ? 0 : Math.round(Math.hypot(from.lat - to.lat, from.lon - to.lon) * 100_000))),
+                i === j ? 0 : Math.round(Math.hypot(from.lat - to.lat, from.lon - to.lon) * 6_000))),
         };
     }
 
@@ -114,4 +116,35 @@ export class FakeOsrm extends OsrmPort {
     async getRoute(): Promise<RouteResult> {
         throw new Error('not used by the generator');
     }
+}
+
+/** A stop already in an open batch. `window` is [start, end] in local HH:mm on the batch date. */
+export function openStop(
+    date: string,
+    id: number,
+    sequence: number,
+    over: Partial<PlanDispatch> & { km?: number; notified?: boolean; window?: [string, string] } = {},
+): OpenBatchStop {
+    const { notified = false, window, ...rest } = over;
+    return {
+        dispatch: dispatch(id, { status: notified ? 'scheduled' : 'in_planning', ...rest }),
+        sequence,
+        notified,
+        window: window ? { start: localInstant(date, window[0]), end: localInstant(date, window[1]) } : null,
+    };
+}
+
+export function openBatch(date: string, stops: OpenBatchStop[], over: Partial<OpenBatch> = {}): OpenBatch {
+    return {
+        routeBatchId: 500,
+        version: 3,
+        shiftDate: date,
+        zoneId: 1,
+        zoneCode: 'ZON-1',
+        zoneName: 'Zona 1',
+        warehouseId: 1,
+        vehicleId: 1,
+        stops,
+        ...over,
+    };
 }
