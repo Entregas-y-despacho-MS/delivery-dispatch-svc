@@ -18,6 +18,7 @@ import { hashPassword } from '../src/shared/utils/crypto.util.js';
 import { ScheduledTaskRegistry } from '../src/app/scheduler/services/scheduled-task-registry.service.js';
 import { PLAN_GENERATION_TASK, ROUTE_CUTOFF_TASK } from '../src/app/scheduler/scheduled-task-names.js';
 import { SCHEDULED_TASK_RUN_ACTION } from '../src/app/scheduler/adapters/audit-log-task-run-log.adapter.js';
+import { PlanGenerationService } from '../src/app/planning/services/plan-generation.service.js';
 
 describe('Manual trigger of scheduled tasks (e2e)', () => {
     let app: INestApplication;
@@ -41,7 +42,21 @@ describe('Manual trigger of scheduled tasks (e2e)', () => {
     };
 
     beforeAll(async () => {
-        const moduleRef: TestingModule = await Test.createTestingModule({ imports: [AppModule] }).compile();
+        // The generator is registered by the real PlanningModule; only its service is replaced by a double
+        // (the real run is test/plan-generation.e2e-spec.ts).
+        const generatorDouble = {
+            run: async () => {
+                generatorRuns++;
+                if (generatorBehaviour === 'blocked') {
+                    await new Promise<void>((resolve) => (releaseGenerator = resolve));
+                }
+                if (generatorBehaviour === 'failing') throw new Error('OSRM unavailable');
+                return { status: 'executed' };
+            },
+        };
+        const moduleRef: TestingModule = await Test.createTestingModule({ imports: [AppModule] })
+            .overrideProvider(PlanGenerationService).useValue(generatorDouble)
+            .compile();
         app = moduleRef.createNestApplication();
 
         // Same bootstrap as main.ts.
@@ -122,11 +137,18 @@ describe('Manual trigger of scheduled tasks (e2e)', () => {
     });
 
     describe('task not registered yet', () => {
-        it('answers 503 SCHEDULED_TASK_NOT_AVAILABLE', async () => {
-            const res = await post('/planning/generate', coordinatorToken);
+        it('answers 503 SCHEDULED_TASK_NOT_AVAILABLE for the cutoff, which has no owner yet', async () => {
+            const res = await post('/planning/cutoff', coordinatorToken);
 
             expect(res.status).toBe(503);
             expect(res.body.error).toBe('SCHEDULED_TASK_NOT_AVAILABLE');
+        });
+
+        it('the generator is registered by the planning module on plan_generation_times', () => {
+            const task = app.get(ScheduledTaskRegistry).get(PLAN_GENERATION_TASK);
+
+            expect(task).toBeDefined();
+            expect(task!.schedule).toEqual({ kind: 'times', settingKey: 'plan_generation_times' });
         });
     });
 
@@ -135,17 +157,6 @@ describe('Manual trigger of scheduled tasks (e2e)', () => {
 
         beforeAll(() => {
             const registry = app.get(ScheduledTaskRegistry);
-            registry.register({
-                name: PLAN_GENERATION_TASK,
-                schedule: { kind: 'times', settingKey: 'plan_generation_times' },
-                run: async () => {
-                    generatorRuns++;
-                    if (generatorBehaviour === 'blocked') {
-                        await new Promise<void>((resolve) => (releaseGenerator = resolve));
-                    }
-                    if (generatorBehaviour === 'failing') throw new Error('OSRM unavailable');
-                },
-            });
             registry.register({
                 name: ROUTE_CUTOFF_TASK,
                 schedule: { kind: 'time', settingKey: 'route_cutoff_time' },
