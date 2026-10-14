@@ -1,12 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { MailDeliveryResult, MailerPort, MailOptions } from '../mailer.port.js';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { MAIL_DELIVERY_RESULT_EVENT, MailDeliveryResult, MailerPort, MailOptions } from '../mailer.port.js';
 import { LogMailerConfig } from './log.config.js';
 
 @Injectable()
 export class LogMailerAdapter extends MailerPort {
     private readonly logger = new Logger(LogMailerAdapter.name);
 
-    constructor(private readonly config: LogMailerConfig) {
+    constructor(
+        private readonly config: LogMailerConfig,
+        private readonly events: EventEmitter2,
+    ) {
         super();
     }
 
@@ -20,6 +24,7 @@ export class LogMailerAdapter extends MailerPort {
             template: options.template ?? null,
             result: result.status,
         }));
+        await this.events.emitAsync(MAIL_DELIVERY_RESULT_EVENT, { ...result, options });
         return result;
     }
 }
