@@ -3,7 +3,7 @@ import type { DeliveryChangeBlocks } from '../domain/dispatch-change.rules.js';
 import type { ShipmentChangeBlocks } from '../domain/shipment-change.rules.js';
 
 /** Origin of the change. */
-export type ChangeSource = 'marketplace' | 'inventory';
+export type ChangeSource = 'marketplace' | 'inventory' | 'procurement';
 
 /**
  * Payload of the internal event `dispatch.change_requires_attention`

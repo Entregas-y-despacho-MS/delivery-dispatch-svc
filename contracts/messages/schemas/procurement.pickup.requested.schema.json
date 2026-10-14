@@ -32,7 +32,8 @@
           "$ref": "../envelope.schema.json#/$defs/entityId"
         },
         "products": { "$ref": "#/$defs/products" },
-        "estimates": { "$ref": "#/$defs/estimates" }
+        "estimates": { "$ref": "#/$defs/estimates" },
+        "transportConditions": { "$ref": "#/$defs/transportConditions" }
       },
       "additionalProperties": false
     },
@@ -79,6 +80,12 @@
         "volumeM3": { "type": "number", "exclusiveMinimum": 0 }
       },
       "additionalProperties": false
+    },
+    "transportConditions": {
+      "description": "Condiciones especiales de transporte de la recogida.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 100 }
     }
   }
 }

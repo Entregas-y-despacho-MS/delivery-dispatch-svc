@@ -199,6 +199,17 @@ describe('contratos de mensajes: reglas de negocio', () => {
     expect(validate('procurement.pickup.requested', message)).toBe(true);
   });
 
+  it('procurement pickup accepts open-ended transport condition labels', () => {
+    const requested = mutated('procurement.pickup.requested', (m) => {
+      m.data.transportConditions = ['fragilidad', 'temperatura controlada'];
+    });
+    const updated = mutated('procurement.pickup.updated', (m) => {
+      m.data.transportConditions = ['mantener seco'];
+    });
+    expect(validate('procurement.pickup.requested', requested)).toBe(true);
+    expect(validate('procurement.pickup.updated', updated)).toBe(true);
+  });
+
   it.each([
     'marketplace.sales_order.updated',
     'procurement.pickup.updated',

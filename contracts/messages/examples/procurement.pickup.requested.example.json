@@ -22,6 +22,7 @@
       { "productId": "SKU-LAP-14", "description": "Laptop 14 pulgadas", "quantity": 10 },
       { "productId": "SKU-MOUSE-02", "description": "Mouse inalámbrico", "quantity": 20 }
     ],
-    "estimates": { "packages": 6, "weightKg": 48.5, "volumeM3": 0.8 }
+    "estimates": { "packages": 6, "weightKg": 48.5, "volumeM3": 0.8 },
+    "transportConditions": ["fragilidad", "temperatura controlada"]
   }
 }

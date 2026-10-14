@@ -25,7 +25,8 @@
         "pickupWindow": { "$ref": "procurement.pickup.requested.schema.json#/$defs/pickupWindow" },
         "warehouseId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
         "products": { "$ref": "procurement.pickup.requested.schema.json#/$defs/products" },
-        "estimates": { "$ref": "procurement.pickup.requested.schema.json#/$defs/estimates" }
+        "estimates": { "$ref": "procurement.pickup.requested.schema.json#/$defs/estimates" },
+        "transportConditions": { "$ref": "procurement.pickup.requested.schema.json#/$defs/transportConditions" }
       },
       "minProperties": 4,
       "additionalProperties": false
