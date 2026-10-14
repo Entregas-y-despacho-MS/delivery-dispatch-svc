@@ -94,6 +94,7 @@ export const envValidation = Joi.object({
     STORAGE_PROVIDER:      Joi.string().valid('local', 'cloudinary').default('local'),
     UPLOADS_DIR:           Joi.string().default('uploads'),
     PUBLIC_URL:            Joi.string().default('http://localhost:3000'),
+    PUBLIC_WEB_URL:        Joi.string().uri().default('http://localhost:5173'),
     CLOUDINARY_CLOUD_NAME: Joi.string().optional(),
     CLOUDINARY_API_KEY:    Joi.string().optional(),
     CLOUDINARY_API_SECRET: Joi.string().optional(),
