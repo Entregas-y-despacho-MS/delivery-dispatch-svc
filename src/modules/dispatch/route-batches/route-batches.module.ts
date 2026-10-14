@@ -7,7 +7,6 @@ import { RouteBatchReviewerListener } from './services/route-batch-reviewer.list
 import { RouteBatchReviewerService } from './services/route-batch-reviewer.service.js';
 import { RouteCapacityService } from './services/route-capacity.service.js';
 import { RouteBatchVehicleService } from './services/route-batch-vehicle.service.js';
-import { ContactManagementCaseListener } from './services/contact-management-case.listener.js';
 
 // Reviewer assignment (ST-50.4, D-42). The batch planner (ST-50.2) calls RouteBatchReviewerService.assignReviewer.
 @Module({
@@ -18,7 +17,6 @@ import { ContactManagementCaseListener } from './services/contact-management-cas
     RouteBatchReviewerListener,
     RouteCapacityService,
     RouteBatchVehicleService,
-    ContactManagementCaseListener,
   ],
   exports: [RouteBatchReviewerService],
 })
