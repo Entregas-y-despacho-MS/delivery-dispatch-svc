@@ -33,50 +33,52 @@ import { MessagingModule } from './plugins/messaging/messaging.module.js';
 import { InboundMessagesModule } from './modules/messaging/inbound-messages/inbound-messages.module.js';
 import { OutboundMessagesModule } from './modules/messaging/outbound-messages/outbound-messages.module.js';
 import { SalesOrderIntakeModule } from './modules/messaging/sales-order-intake/sales-order-intake.module.js';
+import { IncompleteOrderRecoveryModule } from './modules/messaging/incomplete-order-recovery/incomplete-order-recovery.module.js';
 import { SchedulerModule } from './app/scheduler/scheduler.module.js';
 
 @Module({
-    imports: [
-        // Global, registered once here — see plugins/socket/socket.module.ts for why it isn't
-        // re-registered there too. Used to decouple the socket plugin (generic transport) from the
-        // business modules that react to a connection (e.g. app/tracking's 'dispatch-board' room).
-        EventEmitterModule.forRoot(),
-        AppConfigModule,
-        CacheModule.register(),
-        MessagingModule.register(),
-        InboundMessagesModule,
-        OutboundMessagesModule,
-        SalesOrderIntakeModule,
-        HealthModule,
-        DatabaseModule,
-        SettingsModule,
-        SchedulerModule,
-        UsersModule,
-        RolesModule,
-        DeliveryZonesModule,
-        VehiclesModule,
-        ServiceLevelsModule,
-        IncidentReasonsModule,
-        RescheduleReasonsModule,
-        WarehousesModule,
-        VehicleIncidentTypesModule,
-        VehicleMaintenancesModule,
-        AuthModule,
-        SyncModule,
-        TrackingModule,
-        MailerModule.register(),
-        SocketModule,
-        PdfModule,
-        StorageModule.register(),
-        PushModule.register(),
-        OsrmModule,
-        PendingOrdersModule,
-        RouteBatchesModule,
-        DispatchReservationsModule,
-    ],
-    providers: [
-        // Rejects NUL characters in body/query/params (Postgres cannot store them: it was a 500).
-        { provide: APP_PIPE, useClass: NoNullBytesPipe },
-    ],
+  imports: [
+    // Global, registered once here — see plugins/socket/socket.module.ts for why it isn't
+    // re-registered there too. Used to decouple the socket plugin (generic transport) from the
+    // business modules that react to a connection (e.g. app/tracking's 'dispatch-board' room).
+    EventEmitterModule.forRoot(),
+    AppConfigModule,
+    CacheModule.register(),
+    MessagingModule.register(),
+    InboundMessagesModule,
+    OutboundMessagesModule,
+    SalesOrderIntakeModule,
+    IncompleteOrderRecoveryModule,
+    HealthModule,
+    DatabaseModule,
+    SettingsModule,
+    SchedulerModule,
+    UsersModule,
+    RolesModule,
+    DeliveryZonesModule,
+    VehiclesModule,
+    ServiceLevelsModule,
+    IncidentReasonsModule,
+    RescheduleReasonsModule,
+    WarehousesModule,
+    VehicleIncidentTypesModule,
+    VehicleMaintenancesModule,
+    AuthModule,
+    SyncModule,
+    TrackingModule,
+    MailerModule.register(),
+    SocketModule,
+    PdfModule,
+    StorageModule.register(),
+    PushModule.register(),
+    OsrmModule,
+    PendingOrdersModule,
+    RouteBatchesModule,
+    DispatchReservationsModule,
+  ],
+  providers: [
+    // Rejects NUL characters in body/query/params (Postgres cannot store them: it was a 500).
+    { provide: APP_PIPE, useClass: NoNullBytesPipe },
+  ],
 })
 export class AppModule {}

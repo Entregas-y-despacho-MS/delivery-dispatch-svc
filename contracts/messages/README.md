@@ -72,11 +72,16 @@ Cada fila corresponde a `schemas/<tópico>.schema.json` y `examples/<tópico>.ex
 | `dispatch.shipment.prepare_requested` | Inventarios | `recordVersion` obligatorio: una versión mayor reemplaza a la anterior. `departureDate` es una fecha calendario (`YYYY-MM-DD`). |
 | `dispatch.shipment.departed` | Inventarios | Un mensaje por pedido: `departedAt`, `driverId` y `packageIds`. |
 | `dispatch.pickup.scheduled` | Compras | `pickupWindow` en UTC; una reprogramación sube `recordVersion`. |
-| `dispatch.sync.requested` | Marketplace / Inventarios | `entityType`: `sales_order` va a Marketplace y `shipment` va a Inventarios. Máximo 3 intentos. |
+| `dispatch.sync.requested` | Marketplace / Inventarios | `entityType`: `sales_order` va a Marketplace y `shipment` va a Inventarios. Reintentos cada 15 minutos, máximo 3 por pedido. |
 | `dispatch.transfer.status_changed` | Marketplace / Compras / Inventarios | Exactamente uno de `salesOrderId` o `purchaseOrderId`. Sin datos personales ni `tracking_token`. |
 | `dispatch.transfer.incident_reported` | Marketplace / Compras | `reasonCode` del catálogo `incident_reasons` y `nextStep` decidido por Despacho. |
 
 ## Publicación y entrega
+
+La tarea `incomplete-order-recovery` revisa cada 15 minutos los pedidos pendientes que superaron
+`incomplete_order_alert_minutes` (60 minutos por defecto). Solicita al origen faltante su registro
+completo; si después del tercer intento el pedido continúa incompleto, emite el evento interno
+`dispatch.change_requires_attention` con `changeType: incomplete_order` y el `salesOrderId`.
 
 - **Entrega al menos una vez.** Despachos publica por una *outbox* y puede enviar el mismo `messageId` más de una vez (un reintento tras un fallo de confirmación, o una instancia que retoma un mensaje). Quien consume debe ignorar un `messageId` ya procesado y un `recordVersion` menor o igual al almacenado.
 - **Reintentos de los mensajes salientes** (D-54 de `decisiones-planificacion-semiautomatica.md`): si el broker no responde, se reintenta tras 1 s, 2 s y 4 s y luego cada minuto, hasta 4 horas desde que se encoló. Al tercer fallo queda una alerta de demora en la auditoría técnica; vencidas las 4 horas, el mensaje queda `failed` con otra alerta y no se reintenta solo.
