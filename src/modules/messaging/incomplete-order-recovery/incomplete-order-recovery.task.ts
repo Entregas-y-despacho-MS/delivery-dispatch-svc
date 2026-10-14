@@ -108,7 +108,42 @@ export class IncompleteOrderRecoveryTask implements OnModuleInit {
 
     for (const candidate of candidates) {
       const alert = await this.processCandidate(candidate, now);
-      if (alert) this.events.emit(DISPATCH_CHANGE_REQUIRES_ATTENTION, alert);
+      if (alert) await this.emitAlert(candidate, alert);
+    }
+  }
+
+  private async emitAlert(
+    candidate: RecoveryCandidate,
+    alert: RecoveryAlert,
+  ): Promise<void> {
+    try {
+      const delivered = this.events.emit(DISPATCH_CHANGE_REQUIRES_ATTENTION, alert);
+      if (delivered) return;
+
+      this.logger.warn(
+        `No listener accepted the incomplete-order alert for ${candidate.sales_order_id}; it will be retried.`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to emit the incomplete-order alert for ${candidate.sales_order_id}; it will be retried.`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+
+    try {
+      await this.dataSource.transaction(async (manager) => {
+        await manager.query(
+          `UPDATE sales_order_sync_states
+              SET incomplete_alerted_at = NULL
+            WHERE sales_order_id = $1 AND source = $2`,
+          [candidate.sales_order_id, candidate.source],
+        );
+      });
+    } catch (error) {
+      this.logger.error(
+        `Could not release the incomplete-order alert for retry for ${candidate.sales_order_id}.`,
+        error instanceof Error ? error.stack : String(error),
+      );
     }
   }
 

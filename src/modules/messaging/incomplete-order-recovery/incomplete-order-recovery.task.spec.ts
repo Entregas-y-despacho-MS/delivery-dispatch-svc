@@ -66,6 +66,10 @@ function setup(
         state.last_sync_requested_at = params[3] as Date;
         return [];
       }
+      if (sql.includes('SET incomplete_alerted_at = NULL')) {
+        state.incomplete_alerted_at = null;
+        return [];
+      }
       if (sql.includes('SET incomplete_alerted_at')) {
         state.incomplete_alerted_at = params[2] as Date;
         return [];
@@ -203,5 +207,30 @@ describe('IncompleteOrderRecoveryTask', () => {
 
     expect(bus.publishedTo('dispatch.sync.requested')).toHaveLength(0);
     expect(state.sync_attempts).toBe(0);
+  });
+
+  it('retries the alert when no listener accepted the event', async () => {
+    const { task, state } = setup({ sync_attempts: 3 });
+    const emit = vi.spyOn(EventEmitter2.prototype, 'emit').mockReturnValue(false);
+
+    await task.recover(new Date('2026-10-14T11:00:00.000Z'));
+
+    expect(state.incomplete_alerted_at).toBeNull();
+    expect(emit).toHaveBeenCalledWith(
+      DISPATCH_CHANGE_REQUIRES_ATTENTION,
+      expect.objectContaining({ changeType: 'incomplete_order' }),
+    );
+    emit.mockRestore();
+  });
+
+  it('retries the alert when a listener throws', async () => {
+    const { task, state, events } = setup({ sync_attempts: 3 });
+    events.on(DISPATCH_CHANGE_REQUIRES_ATTENTION, () => {
+      throw new Error('listener failed');
+    });
+
+    await task.recover(new Date('2026-10-14T11:00:00.000Z'));
+
+    expect(state.incomplete_alerted_at).toBeNull();
   });
 });
