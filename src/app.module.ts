@@ -26,6 +26,7 @@ import { StorageModule } from './plugins/storage/storage.module.js';
 import { PushModule } from './plugins/push/push.module.js';
 import { OsrmModule } from './plugins/osrm/osrm.module.js';
 import { PendingOrdersModule } from './modules/dispatch/pending-orders/pending-orders.module.js';
+import { RouteBatchesModule } from './modules/dispatch/route-batches/route-batches.module.js';
 import { DispatchReservationsModule } from './modules/dispatch/dispatch-reservations/dispatch-reservations.module.js';
 import { CacheModule } from './plugins/cache/cache.module.js';
 import { MessagingModule } from './plugins/messaging/messaging.module.js';
@@ -70,6 +71,7 @@ import { SchedulerModule } from './app/scheduler/scheduler.module.js';
         PushModule.register(),
         OsrmModule,
         PendingOrdersModule,
+        RouteBatchesModule,
         DispatchReservationsModule,
     ],
     providers: [
