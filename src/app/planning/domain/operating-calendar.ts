@@ -196,3 +196,8 @@ export function minutesOfDay(time: string): number {
     const [hours, minutes] = time.split(':').map(Number);
     return hours * 60 + minutes;
 }
+
+/** The Monday of the ISO week of a local date, used to count a driver's batches per week. */
+export function weekStart(date: string): string {
+    return addDays(date, -(isoWeekday(date) - 1));
+}
