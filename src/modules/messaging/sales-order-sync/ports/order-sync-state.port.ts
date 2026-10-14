@@ -1,7 +1,7 @@
 import type { MutationOptions } from '../../../../shared/dto/options.dto.js';
 
 /** Origins whose messages are joined by `salesOrderId`. */
-export type OrderSyncSource = 'marketplace' | 'inventory';
+export type OrderSyncSource = 'marketplace' | 'inventory' | 'procurement';
 
 /**
  * What is remembered per sales order and per origin, before and after the order becomes a dispatch

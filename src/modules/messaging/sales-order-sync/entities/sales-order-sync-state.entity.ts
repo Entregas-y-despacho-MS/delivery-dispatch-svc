@@ -8,7 +8,7 @@ export class SalesOrderSyncState extends BaseCreatedUpdated {
     salesOrderId: string;
 
     @PrimaryColumn({ name: 'source', type: 'varchar', length: 20 })
-    source: 'marketplace' | 'inventory';
+    source: 'marketplace' | 'inventory' | 'procurement';
 
     // PostgreSQL BIGINT is represented as a string to avoid precision loss.
     @Column({ name: 'last_record_version', type: 'bigint', default: 0 })

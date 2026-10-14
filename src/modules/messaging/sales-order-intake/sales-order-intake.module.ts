@@ -16,6 +16,8 @@ import { TypeOrmPendingSalesOrderStore } from './repositories/typeorm-pending-sa
 import { DispatchChangeEvents } from './services/dispatch-change-events.service.js';
 import { MarketplaceOrderConsumer } from './services/marketplace-order-consumer.service.js';
 import { OrderConsolidator } from './services/order-consolidator.service.js';
+import { ProcurementPickupRepository } from '../procurement-pickup-intake/repositories/procurement-pickup.repository.js';
+import { ProcurementPickupConsumer } from '../procurement-pickup-intake/services/procurement-pickup-consumer.service.js';
 
 /**
  * Marketplace side of the sales-order intake (ST-72.2).
@@ -36,6 +38,8 @@ import { OrderConsolidator } from './services/order-consolidator.service.js';
         DispatchChangeEvents,
         MarketplaceOrderConsumer,
         ShipmentOrderConsumer,
+        ProcurementPickupRepository,
+        ProcurementPickupConsumer,
     ],
     exports:   [MarketplaceOrderRepository, OrderConsolidator, ExistingDispatchChanges, DispatchChangeEvents],
 })

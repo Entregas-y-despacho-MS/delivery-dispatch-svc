@@ -4,7 +4,7 @@ import type { MessageValidationError } from '../envelope/message-validator.js';
 export class RejectedMessageException extends Error {
     constructor(
         readonly errors: MessageValidationError[],
-        readonly reasonCode: 'unknown_warehouse',
+        readonly reasonCode: 'unknown_warehouse' | 'invalid_pickup_window',
     ) {
         super('Inbound message rejected by business validation.');
         this.name = 'RejectedMessageException';

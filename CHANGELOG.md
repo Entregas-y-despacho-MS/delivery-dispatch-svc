@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Consumer de `procurement.pickup.*`: crea y actualiza despachos `supplier_pickup`, conserva la versión por orden de compra y deriva datos operativos incompletos a `address_review` (ST-74.1).
 - `GET /dispatches/my-assignments` (driver role): the driver's stops for a shift date (default: today in America/La_Paz), ordered by visit order, with `lastModifiedAt` for change detection in the mobile app (RF-U02, ST-28.4).
 
 ## [0.1.0] - 2026-10-06

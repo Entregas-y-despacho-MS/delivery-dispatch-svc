@@ -61,9 +61,9 @@ Cada fila corresponde a `schemas/<tópico>.schema.json` y `examples/<tópico>.ex
 | `inventory.shipment.cancelled` | `inventory` | Retiro cancelado por Almacén. |
 | `inventory.return.requested` | `inventory` | RMA con contacto y dirección de recojo. Sprint 3. |
 | `inventory.receipt.confirmed` | `inventory` | `referenceType` (`rma` o `purchase_order`) y cantidades aceptadas, faltantes y dañadas. |
-| `procurement.pickup.requested` | `procurement` | Dirección, almacén y horario opcionales: si falta uno imprescindible, la solicitud queda pendiente de corrección. Estimaciones en kg y m³. |
-| `procurement.pickup.updated` | `procurement` | Cada bloque enviado reemplaza completo al anterior; exige al menos un cambio. |
-| `procurement.pickup.cancelled` | `procurement` | `cancelledAt` obligatorio. |
+| `procurement.pickup.requested` | `procurement` | Crea un `supplier_pickup`; dirección, almacén y horario opcionales: si falta uno imprescindible, queda en `address_review`. Estimaciones en kg y m³; `transportConditions` admite condiciones especiales como fragilidad o temperatura. |
+| `procurement.pickup.updated` | `procurement` | Cada bloque enviado reemplaza completo al anterior; exige al menos un cambio. Solo se aplica a despachos `pending`, `address_review` o `scheduled`; `transportConditions` reemplaza la lista anterior al enviarse. |
+| `procurement.pickup.cancelled` | `procurement` | `cancelledAt` obligatorio. Solo cancela despachos `pending`, `address_review` o `scheduled`; cambios fuera de esos estados se registran y generan una alerta al coordinador. |
 
 **Mensajes que publica Despachos**
 
