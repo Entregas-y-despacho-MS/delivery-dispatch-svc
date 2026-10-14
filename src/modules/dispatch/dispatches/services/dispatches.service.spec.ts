@@ -139,6 +139,7 @@ function stopRow(overrides: Record<string, unknown> = {}) {
         paymentStatusLabel: 'Prepaid', packageContents: null, estimatedWeightKg: '12.50',
         scheduledWindowStart: new Date('2026-10-14T14:00:00Z'), scheduledWindowEnd: new Date('2026-10-14T16:00:00Z'),
         dispatchStatus: { id: 2, name: 'in_transit' }, serviceLevel: { id: 1, name: 'express' },
+        dispatchType: { id: 1, name: 'delivery' }, packages: [], routeBatch: { id: 5, status: 'confirmed', acceptedAt: null },
         updatedAt: new Date('2026-10-14T10:00:00Z'),
         ...overrides,
     };
@@ -152,8 +153,28 @@ describe('DispatchesService.findDriverAssignments', () => {
 
         expect(rawRepo.find).toHaveBeenCalledTimes(1);
         const [{ where, order }] = rawRepo.find.mock.calls[0];
-        expect(where).toEqual({ routeBatch: { driverId: 9, shiftDate: '2026-10-14' } });
-        expect(order).toEqual({ sequenceOrder: { direction: 'ASC', nulls: 'LAST' }, id: 'ASC' });
+        expect(where.routeBatch.driverId).toBe(9);
+        expect(where.routeBatch.shiftDate).toBe('2026-10-14');
+        expect(order).toEqual({ sequenceOrder: { direction: 'ASC', nulls: 'LAST' }, id: 'ASC', packages: { id: 'ASC' } });
+    });
+
+    it('solo pide lotes confirmed o in_execution: nunca provisional ni pending_final_review', async () => {
+        const { service, rawRepo } = buildService();
+
+        await service.findDriverAssignments(9, '2026-10-14');
+
+        const [{ where }] = rawRepo.find.mock.calls[0];
+        expect(where.routeBatch.status.type).toBe('in');
+        expect([...where.routeBatch.status.value].sort()).toEqual(['confirmed', 'in_execution']);
+    });
+
+    it('publica el id de cada bulto como packageId y conserva medidas y peso', async () => {
+        const { service, rawRepo } = buildService();
+        rawRepo.find.mockResolvedValue([stopRow({ packages: [{ id: 301, externalPackageId: 'PKG-A', lengthCm: 40, widthCm: 30, heightCm: 25, grossWeightKg: 6.5 }] })]);
+
+        const { data } = await service.findDriverAssignments(9, '2026-10-14');
+
+        expect(data[0].packages).toEqual([{ packageId: 301, externalPackageId: 'PKG-A', lengthCm: 40, widthCm: 30, heightCm: 25, grossWeightKg: 6.5 }]);
     });
 
     it('un repartidor sin ruta recibe una lista vacía y lastModifiedAt nulo, no un error', async () => {
