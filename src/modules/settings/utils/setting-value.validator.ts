@@ -25,6 +25,7 @@ const RULES: Record<string, Rule> = {
     plan_horizon_days:             { kind: 'int', min: 1, max: 365, unit: 'days' },
     plan_working_days:             { kind: 'day-list' },
     plan_non_working_dates:        { kind: 'date-list', allowEmpty: true },
+    plan_min_orders_per_route:     { kind: 'int', min: 1, max: 1000, unit: 'orders' },
     route_cutoff_time:             { kind: 'time' },
     final_review_end_time:         { kind: 'time' },
     route_reminder_time:           { kind: 'time' },
