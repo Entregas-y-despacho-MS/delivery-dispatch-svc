@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ArrayNotEmpty, IsArray, IsInt, IsOptional, IsPositive, ValidateNested } from 'class-validator';
+import { ArrayNotEmpty, IsArray, IsInt, IsOptional, IsPositive, Min, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class ExpectedDispatchVersionDto {
@@ -10,14 +10,14 @@ export class ExpectedDispatchVersionDto {
 
     @ApiProperty({ example: 3 })
     @IsInt()
-    @IsPositive()
+    @Min(0)
     version!: number;
 }
 
 export class ApproveRouteBatchPromisesDto {
     @ApiProperty({ example: 7, description: 'Current route-batch version shown to the coordinator.' })
     @IsInt()
-    @IsPositive()
+    @Min(0)
     version!: number;
 
     @ApiProperty({ type: [ExpectedDispatchVersionDto], minItems: 1 })
