@@ -3,6 +3,9 @@ import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swa
 import { RouteBatchReviewerService } from '../services/route-batch-reviewer.service.js';
 import { UpdateRouteBatchReviewerDto } from '../dto/update-route-batch-reviewer.dto.js';
 import { RouteBatchReviewerDto } from '../dto/route-batch-reviewer.dto.js';
+import { AssignRouteBatchVehicleDto } from '../dto/assign-route-batch-vehicle.dto.js';
+import { RouteBatchVehicleAssignmentDto } from '../dto/route-batch-vehicle-assignment.dto.js';
+import { RouteBatchVehicleService } from '../services/route-batch-vehicle.service.js';
 import { Roles } from '../../../../app/auth/decorators/index.js';
 import { CurrentUser } from '../../../../shared/decorators/current-user.decorator.js';
 import { ParseIdPipe } from '../../../../shared/pipes/index.js';
@@ -19,7 +22,35 @@ import { ApiBadRequests, ApiConflict, ApiForbidden, ApiIdParam, ApiNotFound, Api
 @ApiBearerAuth('access-token')
 @Controller('route-batches')
 export class RouteBatchesController {
-    constructor(private readonly reviewerService: RouteBatchReviewerService) {}
+    constructor(
+        private readonly reviewerService: RouteBatchReviewerService,
+        private readonly vehicleService: RouteBatchVehicleService,
+    ) {}
+
+    @Patch(':id/vehicle')
+    @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
+    @ApiOperation({
+        summary: 'Assign a vehicle after validating route capacity',
+        description: 'Assigns a vehicle to a provisional route batch only when total package weight and volume fit its capacity and every configured per-package dimension limit is met. Dispatches without package records use their estimated weight, marked as estimated in the returned report.',
+    })
+    @ApiIdParam('Route batch')
+    @ApiOkResponse({ type: RouteBatchVehicleAssignmentDto })
+    @ApiBadRequests({ validation: true, id: true, example: ['vehicleId must be an integer number.'] })
+    @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+    @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
+    @ApiNotFound({
+        code: 'ROUTE_BATCH_NOT_FOUND', message: 'Route batch not found.',
+    }, { code: 'VEHICLE_NOT_FOUND', message: 'Vehicle not found.' })
+    @ApiConflict(
+        { code: 'ROUTE_BATCH_NOT_PROVISIONAL', message: 'A vehicle can only be assigned while the route batch is provisional.' },
+        { code: 'ROUTE_CAPACITY_EXCEEDED', message: 'The route exceeds the selected vehicle capacity or package dimensions.' },
+    )
+    async assignVehicle(
+        @Param('id', ParseIdPipe) id: number,
+        @Body() dto: AssignRouteBatchVehicleDto,
+    ): Promise<RouteBatchVehicleAssignmentDto> {
+        return await this.vehicleService.assign(id, dto.vehicleId);
+    }
 
     @Patch(':id/reviewer')
     @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
