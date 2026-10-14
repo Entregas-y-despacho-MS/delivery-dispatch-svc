@@ -150,7 +150,7 @@ describe('ScheduledTaskRunner', () => {
             const run = vi.fn().mockResolvedValue(undefined);
             const retried = await b.runner.run(taskWith(run), scheduled);
 
-            expect(failed).toEqual({ status: 'failed', error: 'OSRM unavailable' });
+            expect(failed).toEqual({ status: 'failed', error: 'OSRM unavailable', cause: expect.any(Error) });
             expect(retried).toEqual({ status: 'executed' });
             expect(run).toHaveBeenCalledTimes(1);
         });
@@ -168,7 +168,7 @@ describe('ScheduledTaskRunner', () => {
                 scheduled,
             );
 
-            expect(outcome).toEqual({ status: 'failed', error: 'boom' });
+            expect(outcome).toEqual({ status: 'failed', error: 'boom', cause: expect.any(Error) });
             expect(held.size).toBe(0);
             expect(runs).toHaveLength(0);
         });
@@ -195,7 +195,7 @@ describe('ScheduledTaskRunner', () => {
 
             const outcome = await runner.run(taskWith(run), scheduled);
 
-            expect(outcome).toEqual({ status: 'failed', error: 'db down' });
+            expect(outcome).toEqual({ status: 'failed', error: 'db down', cause: expect.any(Error) });
             expect(run).not.toHaveBeenCalled();
         });
     });

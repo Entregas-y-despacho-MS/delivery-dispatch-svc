@@ -18,7 +18,7 @@ const defaults = {
 };
 
 const operationalKeys = [
-    'plan_generation_times', 'plan_horizon_days', 'plan_working_days', 'plan_non_working_dates',
+    'plan_generation_times', 'plan_horizon_days', 'plan_working_days', 'plan_non_working_dates', 'plan_min_orders_per_route',
     'route_cutoff_time', 'final_review_end_time', 'route_reminder_time', 'promise_response_window_minutes',
     'service_min_operating_days', 'service_max_operating_days', 'slot_duration_minutes',
     'morning_window_start', 'morning_window_end', 'afternoon_window_start', 'afternoon_window_end',
@@ -35,7 +35,7 @@ describe('validateSettingValue', () => {
         ['sla_alert_threshold_pct', '90'], ['delivery_window_start', '00:00'], ['delivery_window_end', '23:59'],
         ['plan_generation_times', '08:30,13:30'], ['plan_working_days', '1,2,3,4,5'],
         ['plan_non_working_dates', ''], ['plan_non_working_dates', '2026-12-25,2027-01-01'],
-        ['stop_service_minutes', '15'], ['planning_margin_pct', '20'],
+        ['stop_service_minutes', '15'], ['planning_margin_pct', '20'], ['plan_min_orders_per_route', '3'],
     ])('accepts %s = %j', (key, value) => {
         expect(validateSettingValue(key, value)).toBeNull();
     });
@@ -47,7 +47,7 @@ describe('validateSettingValue', () => {
         ['plan_generation_times', '08:30,noon'], ['plan_generation_times', '08:30,,13:30'], ['plan_generation_times', '08:30,08:30'],
         ['plan_working_days', '1,8'], ['plan_working_days', '1,1'], ['plan_working_days', ''],
         ['plan_non_working_dates', '2026-02-30'], ['plan_non_working_dates', '2026-12-25,'],
-        ['stop_service_minutes', ''], ['planning_margin_pct', '101'],
+        ['stop_service_minutes', ''], ['planning_margin_pct', '101'], ['plan_min_orders_per_route', '0'], ['plan_min_orders_per_route', '1001'], ['plan_min_orders_per_route', 'three'],
     ])('rejects %s = %j', (key, value) => {
         expect(validateSettingValue(key, value)).toContain(key);
     });

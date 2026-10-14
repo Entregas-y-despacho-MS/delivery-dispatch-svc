@@ -25,5 +25,9 @@ export interface ScheduledTask {
     /** Unique, kebab-case (`plan-generation`). It is also the lock key and what the audit log records. */
     readonly name: string;
     readonly schedule: TaskSchedule;
-    run(context: ScheduledTaskContext): Promise<void>;
+    /**
+     * May return a summary of what it did: a manual trigger puts it in the response. Throwing an
+     * `HttpException` (422, 503...) makes a manual trigger answer with that same status.
+     */
+    run(context: ScheduledTaskContext): Promise<unknown>;
 }

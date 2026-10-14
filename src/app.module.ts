@@ -35,6 +35,7 @@ import { OutboundMessagesModule } from './modules/messaging/outbound-messages/ou
 import { SalesOrderIntakeModule } from './modules/messaging/sales-order-intake/sales-order-intake.module.js';
 import { IncompleteOrderRecoveryModule } from './modules/messaging/incomplete-order-recovery/incomplete-order-recovery.module.js';
 import { SchedulerModule } from './app/scheduler/scheduler.module.js';
+import { PlanningModule } from './app/planning/planning.module.js';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { SchedulerModule } from './app/scheduler/scheduler.module.js';
     DatabaseModule,
     SettingsModule,
     SchedulerModule,
+    PlanningModule,
     UsersModule,
     RolesModule,
     DeliveryZonesModule,
