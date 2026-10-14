@@ -10,8 +10,70 @@ export class AssignmentStatusDto {
     id!: number;
 
     @DtoField()
-    @ApiProperty({ example: 'in_transit', description: 'Status name, as stored in the dispatch_statuses catalog (pending, in_transit, delivered, not_delivered, returned)' })
+    @ApiProperty({
+        example: 'out_for_delivery',
+        enum: [
+            'pending', 'in_transit', 'delivered', 'not_delivered', 'returned', 'address_review', 'in_planning', 'scheduled',
+            'assigned', 'out_for_delivery', 'incident', 'rescheduled', 'pickup_scheduled', 'picked_up_in_transit', 'returned_to_warehouse', 'cancelled',
+        ],
+        description: 'Status name, as stored in the dispatch_statuses catalog',
+    })
     name!: string;
+}
+
+export class AssignmentDispatchTypeDto {
+    @DtoField()
+    @ApiProperty({ type: 'integer', example: 1, description: 'Dispatch type ID' })
+    id!: number;
+
+    @DtoField()
+    @ApiProperty({ example: 'delivery', enum: ['delivery', 'warehouse_return_pickup', 'supplier_pickup', 'supplier_return'], description: 'Dispatch type name, as stored in the dispatch_types catalog. Together with the service level it decides the service badge of the stop' })
+    name!: string;
+}
+
+export class AssignmentRouteBatchDto {
+    @DtoField()
+    @ApiProperty({ type: 'integer', example: 17, description: 'Route batch ID' })
+    id!: number;
+
+    @DtoField()
+    @ApiProperty({ example: 'confirmed', enum: ['confirmed', 'in_execution'], description: 'Route batch status. The driver only ever sees `confirmed` or `in_execution`: provisional batches are never returned' })
+    status!: string;
+
+    @DtoField()
+    @ApiProperty({ type: String, format: 'date-time', nullable: true, example: '2026-10-14T12:00:00.000Z', description: 'Moment the driver accepted the route (UTC). `null` while the driver has not accepted it yet' })
+    acceptedAt!: Date | null;
+}
+
+/** Package (bulto) as the API publishes it. */
+export class AssignmentPackageDto {
+    @ApiProperty({ type: 'integer', example: 301, description: 'Package ID in this service (`dispatch_package_id`)' })
+    packageId!: number;
+
+    @ApiProperty({ example: 'PKG-000123-1', description: 'Package ID in the origin system (Almacén), unique within the dispatch' })
+    externalPackageId!: string;
+
+    @ApiProperty({ type: 'number', format: 'double', example: 40, description: 'Length, in cm' })
+    lengthCm!: number;
+
+    @ApiProperty({ type: 'number', format: 'double', example: 30, description: 'Width, in cm' })
+    widthCm!: number;
+
+    @ApiProperty({ type: 'number', format: 'double', example: 25, description: 'Height, in cm' })
+    heightCm!: number;
+
+    @ApiProperty({ type: 'number', format: 'double', example: 6.5, description: 'Gross weight, in kg' })
+    grossWeightKg!: number;
+}
+
+/** Query shape of a package: the entity key is `id`; the service maps it to `AssignmentPackageDto`. */
+export class AssignmentPackageRowDto {
+    @DtoField() id!: number;
+    @DtoField() externalPackageId!: string;
+    @DtoField() lengthCm!: number;
+    @DtoField() widthCm!: number;
+    @DtoField() heightCm!: number;
+    @DtoField() grossWeightKg!: number;
 }
 
 export class AssignmentServiceLevelDto {
@@ -25,11 +87,23 @@ export class AssignmentServiceLevelDto {
 }
 
 /** One stop of the driver's route for the day (RF-U02). */
-@ApiExtraModels(AssignmentServiceLevelDto)
+@ApiExtraModels(AssignmentServiceLevelDto, AssignmentDispatchTypeDto, AssignmentRouteBatchDto)
 export class DriverAssignmentDto {
     @DtoField()
     @ApiProperty({ type: 'integer', example: 42, description: 'Dispatch ID' })
     id!: number;
+
+    @DtoField()
+    @ApiProperty({ type: String, nullable: true, example: 'DSP-2026-00042', description: 'Transfer tracking code (`DSP-YYYY-NNNNN`). `null` until it is assigned' })
+    trackingCode!: string | null;
+
+    @DtoField()
+    @ApiProperty({ example: 'hand_delivery_standard', enum: ['hand_delivery_standard', 'contactless_delivery', 'high_value_control'], description: 'Evidence the driver must capture to close the stop: signature (`hand_delivery_standard`), photo without contact (`contactless_delivery`) or OTP code (`high_value_control`)' })
+    evidencePolicy!: string;
+
+    @DtoField()
+    @ApiProperty({ type: String, nullable: true, example: 'Edificio azul, frente a la farmacia', description: 'Address references given by the customer. `null` when there are none' })
+    deliveryReference!: string | null;
 
     @DtoField()
     @ApiProperty({ type: 'integer', nullable: true, example: 1, description: 'Visit order of this stop within the route (1 = first stop). The driver follows this order and cannot change it. `null` only if the route has not been numbered yet' })
@@ -93,6 +167,18 @@ export class DriverAssignmentDto {
     @DtoRelation(() => AssignmentServiceLevelDto)
     @ApiProperty({ allOf: [{ $ref: getSchemaPath(AssignmentServiceLevelDto) }], nullable: true, description: 'Contracted service level. `null` when the dispatch has none' })
     serviceLevel!: AssignmentServiceLevelDto | null;
+
+    @DtoRelation(() => AssignmentDispatchTypeDto)
+    @ApiProperty({ type: () => AssignmentDispatchTypeDto, description: 'Type of the dispatch (delivery, RMA pickup...)' })
+    dispatchType!: AssignmentDispatchTypeDto;
+
+    @DtoRelation(() => AssignmentPackageRowDto)
+    @ApiProperty({ type: () => [AssignmentPackageDto], description: 'Packages (bultos) of the dispatch, ordered by `packageId`. Empty when the origin has not sent them' })
+    packages!: AssignmentPackageDto[];
+
+    @DtoRelation(() => AssignmentRouteBatchDto)
+    @ApiProperty({ type: () => AssignmentRouteBatchDto, description: 'Route batch the stop belongs to' })
+    routeBatch!: AssignmentRouteBatchDto;
 
     @DtoField()
     @ApiProperty({ type: String, format: 'date-time', example: '2026-10-14T13:20:00.000Z', description: 'Last time this dispatch changed (UTC)' })
