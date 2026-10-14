@@ -9,6 +9,8 @@ export interface MailOptions {
     /** Only available with the SMTP adapter (Handlebars templates). */
     template?:    string;
     context?:     Record<string, any>;
+    /** Optional business identifiers for transports that support delivery metadata. */
+    metadata?:    Record<string, unknown>;
     attachments?: {
         filename:     string;
         content:      Buffer | string;
@@ -16,7 +18,14 @@ export interface MailOptions {
     }[];
 }
 
+export type MailDeliveryStatus = 'sent' | 'bounced' | 'failed';
+
+export interface MailDeliveryResult {
+    status: MailDeliveryStatus;
+    error?: string;
+}
+
 // Abstract class (not interface) so NestJS DI can use it as a runtime token.
 export abstract class MailerPort {
-    abstract send(options: MailOptions): void;
+    abstract send(options: MailOptions): Promise<MailDeliveryResult>;
 }

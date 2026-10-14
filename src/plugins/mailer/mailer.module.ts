@@ -1,8 +1,9 @@
 import { DynamicModule, Global, Module } from '@nestjs/common';
 import { SmtpMailerModule } from './smtp/smtp.module.js';
 import { ApiMailerModule } from './api/api.module.js';
+import { LogMailerModule } from './log/log.module.js';
 
-export type MailerTransport = 'smtp' | 'api';
+export type MailerTransport = 'smtp' | 'api' | 'log';
 
 /**
  * Port & Adapter facade for email sending.
@@ -15,10 +16,13 @@ export class MailerModule {
     static register(transport?: MailerTransport): DynamicModule {
         // register() is static — DI is not available yet, so we read process.env directly.
         // dotenv/config is imported first in main.ts so process.env is populated by the time this runs.
-        const chosen: MailerTransport =
-            transport ?? ((process.env.MAILER_TRANSPORT as MailerTransport) || 'smtp');
+        const chosen: MailerTransport = transport ?? ((process.env.MAILER_TRANSPORT as MailerTransport) || 'smtp');
 
-        const adapterModule = chosen === 'api' ? ApiMailerModule : SmtpMailerModule;
+        const adapterModule = chosen === 'api'
+            ? ApiMailerModule
+            : chosen === 'log'
+                ? LogMailerModule
+                : SmtpMailerModule;
 
         return {
             module:  MailerModule,
