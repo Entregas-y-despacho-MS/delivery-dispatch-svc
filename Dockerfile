@@ -36,6 +36,7 @@ RUN chown -R nestjs:nestjs /app
 USER nestjs
 
 EXPOSE 3000
+# node:22-bookworm-slim no trae wget; el healthcheck usa node (fetch nativo, Node 22).
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD wget -qO- http://localhost:3000/api/health || exit 1
+  CMD ["node", "-e", "fetch('http://localhost:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
 CMD ["sh", "-c", "node dist/database/seeds/seed.js && exec node dist/main"]
