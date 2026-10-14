@@ -117,7 +117,10 @@ export class IncompleteOrderRecoveryTask implements OnModuleInit {
     alert: RecoveryAlert,
   ): Promise<void> {
     try {
-      const delivered = this.events.emit(DISPATCH_CHANGE_REQUIRES_ATTENTION, alert);
+      const delivered = this.events.emit(
+        DISPATCH_CHANGE_REQUIRES_ATTENTION,
+        alert,
+      );
       if (delivered) return;
 
       this.logger.warn(
@@ -171,7 +174,9 @@ export class IncompleteOrderRecoveryTask implements OnModuleInit {
       if (!state || state.base_received || state.cancelled_at) return null;
       if (states.some(({ cancelled_at }) => cancelled_at !== null)) return null;
 
-      const progress = summarizeProgress(states);
+      // Recovery attempts and alert state belong to the missing source only.
+      // Keep `states` for the order-wide cancellation check above.
+      const progress = summarizeProgress(state);
 
       if (progress.total_attempts >= MAX_ATTEMPTS) {
         if (progress.alerted) return null;
@@ -251,23 +256,10 @@ function elapsedMinutes(from: Date | string, to: Date): number {
   return (to.getTime() - new Date(from).getTime()) / 60_000;
 }
 
-function summarizeProgress(states: RecoveryState[]): RecoveryProgress {
+function summarizeProgress(state: RecoveryState): RecoveryProgress {
   return {
-    total_attempts: states.reduce(
-      (total, state) => total + state.sync_attempts,
-      0,
-    ),
-    last_requested_at:
-      states
-        .map(({ last_sync_requested_at }) => last_sync_requested_at)
-        .filter(
-          (requestedAt): requestedAt is Date | string => requestedAt !== null,
-        )
-        .sort(
-          (left, right) => new Date(right).getTime() - new Date(left).getTime(),
-        )[0] ?? null,
-    alerted: states.some(
-      ({ incomplete_alerted_at }) => incomplete_alerted_at !== null,
-    ),
+    total_attempts: state.sync_attempts,
+    last_requested_at: state.last_sync_requested_at,
+    alerted: state.incomplete_alerted_at !== null,
   };
 }

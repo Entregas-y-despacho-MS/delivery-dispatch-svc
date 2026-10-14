@@ -200,6 +200,118 @@ describe('IncompleteOrderRecoveryTask', () => {
     ]);
   });
 
+  it('keeps recovery attempts and alerts independent when both origins are missing', async () => {
+    const now = new Date('2026-10-14T11:00:00.000Z');
+    const states = {
+      marketplace: {
+        sync_attempts: 3,
+        last_sync_requested_at: new Date('2026-10-14T10:30:00.000Z'),
+        incomplete_alerted_at: null,
+        base_received: false,
+        cancelled_at: null,
+      },
+      inventory: {
+        sync_attempts: 0,
+        last_sync_requested_at: null,
+        incomplete_alerted_at: null,
+        base_received: false,
+        cancelled_at: null,
+      },
+    };
+    const candidates = [
+      {
+        sales_order_id: 'SO-50-5',
+        source: 'marketplace' as const,
+        entity_type: 'sales_order' as const,
+        observed_at: new Date('2026-10-14T09:00:00.000Z'),
+      },
+      {
+        sales_order_id: 'SO-50-5',
+        source: 'inventory' as const,
+        entity_type: 'shipment' as const,
+        observed_at: new Date('2026-10-14T09:00:00.000Z'),
+      },
+    ];
+    const manager = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        if (sql.includes('INSERT INTO sales_order_sync_states')) return [];
+        if (sql.includes('SELECT source, sync_attempts')) {
+          return Object.entries(states).map(([source, state]) => ({
+            source,
+            ...state,
+          }));
+        }
+        if (sql.includes('SET sync_attempts')) {
+          const source = params[1] as keyof typeof states;
+          states[source].sync_attempts = params[2] as number;
+          states[source].last_sync_requested_at = params[3] as Date;
+          return [];
+        }
+        if (sql.includes('SET incomplete_alerted_at = NULL')) {
+          const source = params[1] as keyof typeof states;
+          states[source].incomplete_alerted_at = null;
+          return [];
+        }
+        if (sql.includes('SET incomplete_alerted_at')) {
+          const source = params[1] as keyof typeof states;
+          states[source].incomplete_alerted_at = params[2] as Date;
+          return [];
+        }
+        throw new Error(`Unexpected query: ${sql}`);
+      }),
+    };
+    const dataSource = {
+      query: vi.fn(async () => candidates),
+      transaction: vi.fn(
+        async (callback: (value: unknown) => Promise<unknown>) =>
+          await callback(manager),
+      ),
+    };
+    const settings = {
+      getNumber: vi.fn(async (_key: string, fallback: number) => fallback),
+    };
+    const events = new EventEmitter2();
+    const alerts: unknown[] = [];
+    events.on(DISPATCH_CHANGE_REQUIRES_ATTENTION, (alert) =>
+      alerts.push(alert),
+    );
+    const bus = new MemoryMessageBusAdapter(
+      MessageValidator.fromDirectory(),
+      new MemoryInboundMessageLogAdapter(),
+    );
+    const task = new IncompleteOrderRecoveryTask(
+      dataSource as never,
+      settings as never,
+      bus,
+      events,
+      { register: vi.fn() } as never,
+    );
+
+    await task.recover(now);
+
+    const messages = bus.publishedTo('dispatch.sync.requested') as Array<{
+      data: Record<string, unknown>;
+    }>;
+    expect(messages).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({
+          entityType: 'shipment',
+          entityId: 'SO-50-5',
+          attempt: 1,
+        }),
+      }),
+    ]);
+    expect(states.inventory.sync_attempts).toBe(1);
+    expect(states.inventory.incomplete_alerted_at).toBeNull();
+    expect(states.marketplace.incomplete_alerted_at).toEqual(now);
+    expect(alerts).toEqual([
+      expect.objectContaining({
+        source: 'marketplace',
+        changeType: 'incomplete_order',
+      }),
+    ]);
+  });
+
   it('does not request recovery after the available origin has cancelled the order', async () => {
     const { task, bus, state } = setup({}, {}, true);
 
@@ -211,7 +323,9 @@ describe('IncompleteOrderRecoveryTask', () => {
 
   it('retries the alert when no listener accepted the event', async () => {
     const { task, state } = setup({ sync_attempts: 3 });
-    const emit = vi.spyOn(EventEmitter2.prototype, 'emit').mockReturnValue(false);
+    const emit = vi
+      .spyOn(EventEmitter2.prototype, 'emit')
+      .mockReturnValue(false);
 
     await task.recover(new Date('2026-10-14T11:00:00.000Z'));
 
