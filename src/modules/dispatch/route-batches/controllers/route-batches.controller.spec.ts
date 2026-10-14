@@ -17,6 +17,7 @@ describe('RouteBatchesController.reassignReviewer', () => {
     const controller = new RouteBatchesController(
       reviewer as unknown as RouteBatchReviewerService,
       {} as unknown as RouteBatchVehicleService,
+      {} as any,
     );
 
     const result = await controller.reassignReviewer(
@@ -46,11 +47,21 @@ describe('RouteBatchesController.reassignReviewer', () => {
     const controller = new RouteBatchesController(
       reviewer as unknown as RouteBatchReviewerService,
       vehicles as unknown as RouteBatchVehicleService,
+      {} as any,
     );
 
     await expect(
       controller.assignVehicle(5, { vehicleId: 8 }),
     ).resolves.toMatchObject({ routeBatchId: 5, vehicleId: 8 });
     expect(vehicles.assign).toHaveBeenCalledWith(5, 8);
+  });
+
+  it('delegates promise approval with the actor from the access token', async () => {
+    const approval = { approve: vi.fn().mockResolvedValue({ routeBatchId: 5, version: 1 }) };
+    const controller = new RouteBatchesController({} as any, {} as any, approval as any);
+    const body = { version: 0, dispatches: [{ dispatchId: 12, version: 0 }] };
+
+    await expect(controller.approvePromises(5, body, 9)).resolves.toMatchObject({ routeBatchId: 5 });
+    expect(approval.approve).toHaveBeenCalledWith(5, body, 9);
   });
 });
