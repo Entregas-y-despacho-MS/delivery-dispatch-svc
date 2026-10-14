@@ -42,7 +42,7 @@ describe('RouteBatchPromiseApprovalService', () => {
             template: 'promise',
             metadata: { dispatchId: 21, routeBatchId: 7 },
         }));
-        expect(manager.query.mock.calls.some(([sql]) => String(sql).includes('UPDATE dispatches SET promise_notified_at'))).toBe(true);
+        expect(manager.query.mock.calls.some(([sql]) => String(sql).includes('SET promise_notified_at = COALESCE'))).toBe(true);
     });
 
     it('returns an approved dispatch to pending and audits its removal', async () => {
@@ -80,7 +80,7 @@ describe('RouteBatchPromiseApprovalService', () => {
         const { service, manager } = setup({ mail: { status: 'bounced' } });
         await service.approve(7, { version: 1, dispatches: [{ dispatchId: 21, version: 2 }, { dispatchId: 22, version: 0 }] }, 9);
 
-        expect(manager.query.mock.calls.some(([sql]) => String(sql).includes('UPDATE dispatches SET promise_notified_at'))).toBe(false);
+        expect(manager.query.mock.calls.some(([sql]) => String(sql).includes('SET promise_notified_at = COALESCE'))).toBe(false);
         expect(manager.query.mock.calls.some(([sql]) => String(sql).includes('contact_management_required'))).toBe(true);
         expect(manager.query.mock.calls.some(([sql]) => String(sql).includes('promise_email_bounced'))).toBe(true);
     });

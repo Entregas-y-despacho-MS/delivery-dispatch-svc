@@ -202,7 +202,7 @@ export class RouteBatchPromiseApprovalService {
                     subject: 'Tu entrega está programada',
                     template: 'promise',
                     context: {
-                        deliveryDate: dispatch.scheduled_window_start?.toISOString() ?? '',
+                        deliveryDate: formatDate(dispatch.scheduled_window_start),
                         deliveryWindow: formatWindow(dispatch.scheduled_window_start, dispatch.scheduled_window_end),
                         trackingUrl: `${this.webUrl}/seguimiento/${dispatch.tracking_token}`,
                     },
@@ -221,11 +221,15 @@ export class RouteBatchPromiseApprovalService {
 
     private async recordSuccessfulNotification(plan: ApprovalPlan, dispatch: DispatchRow): Promise<void> {
         await this.dataSource.transaction(async (manager) => {
-            await manager.query(
-                `UPDATE dispatches SET promise_notified_at = COALESCE(promise_notified_at, NOW()), updated_at = NOW()
-                  WHERE dispatch_id = $1 AND route_batch_id = $2`,
-                [dispatch.id, plan.routeBatchId],
+            const updated: { dispatch_id: number }[] = await manager.query(
+                `UPDATE dispatches
+                    SET promise_notified_at = COALESCE(promise_notified_at, NOW()), updated_at = NOW()
+                  WHERE dispatch_id = $1 AND route_batch_id = $2 AND version = $3
+                    AND dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $4)
+                RETURNING dispatch_id`,
+                [dispatch.id, plan.routeBatchId, dispatch.version + 1, DispatchStatusEnum.SCHEDULED],
             );
+            if (updated.length === 0) return;
             await manager.query(
                 `INSERT INTO dispatch_events (dispatch_id, event_type, actor_user_id, actor_type, reason, metadata)
                  VALUES ($1, 'promise_email_sent', $2, 'user', 'Promise email accepted by the configured mail transport', $3::jsonb)`,
@@ -253,5 +257,11 @@ export class RouteBatchPromiseApprovalService {
 
 function formatWindow(start: Date | null, end: Date | null): string {
     if (!start || !end) return '';
-    return `${start.toLocaleString('es-BO')} – ${end.toLocaleString('es-BO')}`;
+    const formatter = new Intl.DateTimeFormat('es-BO', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'America/La_Paz' });
+    return `${formatter.format(start)} – ${formatter.format(end)}`;
+}
+
+function formatDate(date: Date | null): string {
+    if (!date) return '';
+    return new Intl.DateTimeFormat('es-BO', { dateStyle: 'long', timeZone: 'America/La_Paz' }).format(date);
 }
