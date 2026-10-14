@@ -120,6 +120,8 @@ export class InsertionLotPlanner extends LotPlanner {
                     const batch: ProposedBatch = {
                         shiftDate: date,
                         zoneId: first.zoneId,
+                        zoneCode: first.zoneCode,
+                        zoneName: first.zoneName,
                         warehouseId: first.warehouseId,
                         vehicleId: composed.vehicle.vehicleId,
                         alternativeVehicleIds: composed.alternativeVehicles.map((vehicle) => vehicle.vehicleId),
@@ -133,13 +135,25 @@ export class InsertionLotPlanner extends LotPlanner {
                     batches.push(batch);
 
                     if (driverId === null) {
-                        warnings.push({ kind: 'no_driver_available', detail: { shiftDate: date, zoneId: first.zoneId, vehicleId: batch.vehicleId } });
+                        warnings.push({ kind: 'no_driver_available', detail: { shiftDate: date, ...zoneDetail(first), vehicleId: batch.vehicleId } });
                     }
                     const minimum = settings.minOrdersPerRoute;
                     if (minimum !== null && batch.stops.length < minimum) {
                         warnings.push({
                             kind: 'below_min_orders',
-                            detail: { shiftDate: date, zoneId: first.zoneId, stops: batch.stops.length, minimum },
+                            detail: { shiftDate: date, ...zoneDetail(first), stops: batch.stops.length, minimum },
+                        });
+                    }
+                }
+
+                // One warning per group, not per order (D-13 style: it warns, it never blocks). Only the
+                // orders that really got a batch are listed; leftovers warn when they are planned.
+                if (first.zoneDeleted) {
+                    const plannedIds = composition.batches.flatMap((composed) => composed.dispatches.map((d) => d.dispatchId));
+                    if (plannedIds.length > 0) {
+                        warnings.push({
+                            kind: 'zone_deleted',
+                            detail: { ...zoneDetail(first), shiftDate: date, dispatchIds: plannedIds },
                         });
                     }
                 }
@@ -147,12 +161,12 @@ export class InsertionLotPlanner extends LotPlanner {
                 if (composition.splitReason === 'table_limit') {
                     warnings.push({
                         kind: 'lot_split_by_table_limit',
-                        detail: { shiftDate: date, zoneId: first.zoneId, orders: group.length, maxStops },
+                        detail: { shiftDate: date, ...zoneDetail(first), orders: group.length, maxStops },
                     });
                 }
 
                 for (const dispatch of composition.unfittable) {
-                    unplanned.push({ dispatchId: dispatch.dispatchId, reason: 'no_vehicle_fits', detail: { zoneId: dispatch.zoneId } });
+                    unplanned.push({ dispatchId: dispatch.dispatchId, reason: 'no_vehicle_fits', detail: zoneDetail(dispatch) });
                 }
 
                 const byId = new Map(items.map((item) => [item.dispatch.dispatchId, item]));
@@ -246,6 +260,11 @@ export class InsertionLotPlanner extends LotPlanner {
         }
         return matrices;
     }
+}
+
+/** The zone as a coordinator reads it: id for the screens, code and name for the person. */
+function zoneDetail(dispatch: PlanDispatch): { zoneId: number; zoneCode: string; zoneName: string } {
+    return { zoneId: dispatch.zoneId, zoneCode: dispatch.zoneCode, zoneName: dispatch.zoneName };
 }
 
 function zoneKey(dispatch: PlanDispatch): string {

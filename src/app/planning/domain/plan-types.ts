@@ -9,6 +9,11 @@ import type { PlanningSettings } from './planning-settings.js';
 export interface PlanDispatch {
     dispatchId: number;
     zoneId: number;
+    /** `delivery_zones.code`, for alerts a coordinator can read ("ZON-SUR"). */
+    zoneCode: string;
+    zoneName: string;
+    /** The zone was soft-deleted from the catalog. The order is still planned, with a warning. */
+    zoneDeleted: boolean;
     warehouseId: number;
     latitude: number;
     longitude: number;
@@ -61,6 +66,8 @@ export interface ProposedStop {
 export interface ProposedBatch {
     shiftDate: string;
     zoneId: number;
+    zoneCode: string;
+    zoneName: string;
     warehouseId: number;
     vehicleId: number;
     /** Larger free vehicles that also fit, in the order to try if `vehicleId` is taken meanwhile. */
@@ -89,7 +96,8 @@ export type PlanWarningKind =
     | 'below_min_orders'
     | 'no_driver_available'
     | 'holidays_not_configured'
-    | 'lot_split_by_table_limit';
+    | 'lot_split_by_table_limit'
+    | 'zone_deleted';
 
 export interface PlanWarning {
     kind: PlanWarningKind;

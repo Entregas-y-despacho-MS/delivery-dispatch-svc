@@ -141,7 +141,13 @@ describe('InsertionLotPlanner', () => {
                 vehicles: [vehicle(1, 100)],
             }));
 
-            expect(proposal.unplanned).toEqual([expect.objectContaining({ dispatchId: 2, reason: 'no_vehicle_fits' })]);
+            expect(proposal.unplanned).toEqual([
+                expect.objectContaining({
+                    dispatchId: 2,
+                    reason: 'no_vehicle_fits',
+                    detail: { zoneId: 1, zoneCode: 'ZON-1', zoneName: 'Zona 1' },
+                }),
+            ]);
             expect(proposal.batches[0].stops.map((s) => s.dispatchId)).toEqual([1]);
         });
 
@@ -212,7 +218,10 @@ describe('InsertionLotPlanner', () => {
 
             expect(proposal.batches.map((b) => b.proposedDriverId)).toEqual([10, null]);
             expect(proposal.warnings.filter((w) => w.kind === 'no_driver_available')).toEqual([
-                expect.objectContaining({ kind: 'no_driver_available', detail: expect.objectContaining({ zoneId: 2 }) }),
+                expect.objectContaining({
+                    kind: 'no_driver_available',
+                    detail: expect.objectContaining({ zoneId: 2, zoneCode: 'ZON-2', zoneName: 'Zona 2' }),
+                }),
             ]);
         });
 
@@ -235,7 +244,10 @@ describe('InsertionLotPlanner', () => {
 
             expect(proposal.batches).toHaveLength(1);
             expect(proposal.warnings).toEqual([
-                expect.objectContaining({ kind: 'below_min_orders', detail: expect.objectContaining({ stops: 2, minimum: 3 }) }),
+                expect.objectContaining({
+                    kind: 'below_min_orders',
+                    detail: expect.objectContaining({ zoneCode: 'ZON-1', zoneName: 'Zona 1', stops: 2, minimum: 3 }),
+                }),
             ]);
         });
 
@@ -258,7 +270,76 @@ describe('InsertionLotPlanner', () => {
 
             expect(Math.max(...proposal.batches.map((b) => b.stops.length))).toBe(3);
             expect(proposal.batches.flatMap((b) => b.stops)).toHaveLength(7);
-            expect(proposal.warnings.map((w) => w.kind)).toContain('lot_split_by_table_limit');
+            const split = proposal.warnings.find((w) => w.kind === 'lot_split_by_table_limit');
+            expect(split).toBeDefined();
+            expect(split!.detail).toMatchObject({ zoneCode: 'ZON-1', zoneName: 'Zona 1' });
+        });
+    });
+
+    describe('zone deleted from the catalog', () => {
+        const quiet = { plan_min_orders_per_route: '' };
+
+        it('plans a group of an active zone with no zone_deleted warning', async () => {
+            const { planner: p } = planner();
+            const proposal = await p.plan(planInput({
+                settings: settings(quiet),
+                dispatches: [dispatch(1), dispatch(2)],
+            }));
+
+            expect(proposal.batches).toHaveLength(1);
+            expect(proposal.warnings.map((w) => w.kind)).not.toContain('zone_deleted');
+        });
+
+        it('plans a group of a deleted zone all the same and warns exactly once, listing every order', async () => {
+            const { planner: p } = planner();
+            const proposal = await p.plan(planInput({
+                settings: settings(quiet),
+                dispatches: [1, 2, 3].map((id) => dispatch(id, { zoneDeleted: true, zoneCode: 'ZON-SUR', zoneName: 'Achumani' })),
+            }));
+
+            expect(proposal.batches).toHaveLength(1);
+            expect(proposal.batches[0]).toMatchObject({ zoneCode: 'ZON-SUR', zoneName: 'Achumani' });
+            expect(proposal.warnings).toEqual([
+                {
+                    kind: 'zone_deleted',
+                    detail: {
+                        zoneId: 1, zoneCode: 'ZON-SUR', zoneName: 'Achumani',
+                        shiftDate: WEDNESDAY, dispatchIds: [1, 2, 3],
+                    },
+                },
+            ]);
+        });
+
+        it('warns only for the deleted zone when two zones share the day', async () => {
+            const { planner: p } = planner();
+            const proposal = await p.plan(planInput({
+                settings: settings(quiet),
+                dispatches: [dispatch(1), dispatch(2, { zoneId: 2, zoneDeleted: true }), dispatch(3, { zoneId: 2, zoneDeleted: true })],
+                vehicles: [vehicle(1, 1000), vehicle(2, 1000)],
+            }));
+
+            expect(proposal.batches).toHaveLength(2);
+            const deleted = proposal.warnings.filter((w) => w.kind === 'zone_deleted');
+            expect(deleted).toHaveLength(1);
+            expect(deleted[0].detail).toMatchObject({ zoneId: 2, dispatchIds: [2, 3] });
+        });
+
+        it('lists only the orders that got a batch each day, so one that waited is not repeated', async () => {
+            const { planner: p } = planner();
+            const proposal = await p.plan(planInput({
+                settings: settings(quiet),
+                dispatches: [
+                    dispatch(1, { zoneDeleted: true, estimatedWeightKg: 80 }),
+                    dispatch(2, { zoneDeleted: true, estimatedWeightKg: 80 }),
+                ],
+                vehicles: [vehicle(1, 100)],
+            }));
+
+            const deleted = proposal.warnings.filter((w) => w.kind === 'zone_deleted');
+            expect(deleted.map((w) => [w.detail.shiftDate, w.detail.dispatchIds])).toEqual([
+                [WEDNESDAY, [1]],
+                [THURSDAY, [2]],
+            ]);
         });
     });
 

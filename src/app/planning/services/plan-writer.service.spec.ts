@@ -8,6 +8,8 @@ import { PlanWriterService } from './plan-writer.service.js';
 const proposal = (overrides: Partial<ProposedBatch> = {}): ProposedBatch => ({
     shiftDate: '2026-10-14',
     zoneId: 1,
+    zoneCode: 'ZON-SUR',
+    zoneName: 'Achumani',
     warehouseId: 1,
     vehicleId: 7,
     alternativeVehicleIds: [],
@@ -100,6 +102,7 @@ describe('PlanWriterService.writeNewBatch', () => {
             expect.objectContaining({
                 routeBatchId: 900, eventType: 'created', actorType: 'system',
                 metadata: expect.objectContaining({
+                    zoneId: 1, zoneCode: 'ZON-SUR', zoneName: 'Achumani',
                     vehicleId: 7, proposedDriverId: 10, stops: 3, rescheduledDispatchIds: [102],
                     trigger: 'scheduled', occurrence: 'plan-generation@2026-10-13T08:30',
                 }),

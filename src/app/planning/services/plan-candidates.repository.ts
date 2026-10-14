@@ -13,6 +13,9 @@ import type {
 interface CandidateRow {
     dispatch_id: number;
     delivery_zone_id: number;
+    zone_code: string;
+    zone_name: string;
+    zone_deleted: boolean;
     origin_warehouse_id: number;
     delivery_latitude: string;
     delivery_longitude: string;
@@ -46,7 +49,8 @@ export class PlanCandidatesRepository {
      */
     async findCandidates(): Promise<PlanDispatch[]> {
         const rows: CandidateRow[] = await this.dataSource.query(
-            `SELECT d.dispatch_id, d.delivery_zone_id, d.origin_warehouse_id,
+            `SELECT d.dispatch_id, d.delivery_zone_id, z.code AS zone_code, z.name AS zone_name,
+                    (z.deleted_at IS NOT NULL) AS zone_deleted, d.origin_warehouse_id,
                     d.delivery_latitude, d.delivery_longitude, d.priority,
                     COALESCE(d.order_confirmed_at, d.created_at) AS confirmed_at,
                     s.name AS status, d.estimated_weight_kg, d.scheduled_window_start,
@@ -54,6 +58,9 @@ export class PlanCandidatesRepository {
                FROM dispatches d
                JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
                JOIN dispatch_types t ON t.dispatch_type_id = d.dispatch_type_id
+               -- Not filtered by deleted_at: the promise runs from D0 and does not stop because the
+               -- catalog changed; a deleted zone is planned and warned about.
+               JOIN delivery_zones z ON z.delivery_zone_id = d.delivery_zone_id
           LEFT JOIN LATERAL (
                     SELECT r.new_window_start
                       FROM dispatch_reschedules r
@@ -90,6 +97,9 @@ export class PlanCandidatesRepository {
         return rows.map((row) => ({
             dispatchId: row.dispatch_id,
             zoneId: row.delivery_zone_id,
+            zoneCode: row.zone_code,
+            zoneName: row.zone_name,
+            zoneDeleted: row.zone_deleted,
             warehouseId: row.origin_warehouse_id,
             latitude: Number(row.delivery_latitude),
             longitude: Number(row.delivery_longitude),

@@ -44,9 +44,13 @@ export const WAREHOUSE: PlanWarehouse = { warehouseId: 1, latitude: DEPOT.lat, l
 /** A dispatch `km` away from the depot along a line, so the nearest-neighbour order is the km order. */
 export function dispatch(id: number, overrides: Partial<PlanDispatch> & { km?: number } = {}): PlanDispatch {
     const { km = id, ...rest } = overrides;
+    const zoneId = rest.zoneId ?? 1;
     return {
         dispatchId: id,
-        zoneId: 1,
+        zoneId,
+        zoneCode: `ZON-${zoneId}`,
+        zoneName: `Zona ${zoneId}`,
+        zoneDeleted: false,
         warehouseId: 1,
         latitude: DEPOT.lat - km * 0.01,
         longitude: DEPOT.lon,

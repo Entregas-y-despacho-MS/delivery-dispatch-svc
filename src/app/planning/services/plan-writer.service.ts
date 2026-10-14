@@ -109,6 +109,9 @@ export class PlanWriterService {
             actorType: 'system',
             reason: null,
             metadata: {
+                zoneId: proposal.zoneId,
+                zoneCode: proposal.zoneCode,
+                zoneName: proposal.zoneName,
                 vehicleId,
                 proposedDriverId: proposal.proposedDriverId,
                 stops: ids.length,
