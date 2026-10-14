@@ -124,23 +124,105 @@ describe('ProcurementPickupRepository', () => {
       { manager: { query } as unknown as EntityManager },
     );
 
-        expect(
-          query.mock.calls.some(([, values]) =>
-            (values as unknown[])?.includes(
-              'supplier_pickup_cancel_requires_coordinator',
-            ),
-          ),
-        ).toBe(true);
-        expect(
-          query.mock.calls.some(([sql, values]) =>
-            String(sql).includes('INSERT INTO dispatch_events') &&
-            (values as unknown[])?.includes('change_requires_attention'),
-          ),
-        ).toBe(true);
-        expect(
-          query.mock.calls.some(([sql]) =>
-            String(sql).includes('UPDATE dispatches'),
+    expect(
+      query.mock.calls.some(([, values]) =>
+        (values as unknown[])?.includes(
+          'supplier_pickup_cancel_requires_coordinator',
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      query.mock.calls.some(
+        ([sql, values]) =>
+          String(sql).includes('INSERT INTO dispatch_events') &&
+          (values as unknown[])?.includes('change_requires_attention'),
+      ),
+    ).toBe(true);
+    expect(
+      query.mock.calls.some(([sql]) =>
+        String(sql).includes('UPDATE dispatches'),
       ),
     ).toBe(false);
   });
+
+  it('preserves a scheduled pickup when an update changes only estimates', async () => {
+    const query = vi
+      .fn()
+      .mockResolvedValueOnce([scheduledPickup()])
+      .mockResolvedValue([]);
+    const repository = new ProcurementPickupRepository();
+
+    const outcome = await repository.applyUpdated(
+      {
+        purchaseOrderId: 'PO-1',
+        recordVersion: 2,
+        updatedAt: '2026-10-12T16:00:00Z',
+        estimates: { weightKg: 24 },
+      },
+      { manager: { query } as unknown as EntityManager },
+    );
+
+    expect(outcome).toBeNull();
+    const update = query.mock.calls.find(([sql]) =>
+      String(sql).startsWith('UPDATE dispatches SET'),
+    );
+    expect(update?.[0]).not.toContain('dispatch_status_id =');
+    expect(update?.[1]).toEqual([null, 24, null, 42]);
+    expect(
+      query.mock.calls.some(([sql]) =>
+        String(sql).includes('change_requires_attention'),
+      ),
+    ).toBe(false);
+  });
+
+  it('alerts and leaves a scheduled pickup unchanged when an update removes its destination warehouse', async () => {
+    const query = vi
+      .fn()
+      .mockResolvedValueOnce([scheduledPickup()])
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([]);
+    const repository = new ProcurementPickupRepository();
+
+    const outcome = await repository.applyUpdated(
+      {
+        purchaseOrderId: 'PO-1',
+        recordVersion: 2,
+        updatedAt: '2026-10-12T16:00:00Z',
+        warehouseId: 'WH-MISSING',
+      },
+      { manager: { query } as unknown as EntityManager },
+    );
+
+    expect(outcome).toMatchObject({
+      status: 'attention_required',
+      dispatchId: 42,
+      event: { changeType: 'order_changed' },
+    });
+    expect(
+      query.mock.calls.some(([sql]) =>
+        String(sql).startsWith('UPDATE dispatches SET'),
+      ),
+    ).toBe(false);
+    expect(
+      query.mock.calls.some(
+        ([sql, values]) =>
+          String(sql).includes('INSERT INTO dispatch_events') &&
+          (values as unknown[]).includes('change_requires_attention'),
+      ),
+    ).toBe(true);
+  });
 });
+
+function scheduledPickup() {
+  return {
+    dispatch_id: 42,
+    status: 'scheduled',
+    delivery_address: 'Planta Norte, Calle 5',
+    delivery_reference: 'Portón azul',
+    delivery_latitude: -16.5,
+    delivery_longitude: -68.1,
+    scheduled_window_start: new Date('2026-10-13T13:00:00Z'),
+    scheduled_window_end: new Date('2026-10-13T18:00:00Z'),
+    destination_warehouse_id: 9,
+  };
+}

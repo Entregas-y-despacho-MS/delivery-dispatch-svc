@@ -12,9 +12,22 @@ interface DispatchRow {
   dispatch_id: number;
   status: string;
   delivery_address: string;
+  delivery_reference: string | null;
+  delivery_latitude: number | string | null;
+  delivery_longitude: number | string | null;
   scheduled_window_start: Date | null;
   scheduled_window_end: Date | null;
   destination_warehouse_id: number | null;
+}
+
+interface PickupPlan {
+  address: string | null;
+  reference: string | null;
+  latitude: number | string | null;
+  longitude: number | string | null;
+  startsAt: Date | string | null;
+  endsAt: Date | string | null;
+  destinationWarehouseId: number | null;
 }
 
 interface WarehouseRow {
@@ -57,7 +70,34 @@ export class ProcurementPickupRepository {
       endsAt: data.pickupWindow?.endsAt,
       destinationWarehouseId,
     });
-    const status = missingFields.length > 0 ? 'address_review' : 'pending';
+    const requestedPlan: PickupPlan = {
+      address: data.pickupAddress?.line ?? null,
+      reference: data.pickupAddress?.reference ?? null,
+      latitude: data.pickupAddress?.location?.latitude ?? null,
+      longitude: data.pickupAddress?.location?.longitude ?? null,
+      startsAt: data.pickupWindow?.startsAt ?? null,
+      endsAt: data.pickupWindow?.endsAt ?? null,
+      destinationWarehouseId,
+    };
+    if (
+      current?.status === 'scheduled' &&
+      this.pickupPlanChanged(current, requestedPlan)
+    ) {
+      return await this.alertCoordinator(
+        'supplier_pickup_update_requires_coordinator',
+        data.purchaseOrderId,
+        current,
+        'order_changed',
+        data.updatedAt,
+        options,
+      );
+    }
+    const status =
+      current?.status === 'scheduled'
+        ? current.status
+        : missingFields.length > 0
+          ? 'address_review'
+          : 'pending';
     const address = data.pickupAddress?.line ?? ADDRESS_REVIEW_PLACEHOLDER;
     const values = [
       status,
@@ -76,7 +116,9 @@ export class ProcurementPickupRepository {
       data.estimates?.packages ?? null,
       data.estimates?.weightKg ?? null,
       data.estimates?.volumeM3 ?? null,
-      data.transportConditions ? JSON.stringify(data.transportConditions) : null,
+      data.transportConditions
+        ? JSON.stringify(data.transportConditions)
+        : null,
     ];
 
     let dispatchId: number;
@@ -203,11 +245,50 @@ export class ProcurementPickupRepository {
       endsAt,
       destinationWarehouseId,
     });
-    const status = missingFields.length > 0 ? 'address_review' : 'pending';
-    values.push(status, current.dispatch_id);
-    sets.push(
-      `dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $${values.length - 1})`,
-    );
+    const updatedPlan: PickupPlan = {
+      address: data.pickupAddress?.line ?? current.delivery_address,
+      reference:
+        data.pickupAddress === undefined
+          ? current.delivery_reference
+          : (data.pickupAddress.reference ?? null),
+      latitude:
+        data.pickupAddress === undefined
+          ? current.delivery_latitude
+          : (data.pickupAddress.location?.latitude ?? null),
+      longitude:
+        data.pickupAddress === undefined
+          ? current.delivery_longitude
+          : (data.pickupAddress.location?.longitude ?? null),
+      startsAt: data.pickupWindow?.startsAt ?? current.scheduled_window_start,
+      endsAt: data.pickupWindow?.endsAt ?? current.scheduled_window_end,
+      destinationWarehouseId,
+    };
+    if (
+      current.status === 'scheduled' &&
+      this.pickupPlanChanged(current, updatedPlan)
+    ) {
+      return await this.alertCoordinator(
+        'supplier_pickup_update_requires_coordinator',
+        data.purchaseOrderId,
+        current,
+        'order_changed',
+        data.updatedAt,
+        options,
+      );
+    }
+
+    const requiredPickupFieldsChanged =
+      data.pickupAddress !== undefined ||
+      data.pickupWindow !== undefined ||
+      data.warehouseId !== undefined;
+    if (current.status !== 'scheduled' && requiredPickupFieldsChanged) {
+      const status = missingFields.length > 0 ? 'address_review' : 'pending';
+      values.push(status);
+      sets.push(
+        `dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $${values.length})`,
+      );
+    }
+    values.push(current.dispatch_id);
     sets.push('updated_at = NOW()');
     await manager.query(
       `UPDATE dispatches SET ${sets.join(', ')} WHERE dispatch_id = $${values.length}`,
@@ -286,6 +367,7 @@ export class ProcurementPickupRepository {
   ): Promise<DispatchRow | null> {
     const [row] = (await this.manager(options).query(
       `SELECT d.dispatch_id, s.name AS status, d.delivery_address,
+                    d.delivery_reference, d.delivery_latitude, d.delivery_longitude,
                     d.scheduled_window_start, d.scheduled_window_end, d.destination_warehouse_id
              FROM dispatches d
              JOIN dispatch_types t ON t.dispatch_type_id = d.dispatch_type_id
@@ -345,6 +427,21 @@ export class ProcurementPickupRepository {
     if (!input.startsAt || !input.endsAt) missing.push('pickupWindow');
     if (input.destinationWarehouseId === null) missing.push('warehouseId');
     return missing;
+  }
+
+  private pickupPlanChanged(
+    current: DispatchRow,
+    proposed: PickupPlan,
+  ): boolean {
+    return (
+      current.delivery_address !== proposed.address ||
+      current.delivery_reference !== proposed.reference ||
+      !sameNumber(current.delivery_latitude, proposed.latitude) ||
+      !sameNumber(current.delivery_longitude, proposed.longitude) ||
+      !sameInstant(current.scheduled_window_start, proposed.startsAt) ||
+      !sameInstant(current.scheduled_window_end, proposed.endsAt) ||
+      current.destination_warehouse_id !== proposed.destinationWarehouseId
+    );
   }
 
   private isEditable(status: string): status is EditableStatus {
@@ -434,4 +531,20 @@ export class ProcurementPickupRepository {
       );
     return options.manager;
   }
+}
+
+function sameNumber(
+  left: number | string | null,
+  right: number | string | null,
+): boolean {
+  if (left === null || right === null) return left === right;
+  return Number(left) === Number(right);
+}
+
+function sameInstant(
+  left: Date | string | null,
+  right: Date | string | null,
+): boolean {
+  if (left === null || right === null) return left === right;
+  return new Date(left).getTime() === new Date(right).getTime();
 }
