@@ -4,11 +4,11 @@ import { In, Repository } from 'typeorm';
 import { Dispatch } from '../entities/dispatch.entity.js';
 import { DispatchStatus } from '../../dispatch-statuses/entities/dispatch-status.entity.js';
 import { DispatchNotFoundException } from '../exceptions/index.js';
-import { DriverAssignmentDto } from '../dto/driver-assignment.dto.js';
+import { AssignmentPackageDto, DriverAssignmentDto } from '../dto/driver-assignment.dto.js';
 import { DriverAssignmentsResponseDto } from '../dto/driver-assignments-response.dto.js';
 import { DtoRepository } from '../../../../shared/orm/index.js';
 import { MutationOptions } from '../../../../shared/dto/options.dto.js';
-import { DispatchStatusEnum } from '../../../../shared/enums/index.js';
+import { DispatchStatusEnum, RouteBatchStatusEnum } from '../../../../shared/enums/index.js';
 
 // Terminal statuses for dispatch workflows; cancelled orders also leave planning permanently.
 export const FINAL_STATUSES: string[] = [DispatchStatusEnum.DELIVERED, DispatchStatusEnum.RETURNED, DispatchStatusEnum.CANCELLED];
@@ -16,6 +16,10 @@ export const FINAL_STATUSES: string[] = [DispatchStatusEnum.DELIVERED, DispatchS
 // RF-A31 defines an active dispatch narrowly as pending or in transit for service-level checks.
 // Other non-terminal planning states do not change that existing rule.
 const ACTIVE_STATUSES = [DispatchStatusEnum.PENDING, DispatchStatusEnum.IN_TRANSIT];
+
+// Batches the driver may see: confirmed by the coordinator or already being executed. Provisional
+// and pending-final-review batches are internal planning work (ST-49.5).
+const DRIVER_VISIBLE_BATCH_STATUSES = [RouteBatchStatusEnum.CONFIRMED, RouteBatchStatusEnum.IN_EXECUTION];
 
 // Generic, direct operations only — no business logic. Orchestration (idempotency, ordering,
 // transactions across modules) lives in app/sync, not here.
@@ -34,13 +38,21 @@ export class DispatchesService {
      * The driver's stops for a shift date (RF-U02): every dispatch of the route batch assigned to
      * them that day, in visit order (stops without a number go last). Closed stops are included —
      * the app shows the day's progress. A driver without a route gets an empty list, never an error.
+     * Only batches the coordinator already confirmed (`confirmed`, `in_execution`) are returned: the
+     * driver never sees a provisional or still-under-review batch (ST-49.5).
      * `lastModifiedAt` is the newest `updatedAt` among the stops, so the app can tell the route changed.
      */
     async findDriverAssignments(driverId: number, shiftDate: string): Promise<DriverAssignmentsResponseDto> {
-        const data = await this.repo.find<DriverAssignmentDto>({
+        const rows = await this.repo.find<DriverAssignmentDto>({
             dto: DriverAssignmentDto,
-            where: { routeBatch: { driverId, shiftDate } },
-            order: { sequenceOrder: { direction: 'ASC', nulls: 'LAST' }, id: 'ASC' },
+            where: { routeBatch: { driverId, shiftDate, status: In(DRIVER_VISIBLE_BATCH_STATUSES) } },
+            order: { sequenceOrder: { direction: 'ASC', nulls: 'LAST' }, id: 'ASC', packages: { id: 'ASC' } },
+        });
+        // The package entity key is `id`; the API publishes it as `packageId`.
+        const data = rows.map((stop) => {
+            const packageRows = stop.packages as unknown as (Omit<AssignmentPackageDto, 'packageId'> & { id: number })[];
+            stop.packages = packageRows.map(({ id, ...pkg }) => ({ packageId: id, ...pkg }));
+            return stop;
         });
         const lastModifiedAt = data.reduce<Date | null>((latest, stop) => (latest === null || stop.updatedAt > latest ? stop.updatedAt : latest), null);
         return { date: shiftDate, lastModifiedAt, data };
