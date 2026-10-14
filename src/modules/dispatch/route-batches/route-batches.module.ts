@@ -10,9 +10,14 @@ import { RouteBatchVehicleService } from './services/route-batch-vehicle.service
 
 // Reviewer assignment (ST-50.4, D-42). The batch planner (ST-50.2) calls RouteBatchReviewerService.assignReviewer.
 @Module({
-    imports:   [TypeOrmModule.forFeature([RouteBatch, RouteBatchEvent])],
-    controllers: [RouteBatchesController],
-    providers: [RouteBatchReviewerService, RouteBatchReviewerListener, RouteCapacityService, RouteBatchVehicleService],
-    exports:   [RouteBatchReviewerService],
+  imports: [TypeOrmModule.forFeature([RouteBatch, RouteBatchEvent])],
+  controllers: [RouteBatchesController],
+  providers: [
+    RouteBatchReviewerService,
+    RouteBatchReviewerListener,
+    RouteCapacityService,
+    RouteBatchVehicleService,
+  ],
+  exports: [RouteBatchReviewerService],
 })
 export class RouteBatchesModule {}
