@@ -110,6 +110,10 @@ export const envValidation = Joi.object({
 
     // -- Plugin: osrm -------------------------------------------------------------
     OSRM_URL: Joi.string().uri().default('http://localhost:5001'),
+    // Must not exceed the instance's --max-table-size (default 100, measured 2026-10-14). Bigger matrices are split.
+    OSRM_TABLE_MAX_COORDINATES: Joi.number().integer().min(2).default(100),
+    // A request that takes longer is aborted and answered as 503 OSRM_UNAVAILABLE.
+    OSRM_TIMEOUT_MS: Joi.number().integer().min(100).default(5000),
 
     // -- Rate limiting (@nestjs/throttler) ---------------------------------------
     THROTTLE_TTL_MS: Joi.number().default(60000),
