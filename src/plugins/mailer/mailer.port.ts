@@ -16,7 +16,14 @@ export interface MailOptions {
     }[];
 }
 
+export type MailDeliveryStatus = 'sent' | 'bounced' | 'failed';
+
+export interface MailDeliveryResult {
+    status: MailDeliveryStatus;
+    error?: string;
+}
+
 // Abstract class (not interface) so NestJS DI can use it as a runtime token.
 export abstract class MailerPort {
-    abstract send(options: MailOptions): void;
+    abstract send(options: MailOptions): Promise<MailDeliveryResult>;
 }
