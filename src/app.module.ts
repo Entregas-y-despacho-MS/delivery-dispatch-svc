@@ -26,6 +26,7 @@ import { StorageModule } from './plugins/storage/storage.module.js';
 import { PushModule } from './plugins/push/push.module.js';
 import { OsrmModule } from './plugins/osrm/osrm.module.js';
 import { PendingOrdersModule } from './modules/dispatch/pending-orders/pending-orders.module.js';
+import { PickupSchedulingModule } from './modules/dispatch/pickup-scheduling/pickup-scheduling.module.js';
 import { RouteBatchesModule } from './modules/dispatch/route-batches/route-batches.module.js';
 import { DispatchReservationsModule } from './modules/dispatch/dispatch-reservations/dispatch-reservations.module.js';
 import { CacheModule } from './plugins/cache/cache.module.js';
@@ -77,6 +78,7 @@ import { PlanningModule } from './app/planning/planning.module.js';
     PendingOrdersModule,
     RouteBatchesModule,
     DispatchReservationsModule,
+    PickupSchedulingModule,
   ],
   providers: [
     // Rejects NUL characters in body/query/params (Postgres cannot store them: it was a 500).
