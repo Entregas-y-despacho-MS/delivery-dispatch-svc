@@ -3,12 +3,12 @@ import { ArrayNotEmpty, IsArray, IsInt, IsOptional, IsPositive, Min, ValidateNes
 import { Type } from 'class-transformer';
 
 export class ExpectedDispatchVersionDto {
-    @ApiProperty({ example: 42 })
+    @ApiProperty({ example: 42, description: 'ID of a dispatch currently included in the route batch.' })
     @IsInt()
     @IsPositive()
     dispatchId!: number;
 
-    @ApiProperty({ example: 3 })
+    @ApiProperty({ example: 3, description: 'Current dispatch version used to detect changes before approval.' })
     @IsInt()
     @Min(0)
     version!: number;
@@ -20,7 +20,11 @@ export class ApproveRouteBatchPromisesDto {
     @Min(0)
     version!: number;
 
-    @ApiProperty({ type: [ExpectedDispatchVersionDto], minItems: 1 })
+    @ApiProperty({
+        type: [ExpectedDispatchVersionDto],
+        minItems: 1,
+        description: 'Expected version of every dispatch in the batch; approval fails if the set or a version changed.',
+    })
     @IsArray()
     @ArrayNotEmpty()
     @ValidateNested({ each: true })

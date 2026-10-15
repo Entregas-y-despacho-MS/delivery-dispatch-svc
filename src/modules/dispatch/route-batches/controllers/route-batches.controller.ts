@@ -1,4 +1,4 @@
-import { Body, Controller, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Param, Patch, Post } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOkResponse,
@@ -44,6 +44,7 @@ export class RouteBatchesController {
   ) {}
 
   @Post(':id/approve-promises')
+  @HttpCode(HttpStatus.OK)
   @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
   @ApiOperation({
     summary: 'Approve promises in a provisional route batch',

@@ -113,10 +113,6 @@ export class RouteBatchPromiseApprovalService {
             if (dispatch.status !== DispatchStatusEnum.IN_PLANNING) {
                 throw new RouteBatchApprovalConflictException('DISPATCH_VERSION_CONFLICT', `Dispatch ${dispatch.id} is no longer in planning.`);
             }
-            if (dispatch.promise_notified_at && dispatch.scheduled_window_start && dispatch.scheduled_window_end) {
-                // Previously notified promises are frozen; this operation never accepts replacement windows.
-                continue;
-            }
         }
         for (const dispatch of removed) await this.removeDispatch(manager, routeBatchId, dispatch, actorUserId);
         await this.capacity.assertAssignable(routeBatchId, batch.vehicle_id, manager);
