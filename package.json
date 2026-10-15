@@ -24,7 +24,10 @@
     "migration:generate": "npm run typeorm -- migration:generate",
     "migration:run": "npm run typeorm -- migration:run",
     "migration:revert": "npm run typeorm -- migration:revert",
-    "seed": "tsx src/database/seeds/seed.ts"
+    "seed": "tsx src/database/seeds/seed.ts",
+    "simulate:marketplace": "tsx scripts/simulator/simulate.ts marketplace",
+    "simulate:inventory": "tsx scripts/simulator/simulate.ts inventory",
+    "simulate:procurement": "tsx scripts/simulator/simulate.ts procurement"
   },
   "dependencies": {
     "@google-cloud/pubsub": "^6.2.0",
