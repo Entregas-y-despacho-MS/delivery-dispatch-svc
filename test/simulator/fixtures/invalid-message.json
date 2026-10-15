@@ -1,0 +1,39 @@
+{
+  "scenario": "invalid-message",
+  "script": "marketplace",
+  "description": "Mensaje inválido por campo faltante: la confirmación llega sin `recipient`.",
+  "expected": "El mensaje se publica en marketplace.sales_order.confirmed.dead-letter (reasonCode schema_invalid), queda alerta en audit_logs y no se crea despacho.",
+  "anchor": "2026-10-14T12:00:00Z",
+  "steps": [
+    {
+      "label": "Marketplace confirma el pedido sin destinatario",
+      "expectInvalid": true,
+      "message": {
+        "messageId": "01930000-0000-7000-8000-000000000017",
+        "type": "marketplace.sales_order.confirmed",
+        "schemaVersion": 1,
+        "source": "marketplace",
+        "occurredAt": "2026-10-14T12:00:00Z",
+        "data": {
+          "salesOrderId": "SO-SIM-0007",
+          "recordVersion": 1,
+          "updatedAt": "2026-10-14T12:00:00Z",
+          "confirmedAt": "2026-10-14T11:59:00Z",
+          "deliveryAddress": {
+            "line": "Av. Arce 2345, Edificio Los Pinos, piso 4",
+            "reference": "Frente a la farmacia, portón negro",
+            "location": {
+              "latitude": -16.5115,
+              "longitude": -68.1223
+            }
+          },
+          "preferences": {
+            "contactless": false,
+            "notes": "Tocar el timbre 4B"
+          },
+          "priority": "normal"
+        }
+      }
+    }
+  ]
+}

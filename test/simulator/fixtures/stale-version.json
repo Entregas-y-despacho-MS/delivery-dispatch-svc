@@ -1,0 +1,120 @@
+{
+  "scenario": "stale-version",
+  "script": "marketplace",
+  "description": "recordVersion antiguo: llega un cambio de dirección con una versión menor a la ya aplicada.",
+  "expected": "El cambio con la versión 2 se ignora; la dirección vigente es la de la versión 3.",
+  "anchor": "2026-10-14T12:00:00Z",
+  "steps": [
+    {
+      "label": "Marketplace confirma el pedido (v1)",
+      "message": {
+        "messageId": "01930000-0000-7000-8000-000000000007",
+        "type": "marketplace.sales_order.confirmed",
+        "schemaVersion": 1,
+        "source": "marketplace",
+        "occurredAt": "2026-10-14T12:00:00Z",
+        "data": {
+          "salesOrderId": "SO-SIM-0004",
+          "recordVersion": 1,
+          "updatedAt": "2026-10-14T12:00:00Z",
+          "confirmedAt": "2026-10-14T11:59:00Z",
+          "recipient": {
+            "name": "María Fernández Quispe",
+            "phone": "+59171234567",
+            "email": "maria.fernandez@example.com"
+          },
+          "deliveryAddress": {
+            "line": "Av. Arce 2345, Edificio Los Pinos, piso 4",
+            "reference": "Frente a la farmacia, portón negro",
+            "location": {
+              "latitude": -16.5115,
+              "longitude": -68.1223
+            }
+          },
+          "preferences": {
+            "contactless": false,
+            "notes": "Tocar el timbre 4B"
+          },
+          "priority": "normal"
+        }
+      }
+    },
+    {
+      "label": "Almacén informa los bultos empacados",
+      "message": {
+        "messageId": "01930000-0000-7000-8000-000000000008",
+        "type": "inventory.shipment.ready",
+        "schemaVersion": 1,
+        "source": "inventory",
+        "occurredAt": "2026-10-14T12:05:00Z",
+        "data": {
+          "salesOrderId": "SO-SIM-0004",
+          "recordVersion": 1,
+          "updatedAt": "2026-10-14T12:04:00Z",
+          "warehouseId": "WH-LPZ-01",
+          "availableFrom": "2026-10-14T12:35:00Z",
+          "packages": [
+            {
+              "packageId": "PKG-SO-SIM-0004-1",
+              "lengthCm": 40,
+              "widthCm": 30,
+              "heightCm": 25,
+              "grossWeightKg": 6.4
+            }
+          ],
+          "handlingConditions": [
+            "FRAGILE"
+          ],
+          "evidencePolicy": "hand_delivery_standard",
+          "physicallyPacked": true
+        }
+      }
+    },
+    {
+      "label": "Marketplace cambia la dirección (v3)",
+      "message": {
+        "messageId": "01930000-0000-7000-8000-000000000009",
+        "type": "marketplace.sales_order.updated",
+        "schemaVersion": 1,
+        "source": "marketplace",
+        "occurredAt": "2026-10-14T12:20:00Z",
+        "data": {
+          "salesOrderId": "SO-SIM-0004",
+          "recordVersion": 3,
+          "updatedAt": "2026-10-14T12:20:00Z",
+          "deliveryAddress": {
+            "line": "Calle 21 de Calacoto 8790, casa 12",
+            "reference": "Condominio Las Palmas, segunda garita",
+            "location": {
+              "latitude": -16.5421,
+              "longitude": -68.0802
+            }
+          }
+        }
+      }
+    },
+    {
+      "label": "Llega tarde el cambio de dirección anterior (v2)",
+      "message": {
+        "messageId": "01930000-0000-7000-8000-000000000010",
+        "type": "marketplace.sales_order.updated",
+        "schemaVersion": 1,
+        "source": "marketplace",
+        "occurredAt": "2026-10-14T12:25:00Z",
+        "data": {
+          "salesOrderId": "SO-SIM-0004",
+          "recordVersion": 2,
+          "updatedAt": "2026-10-14T12:25:00Z",
+          "deliveryAddress": {
+            "line": "Av. Busch 1500, zona Miraflores",
+            "reference": "Esquina con farmacia",
+            "location": {
+              "latitude": -16.5033,
+              "longitude": -68.1212
+            }
+          }
+        }
+      }
+    }
+  ]
+}
