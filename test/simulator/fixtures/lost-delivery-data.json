@@ -1,0 +1,75 @@
+{
+  "scenario": "lost-delivery-data",
+  "script": "marketplace",
+  "description": "Mensaje perdido: los bultos de Almacén llegan pero la confirmación de Marketplace se «pierde».",
+  "expected": "El pedido queda incompleto. Cuando ST-50.5 emite dispatch.sync.requested (entityType sales_order), el simulador publica la confirmación completa y se crea el despacho pending.",
+  "anchor": "2026-10-14T12:00:00Z",
+  "steps": [
+    {
+      "label": "Almacén informa los bultos empacados",
+      "message": {
+        "messageId": "01930000-0000-7000-8000-000000000018",
+        "type": "inventory.shipment.ready",
+        "schemaVersion": 1,
+        "source": "inventory",
+        "occurredAt": "2026-10-14T12:05:00Z",
+        "data": {
+          "salesOrderId": "SO-SIM-0008",
+          "recordVersion": 1,
+          "updatedAt": "2026-10-14T12:04:00Z",
+          "warehouseId": "WH-LPZ-01",
+          "availableFrom": "2026-10-14T12:35:00Z",
+          "packages": [
+            {
+              "packageId": "PKG-SO-SIM-0008-1",
+              "lengthCm": 40,
+              "widthCm": 30,
+              "heightCm": 25,
+              "grossWeightKg": 6.4
+            }
+          ],
+          "handlingConditions": [
+            "FRAGILE"
+          ],
+          "evidencePolicy": "hand_delivery_standard",
+          "physicallyPacked": true
+        }
+      }
+    },
+    {
+      "label": "Marketplace responde a la solicitud con el registro completo",
+      "respondsTo": "sales_order",
+      "message": {
+        "messageId": "01930000-0000-7000-8000-000000000019",
+        "type": "marketplace.sales_order.confirmed",
+        "schemaVersion": 1,
+        "source": "marketplace",
+        "occurredAt": "2026-10-14T12:00:00Z",
+        "data": {
+          "salesOrderId": "SO-SIM-0008",
+          "recordVersion": 1,
+          "updatedAt": "2026-10-14T12:00:00Z",
+          "confirmedAt": "2026-10-14T11:59:00Z",
+          "recipient": {
+            "name": "María Fernández Quispe",
+            "phone": "+59171234567",
+            "email": "maria.fernandez@example.com"
+          },
+          "deliveryAddress": {
+            "line": "Av. Arce 2345, Edificio Los Pinos, piso 4",
+            "reference": "Frente a la farmacia, portón negro",
+            "location": {
+              "latitude": -16.5115,
+              "longitude": -68.1223
+            }
+          },
+          "preferences": {
+            "contactless": false,
+            "notes": "Tocar el timbre 4B"
+          },
+          "priority": "normal"
+        }
+      }
+    }
+  ]
+}

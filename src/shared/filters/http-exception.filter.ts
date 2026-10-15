@@ -32,10 +32,17 @@ export class HttpExceptionFilter implements ExceptionFilter {
             this.logger.error(`[${request.method}] ${request.url} → ${status}${suffix}`, exception.stack);
         }
 
+        // Optional structured detail a domain exception wants the client to read (e.g. the
+        // `missingKeys` of PLANNING_SETTINGS_MISSING); only forwarded on 4xx, never on 5xx.
+        const details = status < HttpStatus.INTERNAL_SERVER_ERROR && typeof body === 'object'
+            ? (body as any).details
+            : undefined;
+
         response.status(status).json({
             statusCode: status,
             error:      errorCode,
             message,
+            ...(details === undefined ? {} : { details }),
             path:       request.url,
             timestamp:  new Date().toISOString(),
         });

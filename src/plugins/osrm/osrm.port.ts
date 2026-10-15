@@ -23,9 +23,30 @@ export interface RouteResult {
     durationSeconds: number;
 }
 
+export interface DurationMatrix {
+    /**
+     * durations[i][j] = seconds to drive from coordinates[i] to coordinates[j]; `null` when OSRM
+     * finds no route between the pair. Always square: coordinates.length × coordinates.length.
+     */
+    durations: (number | null)[][];
+}
+
 // Contract for the routing engine — independent of the underlying server.
 // Consumers inject OsrmPort, never the concrete adapter.
 export abstract class OsrmPort {
+    /**
+     * Most coordinates one `table` request may carry (OSRM `--max-table-size`). The adapter splits
+     * bigger matrices by itself; this is exposed so a planner can size what it asks for.
+     */
+    abstract readonly tableMaxCoordinates: number;
+
+    /**
+     * Full driving-time matrix between all the coordinates (OSRM `table`, annotations=duration).
+     * Splits into blocks when there are more coordinates than `tableMaxCoordinates`.
+     * Throws OsrmUnavailableException (503) when OSRM does not answer in time.
+     */
+    abstract getDurationMatrix(coordinates: Coordinate[]): Promise<DurationMatrix>;
+
     /**
      * Optimal visiting order for a set of stops, starting from coordinates[0] (the depot/driver).
      * Used once per route_batches, not on every GPS ping — see plugins/osrm/CLAUDE.md-equivalent notes.

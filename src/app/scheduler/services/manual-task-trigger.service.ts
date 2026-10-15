@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { HttpException, Injectable } from '@nestjs/common';
 import { TaskRunResultDto } from '../dto/task-run-result.dto.js';
 import {
     ScheduledTaskAlreadyRunningException,
@@ -28,8 +28,16 @@ export class ManualTaskTriggerService {
         const outcome = await this.runner.run(task, { trigger: 'manual', occurrence: null });
 
         if (outcome.status === 'skipped-locked') throw new ScheduledTaskAlreadyRunningException();
-        if (outcome.status === 'failed') throw new ScheduledTaskFailedException();
+        if (outcome.status === 'failed') {
+            // A domain error the task chose to raise (422 settings missing, 503 OSRM down) reaches the
+            // caller as it is; anything else is an unexpected failure.
+            if (outcome.cause instanceof HttpException) throw outcome.cause;
+            throw new ScheduledTaskFailedException();
+        }
 
-        return { task: taskName, status: 'executed', finishedAt: new Date() };
+        const summary = outcome.status === 'executed' && outcome.result && typeof outcome.result === 'object'
+            ? (outcome.result as Record<string, unknown>)
+            : undefined;
+        return { task: taskName, status: 'executed', finishedAt: new Date(), ...(summary ? { summary: summary as unknown as TaskRunResultDto['summary'] } : {}) };
     }
 }

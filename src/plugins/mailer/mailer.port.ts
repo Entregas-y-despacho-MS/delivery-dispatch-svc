@@ -9,6 +9,7 @@ export interface MailOptions {
     /** Only available with the SMTP adapter (Handlebars templates). */
     template?:    string;
     context?:     Record<string, any>;
+    /** Optional business identifiers for transports that support delivery metadata. */
     metadata?:    Record<string, unknown>;
     attachments?: {
         filename:     string;

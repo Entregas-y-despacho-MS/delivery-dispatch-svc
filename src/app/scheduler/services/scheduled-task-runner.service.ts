@@ -5,13 +5,13 @@ import { TaskRunLog } from '../ports/task-run-log.port.js';
 
 export type TaskRunOutcome =
     /** The task ran to the end on this instance. */
-    | { status: 'executed' }
+    | { status: 'executed'; result?: unknown }
     /** Another instance is running it right now. */
     | { status: 'skipped-locked' }
     /** Another instance already ran this very occurrence (clock skew between instances). */
     | { status: 'skipped-already-ran' }
     /** The task threw. The lock was released and nothing was recorded, so the occurrence can be retried. */
-    | { status: 'failed'; error: string };
+    | { status: 'failed'; error: string; cause?: unknown };
 
 export interface TaskRunRequest {
     trigger: TaskTrigger;
@@ -44,9 +44,9 @@ export class ScheduledTaskRunner {
                 }
 
                 const startedAt = new Date();
-                await task.run({ trigger: request.trigger, occurrence: request.occurrence, startedAt });
+                const result = await task.run({ trigger: request.trigger, occurrence: request.occurrence, startedAt });
                 await this.record(task, request, startedAt);
-                return { status: 'executed' };
+                return { status: 'executed', result };
             });
 
             if (!result.acquired) {
@@ -60,7 +60,7 @@ export class ScheduledTaskRunner {
         } catch (error) {
             const detail = error instanceof Error ? error.message : String(error);
             this.logger.error(`Task "${task.name}" failed: ${detail}`, error instanceof Error ? error.stack : undefined);
-            return { status: 'failed', error: detail };
+            return { status: 'failed', error: detail, cause: error };
         }
     }
 
