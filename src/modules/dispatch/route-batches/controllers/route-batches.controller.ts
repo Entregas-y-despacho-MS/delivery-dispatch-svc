@@ -14,6 +14,9 @@ import { RouteBatchVehicleService } from '../services/route-batch-vehicle.servic
 import { RouteBatchPromiseApprovalService } from '../services/route-batch-promise-approval.service.js';
 import { ApproveRouteBatchPromisesDto } from '../dto/approve-route-batch-promises.dto.js';
 import { ApproveRouteBatchPromisesResponseDto } from '../dto/approve-route-batch-promises-response.dto.js';
+import { ApproveFinalRouteBatchDto } from '../dto/approve-final-route-batch.dto.js';
+import { ApproveFinalRouteBatchResponseDto } from '../dto/approve-final-route-batch-response.dto.js';
+import { RouteBatchFinalApprovalService } from '../services/route-batch-final-approval.service.js';
 import { Roles } from '../../../../app/auth/decorators/index.js';
 import { CurrentUser } from '../../../../shared/decorators/current-user.decorator.js';
 import { ParseIdPipe } from '../../../../shared/pipes/index.js';
@@ -41,6 +44,7 @@ export class RouteBatchesController {
     private readonly reviewerService: RouteBatchReviewerService,
     private readonly vehicleService: RouteBatchVehicleService,
     private readonly promiseApprovalService: RouteBatchPromiseApprovalService,
+    private readonly finalApprovalService: RouteBatchFinalApprovalService,
   ) {}
 
   @Post(':id/approve-promises')
@@ -73,6 +77,42 @@ export class RouteBatchesController {
     @CurrentUser('id') actorUserId: number,
   ): Promise<ApproveRouteBatchPromisesResponseDto> {
     return await this.promiseApprovalService.approve(id, dto, actorUserId);
+  }
+
+  @Post(':id/approve-final')
+  @HttpCode(HttpStatus.OK)
+  @Roles(RoleEnum.COORDINATOR)
+  @ApiOperation({
+    summary: 'Approve a validated route batch for final assignment',
+    description: 'Atomically confirms a pending-final-review batch, assigns its proposed active driver and active vehicle, and moves every scheduled delivery dispatch to assigned. The request must include the current planning version of the batch and every dispatch. Approval rechecks complete destinations, registered packages, promised windows, vehicle capacity and resource availability. After commit it emits route.assigned for the dispatch board, assigned driver and push-notification listener.',
+  })
+  @ApiIdParam('Route batch')
+  @ApiOkResponse({ type: ApproveFinalRouteBatchResponseDto })
+  @ApiBadRequests({ validation: true, id: true, example: ['version must not be less than 0.'] })
+  @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+  @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'An active coordinator is required to approve a final route batch.' })
+  @ApiNotFound({ code: 'ROUTE_BATCH_NOT_FOUND', message: 'Route batch not found.' })
+  @ApiConflict(
+    { code: 'ROUTE_BATCH_VERSION_CONFLICT', message: 'The route batch changed. Reload it before approving.' },
+    { code: 'DISPATCH_VERSION_CONFLICT', message: 'One or more dispatches changed. Reload the route batch.' },
+    { code: 'ROUTE_BATCH_NOT_PENDING_FINAL_REVIEW', message: 'Only a validated batch pending final review can be approved.' },
+    { code: 'ROUTE_BATCH_DRIVER_REQUIRED', message: 'Assign a proposed driver before final approval.' },
+    { code: 'ROUTE_BATCH_DRIVER_NOT_AVAILABLE', message: 'The proposed driver is inactive or already assigned that day.' },
+    { code: 'ROUTE_BATCH_VEHICLE_REQUIRED', message: 'Assign a vehicle before final approval.' },
+    { code: 'ROUTE_BATCH_VEHICLE_NOT_ACTIVE', message: 'The assigned vehicle must be active.' },
+    { code: 'ROUTE_BATCH_RESOURCE_CONFLICT', message: 'The assigned vehicle is unavailable for this date.' },
+    { code: 'ROUTE_CAPACITY_EXCEEDED', message: 'The route exceeds vehicle capacity.' },
+    { code: 'DISPATCH_NOT_READY_FOR_FINAL_APPROVAL', message: 'A dispatch has an incomplete destination, invalid promise window or unsupported pickup type.' },
+    { code: 'DISPATCH_PACKAGES_REQUIRED', message: 'Every dispatch must have registered packages.' },
+    { code: 'DISPATCH_ORDER_IN_MULTIPLE_BATCHES', message: 'An order already belongs to another active batch.' },
+    { code: 'ROUTE_BATCH_HAS_NO_APPROVALS', message: 'The route batch has no dispatches to assign.' },
+  )
+  async approveFinal(
+    @Param('id', ParseIdPipe) id: number,
+    @Body() dto: ApproveFinalRouteBatchDto,
+    @CurrentUser('id') actorUserId: number,
+  ): Promise<ApproveFinalRouteBatchResponseDto> {
+    return await this.finalApprovalService.approve(id, dto, actorUserId);
   }
 
   @Patch(':id/vehicle')
