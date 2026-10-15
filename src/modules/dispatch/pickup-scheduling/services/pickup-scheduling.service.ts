@@ -2,27 +2,37 @@ import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { buildEnvelope } from '../../../../plugins/messaging/envelope/message-envelope.js';
+import { generateMessageId } from '../../../../plugins/messaging/envelope/uuid-v7.js';
 import { OutboxService } from '../../../messaging/outbound-messages/services/outbox.service.js';
 import { SettingsService } from '../../../settings/services/settings.service.js';
 import { VehicleNotFoundException } from '../../../fleet/vehicles/exceptions/index.js';
+import { IncidentReasonNotFoundException } from '../../../catalog/incident-reasons/exceptions/index.js';
+import { RescheduleReasonNotFoundException } from '../../../catalog/reschedule-reasons/exceptions/index.js';
 import { DispatchNotFoundException } from '../../dispatches/exceptions/index.js';
 import { DispatchEvent } from '../../dispatch-events/entities/dispatch-event.entity.js';
 import { DispatchStatusEnum } from '../../../../shared/enums/index.js';
 import { checkPickupCapacity } from '../domain/pickup-capacity.js';
 import { nextPickupRecordVersion } from '../domain/pickup-record-version.js';
-import { intersectPickupWindows, isWithinAnySlot, type TimeRange } from '../domain/pickup-window.js';
+import {
+    intersectPickupWindows,
+    isWithinAnySlot,
+    isWithinRescheduleLimit,
+    type TimeRange,
+} from '../domain/pickup-window.js';
 import {
     DispatchNotSchedulableException,
     PickupCapacityExceededException,
+    PickupRescheduleOutOfRangeException,
     PickupWindowNotAvailableException,
     PickupWindowsDoNotIntersectException,
     SupplierPickupIncompleteException,
 } from '../exceptions/index.js';
-import type { PickupScheduleDto } from '../dto/pickup-schedule.dto.js';
+import type { PickupRescheduleDto, PickupScheduleDto } from '../dto/pickup-schedule.dto.js';
 
 export const PICKUP_SCHEDULED_EVENT = 'pickup_scheduled';
 export const PICKUP_RESCHEDULED_EVENT = 'pickup_rescheduled';
 export const PICKUP_SCHEDULED_TOPIC = 'dispatch.pickup.scheduled';
+export const INCIDENT_REPORTED_TOPIC = 'dispatch.transfer.incident_reported';
 const SUPPLIER_PICKUP_TYPE = 'supplier_pickup';
 
 export interface SchedulePickupInput {
@@ -30,6 +40,16 @@ export interface SchedulePickupInput {
     vehicleId: number;
     /** Slot to agree; when omitted, the earliest slot still ahead is taken. */
     window?: TimeRange;
+}
+
+export interface ReschedulePickupInput {
+    /** Catalog reason of the incident (the supplier did not have the load ready). */
+    incidentReasonId: number;
+    /** Catalog reason of the reprogramming. */
+    rescheduleReasonId: number;
+    /** New slot to agree; it must fall inside the warehouse reception hours. */
+    window: TimeRange;
+    description?: string | null;
 }
 
 interface PickupRow {
@@ -133,6 +153,154 @@ export class PickupSchedulingService {
         });
     }
 
+    /**
+     * Reschedules a scheduled pickup because the supplier did not have the load ready (ERP-04, Escenario 2).
+     * One transaction: records the incident and the `dispatch_reschedules` row (coordinator), moves the
+     * agreed slot, and queues `dispatch.transfer.incident_reported` plus a new `dispatch.pickup.scheduled`,
+     * both with the next `recordVersion`. The dispatch stays `scheduled` (D-47).
+     * The new slot must fall inside the warehouse reception hours and start within `reschedule_window_days`
+     * (ES-57) after the current one.
+     */
+    async reschedule(
+        dispatchId: number,
+        input: ReschedulePickupInput,
+        actorUserId: number,
+        now: Date = new Date(),
+    ): Promise<PickupRescheduleDto> {
+        return await this.dataSource.transaction(async (manager) => {
+            const row = await this.lockPickup(manager, dispatchId);
+            if (row.type !== SUPPLIER_PICKUP_TYPE) {
+                throw new DispatchNotSchedulableException(
+                    `Only supplier pickups can be rescheduled (this dispatch is ${row.type}).`,
+                );
+            }
+            if (row.status !== DispatchStatusEnum.SCHEDULED || row.scheduled_window_start === null || row.scheduled_window_end === null) {
+                throw new DispatchNotSchedulableException(
+                    `A supplier pickup can only be rescheduled while it is scheduled (current status: ${row.status}).`,
+                );
+            }
+
+            const incidentReason = await this.findActiveReason(manager, 'incident_reasons', 'incident_reason_id', input.incidentReasonId);
+            if (!incidentReason) throw new IncidentReasonNotFoundException();
+            const rescheduleReason = await this.findActiveReason(manager, 'reschedule_reasons', 'reschedule_reason_id', input.rescheduleReasonId);
+            if (!rescheduleReason) throw new RescheduleReasonNotFoundException();
+
+            const { window } = input;
+            const reception = await this.receptionHours(row);
+            const slots = intersectPickupWindows(window, reception);
+            const insideReception =
+                slots.length === 1 &&
+                slots[0].startsAt.getTime() === window.startsAt.getTime() &&
+                slots[0].endsAt.getTime() === window.endsAt.getTime();
+            if (!insideReception || window.startsAt.getTime() < now.getTime()) throw new PickupWindowNotAvailableException();
+
+            const maxDays = await this.settings.getNumber('reschedule_window_days', 2);
+            const previous = { startsAt: new Date(row.scheduled_window_start), endsAt: new Date(row.scheduled_window_end) };
+            if (!isWithinRescheduleLimit(previous.startsAt, window.startsAt, maxDays)) {
+                throw new PickupRescheduleOutOfRangeException(maxDays);
+            }
+
+            const recordVersion = await this.nextRecordVersion(manager, dispatchId);
+            const incidentId = generateMessageId();
+            await manager.query(
+                `INSERT INTO dispatch_incidents (dispatch_incident_id, dispatch_id, incident_reason_id, description)
+                 VALUES ($1, $2, $3, $4)`,
+                [incidentId, dispatchId, input.incidentReasonId, input.description ?? null],
+            );
+            await manager.query(
+                `INSERT INTO dispatch_reschedules (
+                        dispatch_id, reschedule_reason_id, rescheduled_by, rescheduled_by_type,
+                        previous_window_start, previous_window_end, new_window_start, new_window_end)
+                 VALUES ($1, $2, $3, 'coordinator', $4, $5, $6, $7)`,
+                [dispatchId, input.rescheduleReasonId, actorUserId, previous.startsAt, previous.endsAt, window.startsAt, window.endsAt],
+            );
+            const [updated]: { tracking_code: string }[] = await manager.query(
+                `UPDATE dispatches
+                    SET scheduled_window_start = $1,
+                        scheduled_window_end = $2,
+                        tracking_code = COALESCE(tracking_code, next_tracking_code()),
+                        updated_at = NOW()
+                  WHERE dispatch_id = $3
+              RETURNING tracking_code`,
+                [window.startsAt, window.endsAt, dispatchId],
+            );
+
+            const pickupWindow = { startsAt: window.startsAt.toISOString(), endsAt: window.endsAt.toISOString() };
+            const previousWindow = { startsAt: previous.startsAt.toISOString(), endsAt: previous.endsAt.toISOString() };
+            const events = manager.getRepository(DispatchEvent);
+            await events.save(events.create({
+                dispatchId,
+                eventType: PICKUP_RESCHEDULED_EVENT,
+                detail:    `Pickup rescheduled from ${previousWindow.startsAt} to ${pickupWindow.startsAt}: supplier unavailable.`,
+                actorUserId,
+                actorType: 'user',
+                reason:    input.description ?? null,
+                metadata:  {
+                    recordVersion,
+                    purchaseOrderId: row.source_order_ref,
+                    incidentId,
+                    incidentReasonId: input.incidentReasonId,
+                    rescheduleReasonId: input.rescheduleReasonId,
+                    previousWindow,
+                    pickupWindow,
+                },
+            }));
+
+            const occurredAt = new Date();
+            const base = {
+                purchaseOrderId: row.source_order_ref,
+                trackingCode: updated.tracking_code,
+                recordVersion,
+                updatedAt: occurredAt.toISOString(),
+            };
+            await this.outbox.enqueue(
+                buildEnvelope({
+                    type: INCIDENT_REPORTED_TOPIC,
+                    source: 'dispatch',
+                    occurredAt,
+                    data: {
+                        ...base,
+                        incidentId,
+                        reasonCode: incidentReason.code,
+                        reportedAt: occurredAt.toISOString(),
+                        nextStep: 'reschedule',
+                        rescheduledWindow: pickupWindow,
+                    },
+                }),
+                { manager },
+            );
+            await this.publishPickupScheduled(manager, {
+                purchaseOrderId: row.source_order_ref,
+                trackingCode: updated.tracking_code,
+                recordVersion,
+                pickupWindow,
+            });
+
+            return {
+                id: dispatchId,
+                status: DispatchStatusEnum.SCHEDULED,
+                trackingCode: updated.tracking_code,
+                recordVersion,
+                incidentId,
+                pickupWindow,
+                previousWindow,
+            };
+        });
+    }
+
+    private async findActiveReason(
+        manager: EntityManager,
+        table: 'incident_reasons' | 'reschedule_reasons',
+        idColumn: 'incident_reason_id' | 'reschedule_reason_id',
+        id: number,
+    ): Promise<{ code: string } | null> {
+        const [reason]: { code: string }[] = await manager.query(
+            `SELECT code FROM ${table} WHERE ${idColumn} = $1 AND active = TRUE AND deleted_at IS NULL`,
+            [id],
+        );
+        return reason ?? null;
+    }
+
     /** Locks the dispatch and joins what the checks need; 404 if it does not exist. */
     protected async lockPickup(manager: EntityManager, dispatchId: number): Promise<PickupRow> {
         const [row]: PickupRow[] = await manager.query(
@@ -181,13 +349,18 @@ export class PickupSchedulingService {
 
     /** Supplier window ∩ warehouse reception hours (general delivery window when the catalog has none), still ahead of `now`. */
     protected async availableSlots(row: PickupRow, supplier: TimeRange, now: Date): Promise<TimeRange[]> {
-        const reception = {
-            start: row.reception_start_time ?? (await this.settings.getString('delivery_window_start', '08:00')),
-            end: row.reception_end_time ?? (await this.settings.getString('delivery_window_end', '20:00')),
-        };
+        const reception = await this.receptionHours(row);
         return intersectPickupWindows(supplier, reception)
             .filter((slot) => slot.endsAt.getTime() > now.getTime())
             .map((slot) => (slot.startsAt.getTime() < now.getTime() ? { startsAt: now, endsAt: slot.endsAt } : slot));
+    }
+
+    /** Daily reception hours of the destination warehouse; the general delivery window of ES-57 when the catalog has none. */
+    private async receptionHours(row: PickupRow): Promise<{ start: string; end: string }> {
+        return {
+            start: row.reception_start_time ?? (await this.settings.getString('delivery_window_start', '08:00')),
+            end: row.reception_end_time ?? (await this.settings.getString('delivery_window_end', '20:00')),
+        };
     }
 
     private async assertCapacity(manager: EntityManager, row: PickupRow, vehicleId: number): Promise<void> {

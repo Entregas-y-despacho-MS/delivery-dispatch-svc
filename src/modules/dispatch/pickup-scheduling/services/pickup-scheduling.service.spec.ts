@@ -6,6 +6,7 @@ import { PickupSchedulingService } from './pickup-scheduling.service.js';
 import {
     DispatchNotSchedulableException,
     PickupCapacityExceededException,
+    PickupRescheduleOutOfRangeException,
     PickupWindowNotAvailableException,
     PickupWindowsDoNotIntersectException,
     SupplierPickupIncompleteException,
@@ -36,9 +37,20 @@ interface Setup {
     row?: Record<string, unknown> | null;
     vehicle?: { capacity_kg: string; capacity_m3: string } | null;
     previousVersions?: number[];
+    incidentReason?: { code: string } | null;
+    rescheduleReason?: { code: string } | null;
+    rescheduleDays?: number;
 }
 
-function build({ row = pickupRow(), vehicle = { capacity_kg: '1000', capacity_m3: '8' }, previousVersions = [] }: Setup = {}) {
+function build({
+    row = pickupRow(),
+    vehicle = { capacity_kg: '1000', capacity_m3: '8' },
+    previousVersions = [],
+    incidentReason = { code: 'INC-COMP-FAILURE' },
+    rescheduleReason = { code: 'RES-OPS-SUPPLIER' },
+    rescheduleDays = 2,
+}: Setup = {}) {
+    const inserts: { table: string; params: unknown[] }[] = [];
     const saved: Record<string, unknown>[] = [];
     const updates: unknown[][] = [];
     const manager = {
@@ -46,6 +58,16 @@ function build({ row = pickupRow(), vehicle = { capacity_kg: '1000', capacity_m3
             if (sql.includes('FOR UPDATE OF d')) return row ? [row] : [];
             if (sql.includes('FROM vehicles')) return vehicle ? [vehicle] : [];
             if (sql.includes('FROM dispatch_events')) return previousVersions.map((v) => ({ version: String(v) }));
+            if (sql.includes('FROM incident_reasons')) return incidentReason ? [incidentReason] : [];
+            if (sql.includes('FROM reschedule_reasons')) return rescheduleReason ? [rescheduleReason] : [];
+            if (sql.includes('INSERT INTO dispatch_incidents')) {
+                inserts.push({ table: 'incidents', params });
+                return [];
+            }
+            if (sql.includes('INSERT INTO dispatch_reschedules')) {
+                inserts.push({ table: 'reschedules', params });
+                return [];
+            }
             if (sql.includes('UPDATE dispatches')) {
                 updates.push(params);
                 return [{ tracking_code: 'DSP-2026-00051' }];
@@ -61,10 +83,13 @@ function build({ row = pickupRow(), vehicle = { capacity_kg: '1000', capacity_m3
         })),
     };
     const dataSource = { transaction: async (cb: (m: unknown) => unknown) => await cb(manager) };
-    const settings = { getString: vi.fn(async (_key: string, fallback: string) => fallback) };
+    const settings = {
+        getString: vi.fn(async (_key: string, fallback: string) => fallback),
+        getNumber: vi.fn(async () => rescheduleDays),
+    };
     const outbox = { enqueue: vi.fn(async () => true) };
     const service = new PickupSchedulingService(dataSource as never, settings as never, outbox as never);
-    return { service, manager, saved, updates, outbox, settings };
+    return { service, manager, saved, updates, outbox, settings, inserts };
 }
 
 describe('PickupSchedulingService.schedule', () => {
@@ -250,5 +275,127 @@ describe('PickupSchedulingService.schedule', () => {
 
         const updateSql = (manager.query.mock.calls.find(([sql]) => String(sql).includes('UPDATE dispatches')) ?? [''])[0];
         expect(updateSql).toContain('COALESCE(tracking_code, next_tracking_code())');
+    });
+});
+
+describe('PickupSchedulingService.reschedule', () => {
+    // Currently agreed: 2026-10-20 13:00Z-16:00Z. Reception 12:00Z-16:00Z (08:00-12:00 local).
+    const scheduledRow = (overrides: Record<string, unknown> = {}) =>
+        pickupRow({
+            status: 'scheduled',
+            tracking_code: 'DSP-2026-00051',
+            scheduled_window_start: new Date('2026-10-20T13:00:00Z'),
+            scheduled_window_end: new Date('2026-10-20T16:00:00Z'),
+            ...overrides,
+        });
+    const input = {
+        incidentReasonId: 4,
+        rescheduleReasonId: 6,
+        window: { startsAt: new Date('2026-10-21T13:00:00Z'), endsAt: new Date('2026-10-21T15:00:00Z') },
+        description: 'Supplier had no load ready',
+    };
+    // Both messages go to the outbox in this order: incident first, then the new schedule.
+    const queued = (outbox: { enqueue: { mock: { calls: unknown[][] } } }) =>
+        outbox.enqueue.mock.calls.map((call) => call[0] as { type: string; data: Record<string, unknown> });
+
+    it('records the incident and the reschedule, moves the slot and publishes both messages with the same new version', async () => {
+        const { service, inserts, updates, saved, outbox } = build({ row: scheduledRow(), previousVersions: [1] });
+
+        const result = await service.reschedule(7, input, 9, NOW);
+
+        expect(result).toMatchObject({
+            id: 7,
+            status: 'scheduled',
+            trackingCode: 'DSP-2026-00051',
+            recordVersion: 2,
+            pickupWindow: { startsAt: '2026-10-21T13:00:00.000Z', endsAt: '2026-10-21T15:00:00.000Z' },
+            previousWindow: { startsAt: '2026-10-20T13:00:00.000Z', endsAt: '2026-10-20T16:00:00.000Z' },
+        });
+        expect(result.incidentId).toMatch(/^[0-9a-f-]{36}$/);
+
+        const incident = inserts.find((i) => i.table === 'incidents');
+        expect(incident?.params).toEqual([result.incidentId, 7, 4, 'Supplier had no load ready']);
+        const reschedule = inserts.find((i) => i.table === 'reschedules');
+        expect(reschedule?.params).toEqual([
+            7,
+            6,
+            9,
+            new Date('2026-10-20T13:00:00.000Z'),
+            new Date('2026-10-20T16:00:00.000Z'),
+            new Date('2026-10-21T13:00:00.000Z'),
+            new Date('2026-10-21T15:00:00.000Z'),
+        ]);
+        expect(updates[0]).toEqual([new Date('2026-10-21T13:00:00.000Z'), new Date('2026-10-21T15:00:00.000Z'), 7]);
+        expect(saved[0]).toMatchObject({ eventType: 'pickup_rescheduled', metadata: { recordVersion: 2 } });
+
+        const [incidentMsg, scheduledMsg] = queued(outbox);
+        expect(incidentMsg.type).toBe('dispatch.transfer.incident_reported');
+        expect(incidentMsg.data).toMatchObject({
+            purchaseOrderId: 'PO-2026-000087',
+            trackingCode: 'DSP-2026-00051',
+            incidentId: result.incidentId,
+            reasonCode: 'INC-COMP-FAILURE',
+            nextStep: 'reschedule',
+            recordVersion: 2,
+            rescheduledWindow: { startsAt: '2026-10-21T13:00:00.000Z', endsAt: '2026-10-21T15:00:00.000Z' },
+        });
+        expect(scheduledMsg.type).toBe('dispatch.pickup.scheduled');
+        expect(scheduledMsg.data).toMatchObject({ recordVersion: 2, purchaseOrderId: 'PO-2026-000087' });
+    });
+
+    it('publishes messages that comply with their contracts', async () => {
+        const { service, outbox } = build({ row: scheduledRow(), previousVersions: [1] });
+        await service.reschedule(7, input, 9, NOW);
+
+        const validator = MessageValidator.fromDirectory(resolve(process.cwd(), 'contracts/messages'));
+        for (const envelope of queued(outbox)) {
+            expect(validator.validate(envelope.type, envelope)).toMatchObject({ valid: true });
+        }
+    });
+
+    it('rejects a dispatch that is not scheduled, or is not a supplier pickup', async () => {
+        const pending = build({ row: scheduledRow({ status: 'pending' }) });
+        await expect(pending.service.reschedule(7, input, 9, NOW)).rejects.toBeInstanceOf(DispatchNotSchedulableException);
+        const delivery = build({ row: scheduledRow({ type: 'delivery' }) });
+        await expect(delivery.service.reschedule(7, input, 9, NOW)).rejects.toBeInstanceOf(DispatchNotSchedulableException);
+    });
+
+    it('rejects a new slot outside the warehouse reception hours', async () => {
+        const { service, inserts, outbox } = build({ row: scheduledRow() });
+        const late = { startsAt: new Date('2026-10-21T17:00:00Z'), endsAt: new Date('2026-10-21T18:00:00Z') };
+
+        await expect(service.reschedule(7, { ...input, window: late }, 9, NOW)).rejects.toBeInstanceOf(
+            PickupWindowNotAvailableException,
+        );
+        expect(inserts).toHaveLength(0);
+        expect(outbox.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('rejects a new slot that is in the past or does not start after the current one', async () => {
+        const first = build({ row: scheduledRow() });
+        const same = { startsAt: new Date('2026-10-20T13:00:00Z'), endsAt: new Date('2026-10-20T14:00:00Z') };
+        await expect(first.service.reschedule(7, { ...input, window: same }, 9, NOW)).rejects.toBeInstanceOf(
+            PickupRescheduleOutOfRangeException,
+        );
+        const past = build({ row: scheduledRow() });
+        await expect(past.service.reschedule(7, input, 9, new Date('2026-10-22T00:00:00Z'))).rejects.toBeInstanceOf(
+            PickupWindowNotAvailableException,
+        );
+    });
+
+    it('rejects a new slot beyond reschedule_window_days of ES-57', async () => {
+        const { service } = build({ row: scheduledRow(), rescheduleDays: 1 });
+        const far = { startsAt: new Date('2026-10-23T13:00:00Z'), endsAt: new Date('2026-10-23T14:00:00Z') };
+
+        await expect(service.reschedule(7, { ...input, window: far }, 9, NOW)).rejects.toBeInstanceOf(
+            PickupRescheduleOutOfRangeException,
+        );
+    });
+
+    it('answers 404 when the incident or reschedule reason does not exist or is inactive', async () => {
+        const noIncident = build({ row: scheduledRow(), incidentReason: null });
+        await expect(noIncident.service.reschedule(7, input, 9, NOW)).rejects.toBeInstanceOf(NotFoundException);
+        const noReason = build({ row: scheduledRow(), rescheduleReason: null });
+        await expect(noReason.service.reschedule(7, input, 9, NOW)).rejects.toBeInstanceOf(NotFoundException);
     });
 });

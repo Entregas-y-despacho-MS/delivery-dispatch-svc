@@ -24,3 +24,11 @@ export class PickupScheduleDto {
     @ApiProperty({ type: () => PickupWindowDto, description: 'Date and time slot agreed for the pickup, the one published to Compras' })
     pickupWindow!: PickupWindowDto;
 }
+
+export class PickupRescheduleDto extends PickupScheduleDto {
+    @ApiProperty({ type: String, format: 'uuid', example: '0192fcf6-0000-7000-8000-000000000001', description: 'Id (UUID v7) of the incident recorded for the supplier unavailability; the same id is published in `dispatch.transfer.incident_reported`' })
+    incidentId!: string;
+
+    @ApiProperty({ type: () => PickupWindowDto, description: 'Slot the pickup had before it was rescheduled' })
+    previousWindow!: PickupWindowDto;
+}
