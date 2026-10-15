@@ -18,13 +18,16 @@ const basePackages = [
     { external_package_id: 'PKG-000123-1', length_cm: '40.00', width_cm: '30.00', height_cm: '25.00', gross_weight_kg: '6.400' },
 ];
 
-function setup(options?: { row?: Partial<typeof baseRow> | null; packages?: unknown[]; updated?: unknown[]; windowMinutes?: number }) {
+function setup(options?: {
+    row?: Partial<typeof baseRow> | null; packages?: unknown[]; updated?: unknown[]; windowMinutes?: number; lastSentVersion?: number;
+}) {
     const row = options?.row === null ? null : { ...baseRow, ...options?.row };
     const queued: any[] = [];
     const manager = {
         query: vi.fn(async (sql: string) => {
             if (sql.includes('FROM dispatches d')) return row ? [row] : [];
             if (sql.includes('FROM dispatch_packages')) return options?.packages ?? basePackages;
+            if (sql.includes('FROM dispatch_events')) return [{ last_version: String(options?.lastSentVersion ?? 0) }];
             if (sql.includes('UPDATE dispatches')) return options?.updated ?? [{ dispatch_id: 21 }];
             return [];
         }),
@@ -201,5 +204,50 @@ describe('PromiseFirmingService', () => {
 
         expect(second.queued[0].data.recordVersion).toBeGreaterThan(first.queued[0].data.recordVersion);
         expect(second.queued[0].messageId).not.toBe(first.queued[0].messageId);
+    });
+});
+
+describe('PromiseFirmingService.reissue (customer rescheduling, D-47)', () => {
+    const firm = { promise_firmed_at: WINDOW_END, customer_confirmation: 'confirmed' };
+
+    it('sends a new order with the higher version and leaves the firmness and the clock untouched', async () => {
+        const { service, manager, queued } = setup({ row: { ...firm, version: 4 }, lastSentVersion: 3 });
+
+        const result = await service.reissue(21, { now: WINDOW_END });
+
+        expect(result).toEqual({ outcome: 'reissued', dispatchId: 21, recordVersion: 4 });
+        expect(queued).toHaveLength(1);
+        expect(queued[0].data.recordVersion).toBe(4);
+        const sqls = manager.query.mock.calls.map(([sql]) => String(sql));
+        expect(sqls.some((sql) => sql.includes('UPDATE dispatches'))).toBe(false);
+        const event = manager.query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO dispatch_events'))!;
+        expect(String(event[0])).toContain('preparation_order_reissued');
+        expect(JSON.parse(event[1][2])).toEqual({ recordVersion: 4 });
+    });
+
+    it('refuses a version that does not exceed the last order sent (it would not replace it)', async () => {
+        const { service, queued } = setup({ row: { ...firm, version: 3 }, lastSentVersion: 3 });
+
+        const result = await service.reissue(21, { now: WINDOW_END });
+
+        expect(result).toEqual({ outcome: 'not_eligible', dispatchId: 21, cause: 'version_not_increased' });
+        expect(queued).toHaveLength(0);
+    });
+
+    it('refuses a promise that was never firmed', async () => {
+        const { service, queued } = setup({ row: { version: 4 } });
+
+        const result = await service.reissue(21, { now: WINDOW_END });
+
+        expect(result).toEqual({ outcome: 'not_eligible', dispatchId: 21, cause: 'promise_not_firm' });
+        expect(queued).toHaveLength(0);
+    });
+
+    it('joins the transaction in which the caller bumped the version', async () => {
+        const { service, manager, dataSource } = setup({ row: { ...firm, version: 5 }, lastSentVersion: 4 });
+
+        await service.reissue(21, { now: WINDOW_END, manager: { query: manager.query } as never });
+
+        expect(dataSource.transaction).not.toHaveBeenCalled();
     });
 });

@@ -48,6 +48,12 @@ export interface FirmPromiseOptions {
     manager?: EntityManager;
 }
 
+export interface ReissueOrderOptions {
+    now?: Date;
+    /** The transaction in which the caller moved the dispatch and bumped `version`. */
+    manager?: EntityManager;
+}
+
 /**
  * Firms the promise of one dispatch and asks the warehouse to prepare it (ST-215.4, D-05, D-47).
  *
@@ -56,9 +62,10 @@ export interface FirmPromiseOptions {
  * only if the promise was firmed. The `UPDATE ... WHERE promise_firmed_at IS NULL` is the single-emission
  * guard: two instances, or the timer racing the customer, can never queue it twice.
  *
- * The task of the 12 h window uses it with `window_elapsed`; the public confirmation endpoint (ST-N3.1)
- * uses it with `customer_confirmed`. It does NOT touch `dispatches.version`: confirming or staying silent
- * does not move the plan (DICTIONARY, `version`); `recordVersion` is that version as it stands.
+ * The task of the 12 h window uses `firm` with `window_elapsed`; the public confirmation endpoint (ST-N3.1)
+ * uses it with `customer_confirmed`, and its rescheduling calls `reissue` after bumping `version`.
+ * `firm` does NOT touch `dispatches.version`: confirming or staying silent does not move the plan
+ * (DICTIONARY, `version`); `recordVersion` is that version as it stands.
  */
 @Injectable()
 export class PromiseFirmingService {
@@ -79,6 +86,19 @@ export class PromiseFirmingService {
         );
     }
 
+    /**
+     * Sends a NEW preparation order for a promise that is already firm, with the dispatch's current
+     * `version` (D-47). The caller (the customer's rescheduling, ST-N3.1) moves the dispatch and bumps
+     * `version` first, in the same transaction (pass `manager`); this only emits. The order replaces the
+     * previous one at the warehouse because its `recordVersion` is higher, and one that is not higher is
+     * refused. Does not touch `promise_firmed_at` nor `promise_notified_at` (the clock never restarts).
+     */
+    async reissue(dispatchId: number, options: ReissueOrderOptions = {}): Promise<PromiseFirmingResult> {
+        const now = options.now ?? new Date();
+        if (options.manager) return await this.reissueIn(options.manager, dispatchId, now);
+        return await this.dataSource.transaction(async (manager) => await this.reissueIn(manager, dispatchId, now));
+    }
+
     private async firmIn(
         manager: EntityManager,
         dispatchId: number,
@@ -86,19 +106,7 @@ export class PromiseFirmingService {
         now: Date,
         windowMinutes: number,
     ): Promise<PromiseFirmingResult> {
-        const [row]: FirmingRow[] = await manager.query(
-            `SELECT d.dispatch_id AS id, ds.name AS status, d.version, d.source_order_ref, d.tracking_code,
-                    d.promise_notified_at, d.promise_firmed_at, d.customer_confirmation,
-                    d.scheduled_window_start, d.scheduled_window_end,
-                    to_char(rb.shift_date, 'YYYY-MM-DD') AS departure_date, w.code AS warehouse_code
-               FROM dispatches d
-               JOIN dispatch_statuses ds ON ds.dispatch_status_id = d.dispatch_status_id
-               LEFT JOIN route_batches rb ON rb.route_batch_id = d.route_batch_id
-               LEFT JOIN warehouses w ON w.warehouse_id = d.origin_warehouse_id
-              WHERE d.dispatch_id = $1
-                FOR UPDATE OF d`,
-            [dispatchId],
-        );
+        const row = await this.loadRow(manager, dispatchId);
         if (!row) return { outcome: 'not_eligible', dispatchId, cause: 'not_found' };
         if (row.promise_firmed_at) return { outcome: 'already_firmed', dispatchId };
 
@@ -112,11 +120,7 @@ export class PromiseFirmingService {
             this.logger.warn(`Dispatch ${dispatchId} has version ${row.version}; the preparation order was not emitted.`);
             return { outcome: 'incomplete', dispatchId, cause: 'invalid_version' };
         }
-        const packages: PackageRow[] = await manager.query(
-            `SELECT external_package_id, length_cm, width_cm, height_cm, gross_weight_kg
-               FROM dispatch_packages WHERE dispatch_id = $1 ORDER BY dispatch_package_id`,
-            [dispatchId],
-        );
+        const packages = await this.loadPackages(manager, dispatchId);
         const missing = this.missingData(row, packages);
         if (missing) {
             this.logger.warn(`Dispatch ${dispatchId} cannot be firmed: ${missing}.`);
@@ -144,7 +148,69 @@ export class PromiseFirmingService {
                 JSON.stringify({ reason, recordVersion: row.version, windowMinutes }),
             ],
         );
+        await this.enqueueOrder(manager, row, packages, now);
+        return { outcome: 'firmed', dispatchId, recordVersion: row.version, reason };
+    }
 
+    private async reissueIn(manager: EntityManager, dispatchId: number, now: Date): Promise<PromiseFirmingResult> {
+        const row = await this.loadRow(manager, dispatchId);
+        if (!row) return { outcome: 'not_eligible', dispatchId, cause: 'not_found' };
+        if (!row.promise_firmed_at) return { outcome: 'not_eligible', dispatchId, cause: 'promise_not_firm' };
+        if (!FIRMABLE_STATUSES.includes(row.status)) return { outcome: 'not_eligible', dispatchId, cause: 'status' };
+        if (row.version < 1) return { outcome: 'incomplete', dispatchId, cause: 'invalid_version' };
+
+        const [last]: { last_version: number | string }[] = await manager.query(
+            `SELECT COALESCE(MAX((metadata->>'recordVersion')::int), 0) AS last_version
+               FROM dispatch_events
+              WHERE dispatch_id = $1 AND event_type IN ('promise_firmed', 'preparation_order_reissued')`,
+            [dispatchId],
+        );
+        if (row.version <= Number(last?.last_version ?? 0)) {
+            return { outcome: 'not_eligible', dispatchId, cause: 'version_not_increased' };
+        }
+        const packages = await this.loadPackages(manager, dispatchId);
+        const missing = this.missingData(row, packages);
+        if (missing) return { outcome: 'incomplete', dispatchId, cause: missing };
+
+        await manager.query(
+            `INSERT INTO dispatch_events (dispatch_id, event_type, actor_type, reason, metadata)
+             VALUES ($1, 'preparation_order_reissued', 'customer', $2, $3::jsonb)`,
+            [
+                dispatchId,
+                'Customer rescheduled; a new preparation order replaces the previous one',
+                JSON.stringify({ recordVersion: row.version }),
+            ],
+        );
+        await this.enqueueOrder(manager, row, packages, now);
+        return { outcome: 'reissued', dispatchId, recordVersion: row.version };
+    }
+
+    private async loadRow(manager: EntityManager, dispatchId: number): Promise<FirmingRow | undefined> {
+        const [row]: FirmingRow[] = await manager.query(
+            `SELECT d.dispatch_id AS id, ds.name AS status, d.version, d.source_order_ref, d.tracking_code,
+                    d.promise_notified_at, d.promise_firmed_at, d.customer_confirmation,
+                    d.scheduled_window_start, d.scheduled_window_end,
+                    to_char(rb.shift_date, 'YYYY-MM-DD') AS departure_date, w.code AS warehouse_code
+               FROM dispatches d
+               JOIN dispatch_statuses ds ON ds.dispatch_status_id = d.dispatch_status_id
+               LEFT JOIN route_batches rb ON rb.route_batch_id = d.route_batch_id
+               LEFT JOIN warehouses w ON w.warehouse_id = d.origin_warehouse_id
+              WHERE d.dispatch_id = $1
+                FOR UPDATE OF d`,
+            [dispatchId],
+        );
+        return row;
+    }
+
+    private async loadPackages(manager: EntityManager, dispatchId: number): Promise<PackageRow[]> {
+        return await manager.query(
+            `SELECT external_package_id, length_cm, width_cm, height_cm, gross_weight_kg
+               FROM dispatch_packages WHERE dispatch_id = $1 ORDER BY dispatch_package_id`,
+            [dispatchId],
+        );
+    }
+
+    private async enqueueOrder(manager: EntityManager, row: FirmingRow, packages: PackageRow[], now: Date): Promise<void> {
         await this.outbox.enqueue(
             buildEnvelope({
                 type: PREPARE_REQUESTED_TOPIC,
@@ -170,7 +236,6 @@ export class PromiseFirmingService {
             }),
             { manager },
         );
-        return { outcome: 'firmed', dispatchId, recordVersion: row.version, reason };
     }
 
     private notEligibleCause(row: FirmingRow, reason: PromiseFirmingReason, now: Date, windowMinutes: number): string | null {
