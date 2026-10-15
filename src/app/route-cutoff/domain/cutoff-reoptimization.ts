@@ -11,13 +11,12 @@
  * without promise are released (`pending`). Nothing here writes; the proposal is applied by the writer.
  */
 import { sequenceByInsertion } from '../../planning/domain/insertion.js';
-import { minutesOfDay } from '../../planning/domain/operating-calendar.js';
 import type { PlanVehicle } from '../../planning/domain/plan-types.js';
 import type { SimParams, SimStop } from '../../planning/domain/route-simulation.js';
-import { buildTimeSlots } from '../../planning/domain/time-slots.js';
 import { bySmallestVehicle, fitsVehicle, smallestFittingVehicle } from '../../planning/domain/vehicle-selection.js';
 import { toLocalMoment } from '../../scheduler/domain/task-schedule.js';
 import { partitionStops } from './cutoff-eligibility.js';
+import { buildSimParams } from './cutoff-sim-params.js';
 import type {
     CutoffBatch,
     CutoffBatchPlan,
@@ -91,7 +90,6 @@ function fits(stops: CutoffStop[], vehicle: PlanVehicle): boolean {
 export function reoptimizeCutoff(input: CutoffInput): CutoffPlan {
     const { settings } = input;
     const windowMinutes = settings.promiseRules.promiseResponseWindowMinutes;
-    const slots = buildTimeSlots(settings.morningWindow, settings.afternoonWindow, settings.slotDurationMinutes);
     const fleet = new Map(input.fleet.map((vehicle) => [vehicle.vehicleId, vehicle]));
 
     // Free vehicles: active, not held by a batch outside the cutoff and not by a batch being processed.
@@ -135,14 +133,7 @@ export function reoptimizeCutoff(input: CutoffInput): CutoffPlan {
 
     for (const batches of groups.values()) {
         const [first] = batches;
-        const params: SimParams = {
-            slots,
-            routeStartMinute: minutesOfDay(settings.morningWindow.start),
-            routeEndMinute: minutesOfDay(settings.afternoonWindow.end),
-            serviceMinutes: settings.stopServiceMinutes,
-            marginPct: settings.planningMarginPct,
-            travelSeconds: input.travelFor(first.warehouseId),
-        };
+        const params: SimParams = buildSimParams(settings, input.travelFor(first.warehouseId, first.zoneId));
 
         const works: Work[] = [];
         for (const batch of batches) {

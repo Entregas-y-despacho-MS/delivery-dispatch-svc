@@ -23,7 +23,11 @@ export type PlanAlertKind =
     | 'no_driver_available'
     | 'holidays_not_configured'
     | 'lot_split_by_table_limit'
-    | 'zone_deleted';
+    | 'zone_deleted'
+    | 'cutoff_window_open'
+    | 'cutoff_batch_failed'
+    | 'cutoff_group_stale'
+    | 'cutoff_batch_skipped';
 
 export interface PlanningAlertEvent {
     kind: PlanAlertKind;
@@ -45,6 +49,10 @@ const SEVERITY: Record<PlanAlertKind, PlanAlertSeverity> = {
     holidays_not_configured: 'warning',
     lot_split_by_table_limit: 'warning',
     zone_deleted: 'warning',
+    cutoff_window_open: 'exception',
+    cutoff_batch_failed: 'exception',
+    cutoff_group_stale: 'warning',
+    cutoff_batch_skipped: 'warning',
 };
 
 /**

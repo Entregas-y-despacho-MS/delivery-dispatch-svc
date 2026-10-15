@@ -46,8 +46,8 @@ export interface CutoffInput {
     occupiedVehicleIds: number[];
     /** Most stops one batch may have: the `table` limit of OSRM minus the depot. */
     maxStopsPerBatch: number;
-    /** Driving time in seconds between dispatch ids (`null` is the depot of that warehouse). */
-    travelFor: (warehouseId: number) => TravelSeconds;
+    /** Driving time in seconds between dispatch ids of one zone and warehouse (`null` is the depot). */
+    travelFor: (warehouseId: number, zoneId: number) => TravelSeconds;
 }
 
 /** Why a stop enters the cutoff or stays out of it. */
