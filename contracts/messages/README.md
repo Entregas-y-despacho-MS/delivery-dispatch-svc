@@ -1,6 +1,6 @@
 # Contratos de mensajes (Pub/Sub)
 
-JSON Schemas y ejemplos de los mensajes que Despachos intercambia con el ERP (Marketplace, Inventarios y Compras) sobre Google Cloud Pub/Sub. La fuente de verdad del catálogo es `docs/delivery-dispatch-docs/interoperabilidad-y-flujos.md`, sección 1.4.
+JSON Schemas y ejemplos de los mensajes que Despachos intercambia con el ERP (Marketplace, Inventarios y Compras) sobre Google Cloud Pub/Sub. La fuente de verdad del catálogo es `../delivery-dispatch-docs/interoperabilidad-y-flujos.md`, sección 1.4.
 
 ## Estructura
 
@@ -41,7 +41,9 @@ Se referencian con `$ref` a `envelope.schema.json#/$defs/<nombre>`:
 1. Agregar la fila al catálogo de `interoperabilidad-y-flujos.md` (sección 1.4).
 2. Crear `schemas/<topico>.schema.json` y `examples/<topico>.example.json`.
 3. Si el cambio es incompatible con la versión vigente, subir `schemaVersion` en esquema y ejemplo.
-4. Correr `npm run test`: la prueba de contratos falla si el catálogo y la carpeta no coinciden o si un ejemplo no valida.
+4. Correr `npm run contracts:check` y `npm test`: el verificador compara catálogo, esquemas, ejemplos y fixtures del simulador; `npm test` lo ejecuta antes de Vitest.
+
+El catálogo se busca en el repositorio hermano `delivery-dispatch-docs`, tanto desde un checkout normal como desde un worktree. Si está en otra ubicación, se puede indicar con `CONTRACTS_CATALOG_PATH` (ruta absoluta al archivo `interoperabilidad-y-flujos.md`). Si no se encuentra, la verificación falla con una instrucción para configurarlo.
 
 El catálogo y esta carpeta se mantienen sincronizados: un tópico existe en ambos o en ninguno.
 
