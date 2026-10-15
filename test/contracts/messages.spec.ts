@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import Ajv2020Module from 'ajv/dist/2020.js';
 import addFormatsModule from 'ajv-formats';
 
@@ -12,10 +12,22 @@ const ROOT = resolve(import.meta.dirname, '../..');
 const CONTRACTS = resolve(ROOT, 'contracts/messages');
 const SCHEMAS_DIR = resolve(CONTRACTS, 'schemas');
 const EXAMPLES_DIR = resolve(CONTRACTS, 'examples');
-const DOC_PATH = resolve(
-  ROOT,
-  '../../docs/delivery-dispatch-docs/interoperabilidad-y-flujos.md',
-);
+const catalogPath = (): string => {
+  const configuredPath = process.env.CONTRACTS_CATALOG_PATH;
+  if (configuredPath) return resolve(configuredPath);
+
+  let parent = ROOT;
+  for (let level = 0; level < 5; level += 1) {
+    parent = dirname(parent);
+    const candidate = resolve(parent, 'delivery-dispatch-docs/interoperabilidad-y-flujos.md');
+    if (existsSync(candidate)) return candidate;
+  }
+
+  throw new Error(
+    'No se encontró el catálogo interoperabilidad-y-flujos.md. ' +
+      'Configura CONTRACTS_CATALOG_PATH con su ruta.',
+  );
+};
 
 const Ajv2020 = (Ajv2020Module as any).default ?? Ajv2020Module;
 const addFormats = (addFormatsModule as any).default ?? addFormatsModule;
@@ -51,8 +63,8 @@ const mutated = (topic: string, change: (message: any) => void) => {
 };
 
 /** Tópicos listados en las tablas de la sección 1.4 del documento. */
-const catalogTopics = (): string[] => {
-  const text = readFileSync(DOC_PATH, 'utf8');
+const catalogTopics = (path: string): string[] => {
+  const text = readFileSync(path, 'utf8');
   const start = text.indexOf('### 1.4.');
   const end = text.indexOf('### 1.5.');
   const section = text.slice(start, end);
@@ -75,6 +87,8 @@ describe('contratos de mensajes: carpeta contracts/messages', () => {
       expect(schema.properties.type.const).toBe(topic);
       expect(schema.properties.source.const).toEqual(expect.any(String));
       expect(schema.properties.schemaVersion.const).toEqual(expect.any(Number));
+      expect(schema.properties.schemaVersion.const).toBeGreaterThanOrEqual(1);
+      expect(Number.isInteger(schema.properties.schemaVersion.const)).toBe(true);
     });
 
     it('prohíbe campos no declarados en data', () => {
@@ -93,17 +107,14 @@ describe('contratos de mensajes: carpeta contracts/messages', () => {
   });
 });
 
-describe.skipIf(!existsSync(DOC_PATH))(
-  'contratos de mensajes: sincronía con el catálogo del documento',
-  () => {
-    it('cada tópico del catálogo 1.4 tiene esquema y ejemplo, y viceversa', () => {
-      const catalog = catalogTopics();
-      expect(catalog.length).toBeGreaterThan(0);
-      expect(schemaTopics).toEqual(catalog);
-      expect(exampleTopics).toEqual(catalog);
-    });
-  },
-);
+describe('contratos de mensajes: sincronía con el catálogo del documento', () => {
+  it('cada tópico del catálogo 1.4 tiene esquema y ejemplo, y viceversa', () => {
+    const catalog = catalogTopics(catalogPath());
+    expect(catalog.length).toBeGreaterThan(0);
+    expect(schemaTopics).toEqual(catalog);
+    expect(exampleTopics).toEqual(catalog);
+  });
+});
 
 describe('contratos de mensajes: reglas de negocio', () => {
   it('marketplace.sales_order.confirmed exige confirmedAt', () => {
