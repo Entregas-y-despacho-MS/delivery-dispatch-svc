@@ -7,6 +7,7 @@ const ROOT = resolve(import.meta.dirname, '../..');
 const CONTRACTS = resolve(ROOT, 'contracts/messages');
 const SCHEMAS_DIR = resolve(CONTRACTS, 'schemas');
 const EXAMPLES_DIR = resolve(CONTRACTS, 'examples');
+const FIXTURES_DIR = resolve(ROOT, 'test/simulator/fixtures');
 
 const Ajv2020 = Ajv2020Module.default ?? Ajv2020Module;
 const addFormats = addFormatsModule.default ?? addFormatsModule;
@@ -137,6 +138,46 @@ const checkContracts = () => {
       }
     } catch (error) {
       errors.push(`${examplePath}: ${error.message}`);
+    }
+  }
+
+  for (const file of jsonFiles(FIXTURES_DIR, '.json')) {
+    const fixturePath = resolve(FIXTURES_DIR, file);
+    try {
+      const fixture = readJson(fixturePath);
+      if (!Array.isArray(fixture.steps) || fixture.steps.length === 0) {
+        errors.push(`${fixturePath}: steps debe contener al menos un mensaje`);
+        continue;
+      }
+
+      fixture.steps.forEach((step, index) => {
+        const topic = step.message?.type;
+        const label = `${fixturePath}: steps[${index}]${topic ? ` (${topic})` : ''}`;
+        if (typeof topic !== 'string') {
+          errors.push(`${label}: falta message.type`);
+          return;
+        }
+
+        const schema = schemaTopics.includes(topic)
+          ? readJson(resolve(SCHEMAS_DIR, `${topic}.schema.json`))
+          : undefined;
+        const validate = schema ? ajv.getSchema(schema.$id) : undefined;
+        if (!validate) {
+          errors.push(`${label}: no existe un esquema para el tópico`);
+          return;
+        }
+
+        checked += 1;
+        const valid = Boolean(validate(step.message));
+        const expectedValid = step.expectInvalid !== true;
+        if (valid !== expectedValid) {
+          const expectation = expectedValid ? 'debía validar' : 'debía ser inválido';
+          const detail = valid ? '' : ` (${describeAjvErrors(validate.errors)})`;
+          errors.push(`${label}: ${expectation}${detail}`);
+        }
+      });
+    } catch (error) {
+      errors.push(`${fixturePath}: ${error.message}`);
     }
   }
 
