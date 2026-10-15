@@ -2,7 +2,7 @@
   "scenario": "shipment-cancelled",
   "script": "inventory",
   "description": "Almacén cancela el envío (sin stock) después de consolidar.",
-  "expected": "El despacho existente refleja la cancelación del envío.",
+  "expected": "El despacho pasa a cancelled.",
   "anchor": "2026-10-14T12:00:00Z",
   "steps": [
     {
