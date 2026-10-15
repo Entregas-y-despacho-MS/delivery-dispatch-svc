@@ -66,6 +66,18 @@ Google Cloud real.
    `node scripts/pubsub/bootstrap.mjs` si el emulador ya corre.
 2. El backend corriendo con `MESSAGING_ADAPTER=pubsub` y el mismo `PUBSUB_EMULATOR_HOST` (para ver sus
    efectos: despachos, dead-letter, alertas). Sin el backend los mensajes esperan en las suscripciones.
+3. Una **zona de entrega cuyo polígono cubra la dirección de los fixtures** (`-16.5115, -68.1223` y
+   `-16.5421, -68.0802`, en La Paz). El seed no trae zonas y la API de zonas no dibuja el polígono
+   (`boundary`). Sin esa zona el despacho se crea igual, pero en `address_review` (solo lectura en la
+   bandeja, `zoneId: null`) y no en `pending`. Para el entorno de desarrollo:
+   ```sql
+   -- crea la zona con POST /api/delivery-zones (code ZON-SIM) o usa una existente, y dibuja el límite
+   -- (longitud, latitud); este rectángulo cubre el centro y el sur de La Paz:
+   UPDATE delivery_zones
+      SET boundary = polygon '((-68.20,-16.60),(-68.00,-16.60),(-68.00,-16.40),(-68.20,-16.40))'
+    WHERE code = 'ZON-SIM';
+   ```
+   Los pedidos ya creados en `address_review` no cambian: corre el escenario de nuevo.
 
 ### Comandos
 | Comando | Qué hace |
@@ -97,7 +109,7 @@ su descripción y el resultado esperado. En cada corrida el simulador:
 ### Escenarios y qué observar
 | Origen | Escenario | Qué debe observarse |
 |---|---|---|
-| marketplace | `complete-order` | Se crea un despacho `pending`, visible en la bandeja (`GET /api/pending-orders`). El pedido lleva `confirmedAt` y los bultos `physicallyPacked`. |
+| marketplace | `complete-order` | Se crea un despacho `pending`, visible en la bandeja (`GET /api/pending-orders`) con su zona asignada (requiere la zona del requisito 3; sin ella queda en `address_review`). El pedido lleva `confirmedAt` y los bultos `physicallyPacked`. |
 | marketplace | `out-of-order` | Los bultos llegan antes que la confirmación; al llegar la segunda se crea el mismo despacho `pending`. |
 | marketplace | `duplicate-message` | El mismo `messageId` llega dos veces; la segunda se ignora y hay un solo despacho. |
 | marketplace | `stale-version` | Un cambio con `recordVersion` menor llega tarde y se ignora; vale la dirección de la versión mayor. |
