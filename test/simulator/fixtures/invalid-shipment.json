@@ -1,0 +1,32 @@
+{
+  "scenario": "invalid-shipment",
+  "script": "inventory",
+  "description": "Mensaje inválido por campo faltante: el aviso de Almacén llega sin `packages`.",
+  "expected": "El mensaje va a inventory.shipment.ready.dead-letter (reasonCode schema_invalid) y no se crea despacho.",
+  "anchor": "2026-10-14T12:00:00Z",
+  "steps": [
+    {
+      "label": "Almacén informa bultos sin la lista de bultos",
+      "expectInvalid": true,
+      "message": {
+        "messageId": "01930000-0000-7000-8000-000000000028",
+        "type": "inventory.shipment.ready",
+        "schemaVersion": 1,
+        "source": "inventory",
+        "occurredAt": "2026-10-14T12:05:00Z",
+        "data": {
+          "salesOrderId": "SO-SIM-0012",
+          "recordVersion": 1,
+          "updatedAt": "2026-10-14T12:04:00Z",
+          "warehouseId": "WH-LPZ-01",
+          "availableFrom": "2026-10-14T12:35:00Z",
+          "handlingConditions": [
+            "FRAGILE"
+          ],
+          "evidencePolicy": "hand_delivery_standard",
+          "physicallyPacked": true
+        }
+      }
+    }
+  ]
+}
