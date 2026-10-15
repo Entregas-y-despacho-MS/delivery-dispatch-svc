@@ -27,7 +27,8 @@
     "seed": "tsx src/database/seeds/seed.ts",
     "simulate:marketplace": "tsx scripts/simulator/simulate.ts marketplace",
     "simulate:inventory": "tsx scripts/simulator/simulate.ts inventory",
-    "simulate:procurement": "tsx scripts/simulator/simulate.ts procurement"
+    "simulate:procurement": "tsx scripts/simulator/simulate.ts procurement",
+    "simulate:listen": "tsx scripts/simulator/listen.ts"
   },
   "dependencies": {
     "@google-cloud/pubsub": "^6.2.0",
