@@ -1,4 +1,4 @@
-import { Body, Controller, Param, Patch } from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Param, Patch, Post } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOkResponse,
@@ -11,6 +11,9 @@ import { RouteBatchReviewerDto } from '../dto/route-batch-reviewer.dto.js';
 import { AssignRouteBatchVehicleDto } from '../dto/assign-route-batch-vehicle.dto.js';
 import { RouteBatchVehicleAssignmentDto } from '../dto/route-batch-vehicle-assignment.dto.js';
 import { RouteBatchVehicleService } from '../services/route-batch-vehicle.service.js';
+import { RouteBatchPromiseApprovalService } from '../services/route-batch-promise-approval.service.js';
+import { ApproveRouteBatchPromisesDto } from '../dto/approve-route-batch-promises.dto.js';
+import { ApproveRouteBatchPromisesResponseDto } from '../dto/approve-route-batch-promises-response.dto.js';
 import { Roles } from '../../../../app/auth/decorators/index.js';
 import { CurrentUser } from '../../../../shared/decorators/current-user.decorator.js';
 import { ParseIdPipe } from '../../../../shared/pipes/index.js';
@@ -37,7 +40,40 @@ export class RouteBatchesController {
   constructor(
     private readonly reviewerService: RouteBatchReviewerService,
     private readonly vehicleService: RouteBatchVehicleService,
+    private readonly promiseApprovalService: RouteBatchPromiseApprovalService,
   ) {}
+
+  @Post(':id/approve-promises')
+  @HttpCode(HttpStatus.OK)
+  @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
+  @ApiOperation({
+    summary: 'Approve promises in a provisional route batch',
+    description: 'Checks expected batch and dispatch versions, reviewer ownership, and committed vehicle capacity in a transaction. Dispatches selected for removal return to pending and are audited. Customer email attempts happen only after the transaction commits. A successful send sets promiseNotifiedAt; a bounce opens a coordinator contact follow-up and is not acceptance. Tracking tokens remain valid while the delivery is open (D-18).',
+  })
+  @ApiIdParam('Route batch')
+  @ApiOkResponse({ type: ApproveRouteBatchPromisesResponseDto })
+  @ApiBadRequests({ validation: true, id: true, example: ['version must not be less than 0.'] })
+  @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+  @ApiForbidden(
+    { code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' },
+    { code: 'ROUTE_BATCH_REVIEWER_MISMATCH', message: 'Only the assigned reviewer can approve this provisional batch.' },
+  )
+  @ApiNotFound({ code: 'ROUTE_BATCH_NOT_FOUND', message: 'Route batch not found.' })
+  @ApiConflict(
+    { code: 'ROUTE_BATCH_NOT_PROVISIONAL', message: 'Only a provisional route batch can be approved.' },
+    { code: 'ROUTE_BATCH_VERSION_CONFLICT', message: 'The route batch changed. Reload it before approving.' },
+    { code: 'DISPATCH_VERSION_CONFLICT', message: 'One or more dispatches changed. Reload the route batch.' },
+    { code: 'ROUTE_BATCH_VEHICLE_REQUIRED', message: 'Assign a vehicle before approving promises.' },
+    { code: 'ROUTE_BATCH_HAS_NO_APPROVALS', message: 'At least one dispatch must remain in the batch.' },
+    { code: 'ROUTE_CAPACITY_EXCEEDED', message: 'The route exceeds the selected vehicle capacity or package dimensions.' },
+  )
+  async approvePromises(
+    @Param('id', ParseIdPipe) id: number,
+    @Body() dto: ApproveRouteBatchPromisesDto,
+    @CurrentUser('id') actorUserId: number,
+  ): Promise<ApproveRouteBatchPromisesResponseDto> {
+    return await this.promiseApprovalService.approve(id, dto, actorUserId);
+  }
 
   @Patch(':id/vehicle')
   @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
