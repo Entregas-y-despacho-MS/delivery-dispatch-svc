@@ -60,12 +60,16 @@ export class PlanningController {
     @CoordinatorOnly()
     @ApiOperation({
         summary:     'Run the route cutoff now',
-        description: 'Runs the D-1 cutoff (the same task the scheduler fires at `route_cutoff_time`) immediately and answers when it finishes. It takes the same cluster-wide lock as the scheduled run: if the task is already running the answer is 409 and nothing is started. A manual run is recorded in the audit log with trigger `manual`. Answers 503 while the cutoff has not been registered in this service. Requires coordinator role, or root.',
+        description: 'Runs the D-1 cutoff (the same task the scheduler fires at `route_cutoff_time`) immediately and answers when it finishes. A manual run always works on the next operating day. It takes the same cluster-wide lock as the scheduled run: if the task is already running the answer is 409 and nothing is started. A manual run is recorded in the audit log with trigger `manual`. The answer carries a `summary` with the batches that passed to `pending_final_review`, the ones that failed validation and their reasons, the batches created or cancelled by merging and dividing, the batches that hold the orders whose response window is still open, and the orders without promise that went back to `pending`. Answers 422 `PLANNING_SETTINGS_MISSING` when a mandatory setting is empty and 503 `OSRM_UNAVAILABLE` when the routing engine does not answer in 5 s, in which case nothing was written. Requires coordinator role, or root.',
     })
     @ApiOkResponse({ type: TaskRunResultDto })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     @ApiConflict({ code: 'SCHEDULED_TASK_ALREADY_RUNNING', message: 'The task is already running (started by the schedule, by another request or on another instance). Try again when it finishes.' })
-    @ApiServiceUnavailableResponse({ description: 'The task is not registered in this service.', schema: { example: NOT_AVAILABLE } })
+    @ApiUnprocessableEntity({ code: 'PLANNING_SETTINGS_MISSING', message: 'The cutoff cannot run until the settings are fixed (missing: stop_service_minutes, planning_margin_pct). Set them with PUT /settings/:key.' })
+    @ApiServiceUnavailableResponse({
+        description: 'OSRM did not answer in time (`OSRM_UNAVAILABLE`, nothing was written), or the task is not registered in this service (`SCHEDULED_TASK_NOT_AVAILABLE`).',
+        schema: { oneOf: [{ example: OSRM_UNAVAILABLE }, { example: NOT_AVAILABLE }] },
+    })
     async cutoff(): Promise<TaskRunResultDto> {
         return await this.trigger.trigger(ROUTE_CUTOFF_TASK);
     }

@@ -38,6 +38,7 @@ import { IncompleteOrderRecoveryModule } from './modules/messaging/incomplete-or
 import { SchedulerModule } from './app/scheduler/scheduler.module.js';
 import { PlanningModule } from './app/planning/planning.module.js';
 import { PromiseFirmingModule } from './app/promise-firming/promise-firming.module.js';
+import { RouteCutoffModule } from './app/route-cutoff/route-cutoff.module.js';
 
 @Module({
   imports: [
@@ -58,6 +59,7 @@ import { PromiseFirmingModule } from './app/promise-firming/promise-firming.modu
     SchedulerModule,
     PlanningModule,
     PromiseFirmingModule,
+    RouteCutoffModule,
     UsersModule,
     RolesModule,
     DeliveryZonesModule,
