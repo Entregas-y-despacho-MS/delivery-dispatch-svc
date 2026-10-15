@@ -37,6 +37,7 @@ import { SalesOrderIntakeModule } from './modules/messaging/sales-order-intake/s
 import { IncompleteOrderRecoveryModule } from './modules/messaging/incomplete-order-recovery/incomplete-order-recovery.module.js';
 import { SchedulerModule } from './app/scheduler/scheduler.module.js';
 import { PlanningModule } from './app/planning/planning.module.js';
+import { PromiseFirmingModule } from './app/promise-firming/promise-firming.module.js';
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { PlanningModule } from './app/planning/planning.module.js';
     SettingsModule,
     SchedulerModule,
     PlanningModule,
+    PromiseFirmingModule,
     UsersModule,
     RolesModule,
     DeliveryZonesModule,
