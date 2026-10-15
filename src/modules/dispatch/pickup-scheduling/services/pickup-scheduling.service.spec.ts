@@ -50,7 +50,7 @@ function build({
     rescheduleReason = { code: 'RES-OPS-SUPPLIER' },
     rescheduleDays = 2,
 }: Setup = {}) {
-    const inserts: { table: string; params: unknown[] }[] = [];
+    const inserts: { table: string; params: unknown[]; sql: string }[] = [];
     const saved: Record<string, unknown>[] = [];
     const updates: unknown[][] = [];
     const manager = {
@@ -58,14 +58,25 @@ function build({
             if (sql.includes('FOR UPDATE OF d')) return row ? [row] : [];
             if (sql.includes('FROM vehicles')) return vehicle ? [vehicle] : [];
             if (sql.includes('FROM dispatch_events')) return previousVersions.map((v) => ({ version: String(v) }));
+            if (sql.includes('INSERT INTO dispatch_events')) {
+                saved.push({
+                    dispatchId: params[0],
+                    eventType: params[1],
+                    detail: params[2],
+                    actorUserId: params[3],
+                    reason: params[4],
+                    metadata: JSON.parse(params[5] as string) as unknown,
+                });
+                return [];
+            }
             if (sql.includes('FROM incident_reasons')) return incidentReason ? [incidentReason] : [];
             if (sql.includes('FROM reschedule_reasons')) return rescheduleReason ? [rescheduleReason] : [];
             if (sql.includes('INSERT INTO dispatch_incidents')) {
-                inserts.push({ table: 'incidents', params });
+                inserts.push({ table: 'incidents', params, sql });
                 return [];
             }
             if (sql.includes('INSERT INTO dispatch_reschedules')) {
-                inserts.push({ table: 'reschedules', params });
+                inserts.push({ table: 'reschedules', params, sql });
                 return [];
             }
             if (sql.includes('UPDATE dispatches')) {
@@ -74,13 +85,6 @@ function build({
             }
             throw new Error(`unexpected query: ${sql}`);
         }),
-        getRepository: vi.fn(() => ({
-            create: (value: Record<string, unknown>) => value,
-            save: async (value: Record<string, unknown>) => {
-                saved.push(value);
-                return value;
-            },
-        })),
     };
     const dataSource = { transaction: async (cb: (m: unknown) => unknown) => await cb(manager) };
     const settings = {
@@ -316,6 +320,8 @@ describe('PickupSchedulingService.reschedule', () => {
         const incident = inserts.find((i) => i.table === 'incidents');
         expect(incident?.params).toEqual([result.incidentId, 7, 4, 'Supplier had no load ready']);
         const reschedule = inserts.find((i) => i.table === 'reschedules');
+        // The reschedule is the coordinator's, never "system" or "customer" (RF-A33).
+        expect(reschedule?.sql).toContain("'coordinator'");
         expect(reschedule?.params).toEqual([
             7,
             6,

@@ -9,7 +9,6 @@ import { VehicleNotFoundException } from '../../../fleet/vehicles/exceptions/ind
 import { IncidentReasonNotFoundException } from '../../../catalog/incident-reasons/exceptions/index.js';
 import { RescheduleReasonNotFoundException } from '../../../catalog/reschedule-reasons/exceptions/index.js';
 import { DispatchNotFoundException } from '../../dispatches/exceptions/index.js';
-import { DispatchEvent } from '../../dispatch-events/entities/dispatch-event.entity.js';
 import { DispatchStatusEnum } from '../../../../shared/enums/index.js';
 import { checkPickupCapacity } from '../domain/pickup-capacity.js';
 import { nextPickupRecordVersion } from '../domain/pickup-record-version.js';
@@ -103,25 +102,27 @@ export class PickupSchedulingService {
 
             const recordVersion = await this.nextRecordVersion(manager, dispatchId);
             const [updated]: { tracking_code: string }[] = await manager.query(
-                `UPDATE dispatches
-                    SET dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $1),
-                        scheduled_window_start = $2,
-                        scheduled_window_end = $3,
-                        tracking_code = COALESCE(tracking_code, next_tracking_code()),
-                        updated_at = NOW()
-                  WHERE dispatch_id = $4
-              RETURNING tracking_code`,
+                // The CTE makes the driver return plain rows: a bare UPDATE ... RETURNING comes back as [rows, count].
+                `WITH moved AS (
+                    UPDATE dispatches
+                       SET dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $1),
+                           scheduled_window_start = $2,
+                           scheduled_window_end = $3,
+                           tracking_code = COALESCE(tracking_code, next_tracking_code()),
+                           updated_at = NOW()
+                     WHERE dispatch_id = $4
+                 RETURNING tracking_code
+                 ) SELECT tracking_code FROM moved`,
                 [DispatchStatusEnum.SCHEDULED, window.startsAt, window.endsAt, dispatchId],
             );
 
             const pickupWindow = { startsAt: window.startsAt.toISOString(), endsAt: window.endsAt.toISOString() };
-            const events = manager.getRepository(DispatchEvent);
-            await events.save(events.create({
+            await this.recordEvent(manager, {
                 dispatchId,
                 eventType: PICKUP_SCHEDULED_EVENT,
                 detail:    `Pickup scheduled from ${pickupWindow.startsAt} to ${pickupWindow.endsAt}.`,
                 actorUserId,
-                actorType: 'user',
+                reason:    null,
                 metadata:  {
                     recordVersion,
                     fromStatus: row.status,
@@ -134,7 +135,7 @@ export class PickupSchedulingService {
                     },
                     pickupWindow,
                 },
-            }));
+            });
 
             await this.publishPickupScheduled(manager, {
                 purchaseOrderId: row.source_order_ref,
@@ -215,25 +216,25 @@ export class PickupSchedulingService {
                 [dispatchId, input.rescheduleReasonId, actorUserId, previous.startsAt, previous.endsAt, window.startsAt, window.endsAt],
             );
             const [updated]: { tracking_code: string }[] = await manager.query(
-                `UPDATE dispatches
-                    SET scheduled_window_start = $1,
-                        scheduled_window_end = $2,
-                        tracking_code = COALESCE(tracking_code, next_tracking_code()),
-                        updated_at = NOW()
-                  WHERE dispatch_id = $3
-              RETURNING tracking_code`,
+                `WITH moved AS (
+                    UPDATE dispatches
+                       SET scheduled_window_start = $1,
+                           scheduled_window_end = $2,
+                           tracking_code = COALESCE(tracking_code, next_tracking_code()),
+                           updated_at = NOW()
+                     WHERE dispatch_id = $3
+                 RETURNING tracking_code
+                 ) SELECT tracking_code FROM moved`,
                 [window.startsAt, window.endsAt, dispatchId],
             );
 
             const pickupWindow = { startsAt: window.startsAt.toISOString(), endsAt: window.endsAt.toISOString() };
             const previousWindow = { startsAt: previous.startsAt.toISOString(), endsAt: previous.endsAt.toISOString() };
-            const events = manager.getRepository(DispatchEvent);
-            await events.save(events.create({
+            await this.recordEvent(manager, {
                 dispatchId,
                 eventType: PICKUP_RESCHEDULED_EVENT,
                 detail:    `Pickup rescheduled from ${previousWindow.startsAt} to ${pickupWindow.startsAt}: supplier unavailable.`,
                 actorUserId,
-                actorType: 'user',
                 reason:    input.description ?? null,
                 metadata:  {
                     recordVersion,
@@ -244,7 +245,7 @@ export class PickupSchedulingService {
                     previousWindow,
                     pickupWindow,
                 },
-            }));
+            });
 
             const occurredAt = new Date();
             const base = {
@@ -286,6 +287,25 @@ export class PickupSchedulingService {
                 previousWindow,
             };
         });
+    }
+
+    /** Appends to the dispatch's event log; the log is append-only, so this is always an INSERT. */
+    private async recordEvent(
+        manager: EntityManager,
+        event: {
+            dispatchId: number;
+            eventType: string;
+            detail: string;
+            actorUserId: number;
+            reason: string | null;
+            metadata: Record<string, unknown>;
+        },
+    ): Promise<void> {
+        await manager.query(
+            `INSERT INTO dispatch_events (dispatch_id, event_type, detail, actor_user_id, actor_type, reason, metadata)
+             VALUES ($1, $2, $3, $4, 'user', $5, $6::jsonb)`,
+            [event.dispatchId, event.eventType, event.detail, event.actorUserId, event.reason, JSON.stringify(event.metadata)],
+        );
     }
 
     private async findActiveReason(
