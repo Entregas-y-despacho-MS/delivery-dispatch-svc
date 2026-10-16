@@ -34,6 +34,8 @@ const packageRow = (overrides: Record<string, unknown> = {}) => ({
 
 describe('TypeOrmExistingDispatchChanges', () => {
     let calls: { sql: string; params: unknown[] }[];
+    /** Every statement in the order it ran, locks included (`calls` leaves the batch reads out). */
+    let trace: string[];
     let dispatchRow: Record<string, unknown> | null;
     let zoneRow: { id: number } | null;
     let headerRow: { evidence_policy: string; package_ready_at: Date | null; warehouse_code: string | null };
@@ -44,6 +46,14 @@ describe('TypeOrmExistingDispatchChanges', () => {
 
     const manager = {
         query: vi.fn(async (sql: string, params: unknown[] = []) => {
+            const isPeek = sql.includes('SELECT d.route_batch_id, s.name AS status');
+            const isBatchLock = sql.includes('FROM route_batches WHERE route_batch_id = $1 FOR UPDATE');
+            trace.push(
+                isPeek ? 'peek' : isBatchLock ? `lock batch ${params[0]}` : sql.includes('FOR UPDATE OF d') ? 'lock dispatch' : 'other',
+            );
+            // The unlocked read of the batch and its lock are not part of what the operations write.
+            if (isPeek) return dispatchRow ? [{ route_batch_id: dispatchRow.route_batch_id, status: dispatchRow.status }] : [];
+            if (isBatchLock) return [];
             calls.push({ sql, params });
             if (sql.includes('FOR UPDATE OF d')) return dispatchRow ? [dispatchRow] : [];
             if (sql.includes('FROM delivery_zones')) return zoneRow ? [zoneRow] : [];
@@ -58,6 +68,7 @@ describe('TypeOrmExistingDispatchChanges', () => {
 
     beforeEach(() => {
         calls = [];
+        trace = [];
         dispatchRow = row();
         zoneRow = { id: 3 };
         headerRow = { evidence_policy: 'hand_delivery_standard', package_ready_at: null, warehouse_code: 'WH-LPZ-01' };
@@ -527,6 +538,80 @@ describe('TypeOrmExistingDispatchChanges', () => {
                 reason: 'dispatch_cancelled',
             });
             expect(sqlOf('INSERT INTO dispatch_packages')).toBeUndefined();
+        });
+    });
+
+    // Lock order of planning: batch first, then the order (the cutoff, the 1st approval and the generator do
+    // the same). The opposite order made this transaction and the cutoff wait on each other (deadlock).
+    describe('lock order', () => {
+        const cancelInput = { salesOrderId: ORDER, source: 'marketplace' as const, cancelledAt: '2026-10-12T15:59:00Z', reason: 'Cliente' };
+        const deliveryInput = {
+            salesOrderId: ORDER,
+            source: 'marketplace' as const,
+            receivedAt: '2026-10-12T15:00:00Z',
+            blocks: { priority: 'urgent' } as never,
+        };
+
+        it('locks the batch before the order when an in_planning order is in a batch', async () => {
+            dispatchRow = row({ status: 'in_planning', route_batch_id: 4 });
+
+            await changes.cancel(cancelInput, options());
+
+            expect(trace.slice(0, 3)).toEqual(['peek', 'lock batch 4', 'lock dispatch']);
+        });
+
+        it('keeps that order in every operation that can take the order out of its batch', async () => {
+            dispatchRow = row({ status: 'in_planning', route_batch_id: 9 });
+
+            await changes.applyDeliveryChange(deliveryInput, options());
+            const afterDelivery = [...trace];
+            trace = [];
+            await changes.setShipmentReady(
+                { salesOrderId: ORDER, source: 'warehouse' as const, receivedAt: '2026-10-12T15:00:00Z', shipmentReady: false } as never,
+                options(),
+            );
+
+            expect(afterDelivery.indexOf('lock batch 9')).toBeLessThan(afterDelivery.indexOf('lock dispatch'));
+            expect(trace.indexOf('lock batch 9')).toBeGreaterThanOrEqual(0);
+            expect(trace.indexOf('lock batch 9')).toBeLessThan(trace.indexOf('lock dispatch'));
+        });
+
+        it('does not lock a batch for an order that never leaves it (pending, scheduled, no batch)', async () => {
+            for (const over of [
+                { status: 'pending', route_batch_id: null },
+                { status: 'scheduled', route_batch_id: 4 },
+                { status: 'in_planning', route_batch_id: null },
+            ]) {
+                trace = [];
+                dispatchRow = row(over);
+
+                await changes.cancel(cancelInput, options());
+
+                expect(trace.some((step) => step.startsWith('lock batch'))).toBe(false);
+            }
+        });
+
+        it('does nothing else when the order does not exist', async () => {
+            dispatchRow = null;
+
+            await changes.cancel(cancelInput, options());
+
+            expect(trace).toEqual(['peek', 'lock dispatch']);
+        });
+
+        it('also locks the batch the order moved to while it waited for its lock', async () => {
+            // Read as batch 4, but by the time the order is locked it is in batch 5.
+            dispatchRow = row({ status: 'in_planning', route_batch_id: 5 });
+            const original = manager.query.getMockImplementation()!;
+            manager.query.mockImplementationOnce(async () => {
+                trace.push('peek');
+                return [{ route_batch_id: 4, status: 'in_planning' }];
+            });
+
+            await changes.cancel(cancelInput, options());
+            manager.query.mockImplementation(original);
+
+            expect(trace.slice(0, 4)).toEqual(['peek', 'lock batch 4', 'lock dispatch', 'lock batch 5']);
         });
     });
 });

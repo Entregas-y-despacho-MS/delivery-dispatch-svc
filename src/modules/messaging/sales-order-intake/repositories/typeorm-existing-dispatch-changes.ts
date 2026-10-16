@@ -19,6 +19,9 @@ import {
     type DispatchChangeOutcome,
 } from '../ports/existing-dispatch-changes.port.js';
 
+/** Name of the `dispatch_statuses` row of an order proposed in a provisional batch. */
+const IN_PLANNING = 'in_planning';
+
 interface DispatchRow {
     dispatch_id: number;
     status: string;
@@ -397,8 +400,34 @@ export class TypeOrmExistingDispatchChanges extends ExistingDispatchChanges {
         return options.manager ?? this.dataSource.manager;
     }
 
-    /** The delivery dispatch of the order, locked for the rest of the transaction. */
+    /**
+     * The delivery dispatch of the order, locked for the rest of the transaction.
+     *
+     * Lock order: **batch first, then the order**, like the cutoff, the 1st approval and the generator
+     * (ST-51.3). An `in_planning` order in a batch is the only one that later calls `leaveBatch`, which
+     * writes the batch; locking the order first and the batch second would make this transaction and the
+     * cutoff wait on each other (deadlock `40P01`). Any other order never touches its batch, so its batch
+     * is not locked: that would only queue unrelated writers behind a message.
+     *
+     * The batch is read without a lock to know which one to take. If the order moved to another batch in
+     * the meantime, that one is locked too after the order (a window of milliseconds; the cutoff retries
+     * a deadlock, and so does the message).
+     */
     private async lock(manager: EntityManager, salesOrderId: string): Promise<DispatchSnapshot | null> {
+        const [peek]: { route_batch_id: number | null; status: string }[] = await manager.query(
+            `SELECT d.route_batch_id, s.name AS status
+               FROM dispatches d
+               JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
+              WHERE d.source_order_ref = $1
+                AND d.dispatch_type_id = (SELECT dispatch_type_id FROM dispatch_types WHERE name = 'delivery')`,
+            [salesOrderId],
+        );
+        let lockedBatchId: number | null = null;
+        if (peek && peek.status === IN_PLANNING && peek.route_batch_id !== null) {
+            await this.lockBatch(manager, peek.route_batch_id);
+            lockedBatchId = peek.route_batch_id;
+        }
+
         const rows: DispatchRow[] = await manager.query(
             `SELECT d.dispatch_id, s.name AS status, d.route_batch_id, d.contact_name, d.contact_phone,
                     d.contact_email, d.delivery_address, d.delivery_reference, d.delivery_latitude,
@@ -412,6 +441,9 @@ export class TypeOrmExistingDispatchChanges extends ExistingDispatchChanges {
         );
         if (rows.length === 0) return null;
         const row = rows[0];
+        if (row.status === IN_PLANNING && row.route_batch_id !== null && row.route_batch_id !== lockedBatchId) {
+            await this.lockBatch(manager, row.route_batch_id);
+        }
         return {
             dispatchId: row.dispatch_id,
             status: row.status,
@@ -427,6 +459,10 @@ export class TypeOrmExistingDispatchChanges extends ExistingDispatchChanges {
             priority: row.priority,
             shipmentReady: row.shipment_ready,
         };
+    }
+
+    private async lockBatch(manager: EntityManager, routeBatchId: number): Promise<void> {
+        await manager.query(`SELECT route_batch_id FROM route_batches WHERE route_batch_id = $1 FOR UPDATE`, [routeBatchId]);
     }
 
     /** Same polygon test as the dispatch generator. */
