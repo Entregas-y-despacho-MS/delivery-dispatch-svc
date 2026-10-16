@@ -109,6 +109,36 @@ describe('CustomerNoticeService', () => {
         expect(mailer.send).not.toHaveBeenCalled();
     });
 
+    describe('sendRiskNotice', () => {
+        it('sends the risk notice with its own event and no change announced', async () => {
+            const { service, mailer, repository } = build([]);
+
+            const outcome = await service.sendRiskNotice(5, dispatch());
+
+            expect(outcome).toBe('sent');
+            expect(mailer.send).toHaveBeenCalledWith(expect.objectContaining({ template: 'risk-notice' }));
+            expect(repository.claimDispatchEvent).toHaveBeenCalledWith(1, 'risk_notice_sent', expect.any(String), expect.anything());
+        });
+
+        it.each([
+            ['already sent', { riskNoticeSent: true }],
+            ['«se mantiene» already sent', { maintainedSent: true }],
+            ['no email', { contactEmail: null }],
+        ])('skips when %s', async (_label, overrides) => {
+            const { service, mailer } = build([]);
+
+            await expect(service.sendRiskNotice(5, dispatch(overrides))).resolves.toBe('skipped');
+            expect(mailer.send).not.toHaveBeenCalled();
+        });
+
+        it('opens a coordinator follow-up when the risk notice bounces', async () => {
+            const { service, repository } = build([], { mail: 'bounced' });
+
+            await expect(service.sendRiskNotice(5, dispatch())).resolves.toBe('failed');
+            expect(repository.recordContactManagement).toHaveBeenCalledWith(5, 1, expect.any(String), expect.objectContaining({ template: 'risk-notice' }));
+        });
+    });
+
     it.each(['bounced', 'throw'] as const)('a %s email opens a coordinator follow-up and counts as failed', async (mail) => {
         const { service, repository } = build([dispatch()], { mail });
 

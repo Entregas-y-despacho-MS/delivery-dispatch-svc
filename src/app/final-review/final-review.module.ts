@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
 import { PlanningModule } from '../planning/planning.module.js';
 import { FinalReviewAlertTask } from './final-review-alert.task.js';
+import { FinalReviewEscalationTask } from './final-review-escalation.task.js';
 import { LateApprovalNoticeListener } from './late-approval-notice.listener.js';
 import { RouteReminderTask } from './route-reminder.task.js';
 import { CustomerNoticeService } from './services/customer-notice.service.js';
 import { FinalReviewAlertService } from './services/final-review-alert.service.js';
+import { FinalReviewEscalationService } from './services/final-review-escalation.service.js';
 import { FinalReviewRepository } from './services/final-review.repository.js';
 import { RouteReminderService } from './services/route-reminder.service.js';
 
@@ -20,6 +22,8 @@ import { RouteReminderService } from './services/route-reminder.service.js';
         CustomerNoticeService,
         FinalReviewAlertService,
         FinalReviewAlertTask,
+        FinalReviewEscalationService,
+        FinalReviewEscalationTask,
         RouteReminderService,
         RouteReminderTask,
         LateApprovalNoticeListener,

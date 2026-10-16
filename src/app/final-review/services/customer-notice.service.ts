@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { MailerPort } from '../../../plugins/mailer/mailer.port.js';
 import { customerNoticeAction, type FinalReviewSettings } from '../domain/final-review-timeline.js';
 import { formatNoticeDate, formatNoticeWindow } from '../domain/notice-format.js';
-import { DELIVERY_MAINTAINED_SENT_EVENT, ROUTE_REMINDER_SENT_EVENT } from '../final-review-events.js';
+import { DELIVERY_MAINTAINED_SENT_EVENT, RISK_NOTICE_SENT_EVENT, ROUTE_REMINDER_SENT_EVENT } from '../final-review-events.js';
 import { FinalReviewRepository, type NoticeDispatchRow } from './final-review.repository.js';
 
 export interface CustomerNoticeSummary {
@@ -20,7 +20,10 @@ export interface CustomerNoticeSummary {
 const TEMPLATES = {
     'send-reminder': { template: 'reminder', subject: 'Recordatorio de tu entrega', event: ROUTE_REMINDER_SENT_EVENT },
     'send-delivery-maintained': { template: 'delivery-maintained', subject: 'Tu entrega se mantiene', event: DELIVERY_MAINTAINED_SENT_EVENT },
+    'send-risk-notice': { template: 'risk-notice', subject: 'Estamos gestionando tu entrega', event: RISK_NOTICE_SENT_EVENT },
 } as const;
+
+export type NoticeOutcome = 'sent' | 'failed' | 'claimed-elsewhere' | 'skipped';
 
 /**
  * The emails the customers of a `confirmed` batch are owed (ST-51.4, D-46): the normal reminder or, when
@@ -66,7 +69,17 @@ export class CustomerNoticeService {
         return summary;
     }
 
-    private async send(routeBatchId: number, dispatch: NoticeDispatchRow, action: keyof typeof TEMPLATES): Promise<'sent' | 'failed' | 'claimed-elsewhere'> {
+    /**
+     * The risk notice of the escalation (case 5.2): the delivery is being managed, no change is announced.
+     * Skipped when it already went out, when «tu entrega se mantiene» already did (the batch was approved
+     * meanwhile), or when there is no email.
+     */
+    async sendRiskNotice(routeBatchId: number, dispatch: NoticeDispatchRow): Promise<NoticeOutcome> {
+        if (dispatch.riskNoticeSent || dispatch.maintainedSent || !dispatch.contactEmail) return 'skipped';
+        return await this.send(routeBatchId, dispatch, 'send-risk-notice');
+    }
+
+    private async send(routeBatchId: number, dispatch: NoticeDispatchRow, action: keyof typeof TEMPLATES): Promise<NoticeOutcome> {
         const { template, subject, event } = TEMPLATES[action];
         const claimed = await this.repository.claimDispatchEvent(dispatch.dispatchId, event, `${subject}: email handed to the mail transport`, { routeBatchId, template });
         if (!claimed) return 'claimed-elsewhere';

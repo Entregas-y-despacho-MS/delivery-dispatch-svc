@@ -1,7 +1,17 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
-import { DELIVERY_MAINTAINED_SENT_EVENT, RISK_NOTICE_SENT_EVENT, ROUTE_REMINDER_SENT_EVENT } from '../final-review-events.js';
+import {
+    DELIVERY_MAINTAINED_SENT_EVENT,
+    FINAL_REVIEW_ESCALATED_EVENT,
+    RISK_NOTICE_SENT_EVENT,
+    ROUTE_REMINDER_SENT_EVENT,
+} from '../final-review-events.js';
+
+export interface EscalationDispatchRow extends NoticeDispatchRow {
+    /** The case 5.2 incident of this order was already registered. */
+    escalated: boolean;
+}
 
 export interface NoticeDispatchRow {
     dispatchId: number;
@@ -88,6 +98,74 @@ export class FinalReviewRepository {
             riskNoticeSent: row.risk_notice_sent,
             maintainedSent: row.maintained_sent,
         }));
+    }
+
+    /**
+     * Orders of a batch whose promise the customer was already told (`scheduled`, `promise_notified_at` set):
+     * the ones the escalation protects. An order still in planning was never promised, so nobody is owed anything.
+     */
+    async findEscalationDispatches(routeBatchId: number): Promise<EscalationDispatchRow[]> {
+        const rows: Array<{
+            id: number; contact_email: string | null; tracking_token: string | null;
+            scheduled_window_start: Date | null; scheduled_window_end: Date | null;
+            reminder_sent: boolean; risk_notice_sent: boolean; maintained_sent: boolean; escalated: boolean;
+        }> = await this.dataSource.query(
+            `SELECT d.dispatch_id AS id, d.contact_email, d.tracking_token, d.scheduled_window_start, d.scheduled_window_end,
+                    EXISTS (SELECT 1 FROM dispatch_events e WHERE e.dispatch_id = d.dispatch_id AND e.event_type = $2) AS reminder_sent,
+                    EXISTS (SELECT 1 FROM dispatch_events e WHERE e.dispatch_id = d.dispatch_id AND e.event_type = $3) AS risk_notice_sent,
+                    EXISTS (SELECT 1 FROM dispatch_events e WHERE e.dispatch_id = d.dispatch_id AND e.event_type = $4) AS maintained_sent,
+                    EXISTS (SELECT 1 FROM dispatch_events e WHERE e.dispatch_id = d.dispatch_id AND e.event_type = $5) AS escalated
+               FROM dispatches d
+               JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
+              WHERE d.route_batch_id = $1 AND s.name = 'scheduled' AND d.promise_notified_at IS NOT NULL
+              ORDER BY d.dispatch_id`,
+            [routeBatchId, ROUTE_REMINDER_SENT_EVENT, RISK_NOTICE_SENT_EVENT, DELIVERY_MAINTAINED_SENT_EVENT, FINAL_REVIEW_ESCALATED_EVENT],
+        );
+        return rows.map((row) => ({
+            dispatchId: row.id,
+            contactEmail: row.contact_email,
+            trackingToken: row.tracking_token,
+            windowStart: row.scheduled_window_start,
+            windowEnd: row.scheduled_window_end,
+            reminderSent: row.reminder_sent,
+            riskNoticeSent: row.risk_notice_sent,
+            maintainedSent: row.maintained_sent,
+            escalated: row.escalated,
+        }));
+    }
+
+    /** Id of the active `INC-COMP-FAILURE` reason (company failure, case 5.2), or `null` when it is not seeded. */
+    async findCompanyFailureReasonId(): Promise<number | null> {
+        const rows: Array<{ id: number }> = await this.dataSource.query(
+            `SELECT incident_reason_id AS id FROM incident_reasons WHERE code = 'INC-COMP-FAILURE' AND deleted_at IS NULL`,
+        );
+        return rows[0]?.id ?? null;
+    }
+
+    /**
+     * Case 5.2 for one order, in one transaction: the `final_review_escalated` event (once per order) and an
+     * `INC-COMP-FAILURE` incident. The order keeps its status, version, day and window: the original promise
+     * stands, and the reason does not count as a delivery attempt (`counts_as_attempt = false`).
+     * Returns the incident id, or `null` when the order was already escalated.
+     */
+    async registerCompanyFailure(dispatchId: number, incidentReasonId: number, metadata: Record<string, unknown>): Promise<string | null> {
+        return await this.dataSource.transaction(async (manager) => {
+            const claimed: unknown[] = await manager.query(
+                `INSERT INTO dispatch_events (dispatch_id, event_type, actor_type, reason, metadata)
+                 SELECT $1, $2, 'system', 'Second approval still pending at final_review_escalation_time (case 5.2)', $3::jsonb
+                  WHERE NOT EXISTS (SELECT 1 FROM dispatch_events e WHERE e.dispatch_id = $1 AND e.event_type = $2)
+                 RETURNING dispatch_event_id`,
+                [dispatchId, FINAL_REVIEW_ESCALATED_EVENT, JSON.stringify(metadata)],
+            );
+            if (claimed.length === 0) return null;
+            const incident: Array<{ id: string }> = await manager.query(
+                `INSERT INTO dispatch_incidents (dispatch_incident_id, dispatch_id, incident_reason_id, description)
+                 VALUES (gen_random_uuid(), $1, $2, $3)
+                 RETURNING dispatch_incident_id AS id`,
+                [dispatchId, incidentReasonId, 'The route batch was not approved by final_review_escalation_time; the original promise is kept.'],
+            );
+            return incident[0].id;
+        });
     }
 
     /** Same as `recordBatchEventOnce`, for an order: true when this call wrote the event. */
