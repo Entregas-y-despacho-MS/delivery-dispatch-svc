@@ -19,6 +19,7 @@ import { ScheduledTaskRegistry } from '../src/app/scheduler/services/scheduled-t
 import { PLAN_GENERATION_TASK, ROUTE_CUTOFF_TASK } from '../src/app/scheduler/scheduled-task-names.js';
 import { SCHEDULED_TASK_RUN_ACTION } from '../src/app/scheduler/adapters/audit-log-task-run-log.adapter.js';
 import { PlanGenerationService } from '../src/app/planning/services/plan-generation.service.js';
+import { RouteCutoffService } from '../src/app/route-cutoff/services/route-cutoff.service.js';
 
 describe('Manual trigger of scheduled tasks (e2e)', () => {
     let app: INestApplication;
@@ -33,6 +34,7 @@ describe('Manual trigger of scheduled tasks (e2e)', () => {
     let rootToken: string;
 
     let generatorRuns = 0;
+    let cutoffRuns = 0;
     let releaseGenerator: () => void = () => {};
     let generatorBehaviour: 'fast' | 'blocked' | 'failing' = 'fast';
 
@@ -42,8 +44,15 @@ describe('Manual trigger of scheduled tasks (e2e)', () => {
     };
 
     beforeAll(async () => {
-        // The generator is registered by the real PlanningModule; only its service is replaced by a double
-        // (the real run is test/plan-generation.e2e-spec.ts).
+        // The generator and the cutoff are registered by their real modules (PlanningModule, RouteCutoffModule);
+        // only their services are replaced by doubles (the real runs are test/plan-generation.e2e-spec.ts and
+        // test/route-cutoff.e2e-spec.ts).
+        const cutoffDouble = {
+            run: async () => {
+                cutoffRuns++;
+                return { status: 'executed' };
+            },
+        };
         const generatorDouble = {
             run: async () => {
                 generatorRuns++;
@@ -56,6 +65,7 @@ describe('Manual trigger of scheduled tasks (e2e)', () => {
         };
         const moduleRef: TestingModule = await Test.createTestingModule({ imports: [AppModule] })
             .overrideProvider(PlanGenerationService).useValue(generatorDouble)
+            .overrideProvider(RouteCutoffService).useValue(cutoffDouble)
             .compile();
         app = moduleRef.createNestApplication();
 
@@ -136,35 +146,23 @@ describe('Manual trigger of scheduled tasks (e2e)', () => {
         });
     });
 
-    describe('task not registered yet', () => {
-        it('answers 503 SCHEDULED_TASK_NOT_AVAILABLE for the cutoff, which has no owner yet', async () => {
-            const res = await post('/planning/cutoff', coordinatorToken);
-
-            expect(res.status).toBe(503);
-            expect(res.body.error).toBe('SCHEDULED_TASK_NOT_AVAILABLE');
-        });
-
+    describe('tasks registered by their modules', () => {
         it('the generator is registered by the planning module on plan_generation_times', () => {
             const task = app.get(ScheduledTaskRegistry).get(PLAN_GENERATION_TASK);
 
             expect(task).toBeDefined();
             expect(task!.schedule).toEqual({ kind: 'times', settingKey: 'plan_generation_times' });
         });
+
+        it('the cutoff is registered by the route-cutoff module on route_cutoff_time (ST-51.3)', () => {
+            const task = app.get(ScheduledTaskRegistry).get(ROUTE_CUTOFF_TASK);
+
+            expect(task).toBeDefined();
+            expect(task!.schedule).toEqual({ kind: 'times', settingKey: 'route_cutoff_time' });
+        });
     });
 
     describe('task registered', () => {
-        let cutoffRuns = 0;
-
-        beforeAll(() => {
-            const registry = app.get(ScheduledTaskRegistry);
-            registry.register({
-                name: ROUTE_CUTOFF_TASK,
-                schedule: { kind: 'time', settingKey: 'route_cutoff_time' },
-                run: async () => {
-                    cutoffRuns++;
-                },
-            });
-        });
 
         it('a coordinator runs the generator and gets the result', async () => {
             const before = generatorRuns;

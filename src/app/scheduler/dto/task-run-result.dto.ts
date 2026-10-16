@@ -1,6 +1,8 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiExtraModels, ApiProperty, getSchemaPath } from '@nestjs/swagger';
 import { PlanGenerationSummaryDto } from '../../planning/dto/plan-generation-summary.dto.js';
+import { RouteCutoffSummaryDto } from '../../route-cutoff/dto/route-cutoff-summary.dto.js';
 
+@ApiExtraModels(PlanGenerationSummaryDto, RouteCutoffSummaryDto)
 export class TaskRunResultDto {
     @ApiProperty({ example: 'plan-generation', description: 'Name of the task that ran (the same name the scheduler and the audit log use).' })
     task!: string;
@@ -12,9 +14,9 @@ export class TaskRunResultDto {
     finishedAt!: Date;
 
     @ApiProperty({
-        type: PlanGenerationSummaryDto,
         required: false,
-        description: 'What the run did, when the task reports it. Only the batch generator does today (`POST /planning/generate`); absent for the others.',
+        oneOf: [{ $ref: getSchemaPath(PlanGenerationSummaryDto) }, { $ref: getSchemaPath(RouteCutoffSummaryDto) }],
+        description: 'What the run did, when the task reports it: the batch generator (`POST /planning/generate`) and the D-1 cutoff (`POST /planning/cutoff`) do; absent for the others.',
     })
-    summary?: PlanGenerationSummaryDto;
+    summary?: PlanGenerationSummaryDto | RouteCutoffSummaryDto;
 }
