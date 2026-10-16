@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, HttpStatus, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Patch, Post, Query } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOkResponse,
@@ -17,6 +17,10 @@ import { ApproveRouteBatchPromisesResponseDto } from '../dto/approve-route-batch
 import { ApproveFinalRouteBatchDto } from '../dto/approve-final-route-batch.dto.js';
 import { ApproveFinalRouteBatchResponseDto } from '../dto/approve-final-route-batch-response.dto.js';
 import { RouteBatchFinalApprovalService } from '../services/route-batch-final-approval.service.js';
+import { RouteBatchQueryService } from '../services/route-batch-query.service.js';
+import { FindRouteBatchesParamsDto } from '../dto/find-route-batches-params.dto.js';
+import { FindRouteBatchesResponseDto } from '../dto/find-route-batches-response.dto.js';
+import { RouteBatchDetailDto } from '../dto/route-batch-detail.dto.js';
 import { Roles } from '../../../../app/auth/decorators/index.js';
 import { CurrentUser } from '../../../../shared/decorators/current-user.decorator.js';
 import { ParseIdPipe } from '../../../../shared/pipes/index.js';
@@ -31,7 +35,8 @@ import {
 } from '../../../../shared/utils/swagger/index.js';
 
 /**
- * ST-50.1 — vehicle capacity validation; ST-50.4 — reviewer of a provisional route batch (D-42).
+ * ST-50.1 — vehicle capacity validation; ST-50.4 — reviewer of a provisional route batch (D-42);
+ * ST-215.5 — list and detail of the batches for the review screens.
  *
  * Error dictionary: VALIDATION_FAILED 400 | INVALID_TOKEN 401 | INSUFFICIENT_PERMISSIONS 403 |
  * ROUTE_BATCH_NOT_FOUND 404 | ROUTE_BATCH_NOT_PROVISIONAL 409 | ROUTE_BATCH_REVIEWER_NOT_ELIGIBLE 409.
@@ -45,7 +50,40 @@ export class RouteBatchesController {
     private readonly vehicleService: RouteBatchVehicleService,
     private readonly promiseApprovalService: RouteBatchPromiseApprovalService,
     private readonly finalApprovalService: RouteBatchFinalApprovalService,
+    private readonly queryService: RouteBatchQueryService,
   ) {}
+
+  @Get()
+  @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
+  @ApiOperation({
+    summary: 'List route batches for the review screens',
+    description:
+      "Paginated list ordered by shift date and id. Filter by `status` (any batch status; the review screens use `provisional` and `pending_final_review`), `shiftDate` and reviewer: `reviewerUserId` alone returns that reviewer's batches, `withoutReviewer=true` alone returns the batches nobody reviews (visible to everyone, D-42), and both together return the coordinator's queue (own batches plus the ones without reviewer). Each row carries the batch `version`, zone, vehicle, proposed driver, reviewer, number of dispatches and the weight and volume occupancy of the vehicle, listing the dispatches whose weight is only an estimate. A batch without vehicle has `occupancy: null`. Read only: it does not change the batch `version` and writes no event. Requires coordinator or supervisor role, or root.",
+  })
+  @ApiOkResponse({ type: FindRouteBatchesResponseDto })
+  @ApiBadRequests({ validation: true, example: ["The 'status' parameter must be one of: provisional, pending_final_review, confirmed, in_execution, closed, cancelled."] })
+  @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+  @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
+  async findAll(@Query() params: FindRouteBatchesParamsDto): Promise<FindRouteBatchesResponseDto> {
+    return await this.queryService.findAll(params);
+  }
+
+  @Get(':id')
+  @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
+  @ApiOperation({
+    summary: 'Get a route batch with its dispatches, capacity and system validation',
+    description:
+      'Everything the review screens need, read in one consistent snapshot: the batch (`version`, zone, `vehicle`, proposed driver, `reviewer`), its dispatches in route order with their own `version`, status, proposed time window and packages (the values `approve-promises` and `approve-final` expect; a dispatch is taken out of the batch with `removeDispatchIds` of `approve-promises`), the full capacity report of the vehicle including `assignable` (`null` without vehicle) and the result of the last system validation (`validation`, from the last `cutoff_validated` or `cutoff_failed` event: `reason`, `failures` and `warnings`; `null` if the batch never went through the cutoff), which explains a batch sent back to `provisional`. Read only: it does not change the batch `version` and writes no event. Requires coordinator or supervisor role, or root.',
+  })
+  @ApiIdParam('Route batch')
+  @ApiOkResponse({ type: RouteBatchDetailDto })
+  @ApiBadRequests({ id: true })
+  @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+  @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
+  @ApiNotFound({ code: 'ROUTE_BATCH_NOT_FOUND', message: 'Route batch not found.' })
+  async findOne(@Param('id', ParseIdPipe) id: number): Promise<RouteBatchDetailDto> {
+    return await this.queryService.findOne(id);
+  }
 
   @Post(':id/approve-promises')
   @HttpCode(HttpStatus.OK)
