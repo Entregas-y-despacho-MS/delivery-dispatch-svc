@@ -108,6 +108,8 @@ export interface CutoffRemnant {
     warehouseId: number;
     reviewerUserId: number | null;
     dispatchIds: number[];
+    /** Batch each of them was in (differs from `sourceBatchId` when a merge brought them along). */
+    sourceBatchByDispatch: Record<number, number>;
 }
 
 /** Stops of an untouched batch (no firm stop at all): stays `provisional` as it is. */

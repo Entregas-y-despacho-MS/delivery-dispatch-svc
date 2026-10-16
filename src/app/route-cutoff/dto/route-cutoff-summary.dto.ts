@@ -1,7 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 
 export class CutoffBatchFailureDto {
-    @ApiProperty({ example: 41, description: 'Batch that stayed `provisional`.' })
+    @ApiProperty({ type: 'integer', example: 41, description: 'Batch that stayed `provisional`.' })
     routeBatchId!: number;
 
     @ApiProperty({
@@ -23,28 +23,28 @@ export class RouteCutoffSummaryDto {
     @ApiProperty({ type: String, format: 'date', nullable: true, example: '2026-10-14', description: 'Route day the cutoff worked on; `null` when it did not run.' })
     shiftDate!: string | null;
 
-    @ApiProperty({ type: [Number], description: 'Batches that passed the validation and now wait for the 2nd approval (`pending_final_review`).' })
+    @ApiProperty({ type: 'integer', isArray: true, description: 'Batches that passed the validation and now wait for the 2nd approval (`pending_final_review`).' })
     pendingFinalReviewBatchIds!: number[];
 
     @ApiProperty({ type: [CutoffBatchFailureDto], description: 'Batches that failed the validation and went back to `provisional` with their reasons.' })
     failedBatches!: CutoffBatchFailureDto[];
 
-    @ApiProperty({ type: [Number], description: 'New batches born by dividing another one.' })
+    @ApiProperty({ type: 'integer', isArray: true, description: 'New batches born by dividing another one.' })
     createdBatchIds!: number[];
 
-    @ApiProperty({ type: [Number], description: 'Provisional batches that hold the orders whose response window is still open; they need the coordinator.' })
+    @ApiProperty({ type: 'integer', isArray: true, description: 'Provisional batches that hold the orders whose response window is still open; they need the coordinator.' })
     remnantBatchIds!: number[];
 
-    @ApiProperty({ type: [Number], description: 'Batches cancelled because they were merged into another or were left empty.' })
+    @ApiProperty({ type: 'integer', isArray: true, description: 'Batches cancelled because they were merged into another or were left empty.' })
     cancelledBatchIds!: number[];
 
-    @ApiProperty({ type: [Number], description: 'Orders without promise that left their batch and went back to `pending`.' })
+    @ApiProperty({ type: 'integer', isArray: true, description: 'Orders without promise that left their batch and went back to `pending`.' })
     releasedDispatchIds!: number[];
 
-    @ApiProperty({ type: [Number], description: 'Batches left out because a stop has no sequence or no point on the map.' })
+    @ApiProperty({ type: 'integer', isArray: true, description: 'Batches left out because a stop has no sequence or no point on the map.' })
     skippedBatchIds!: number[];
 
-    @ApiProperty({ type: Number, description: 'Groups (day, zone, warehouse) left as they were because an order or batch changed while the cutoff was computing.' })
+    @ApiProperty({ type: 'integer', minimum: 0, description: 'Groups (day, zone, warehouse) left as they were because an order or batch changed while the cutoff was computing.' })
     staleGroups!: number;
 
     @ApiProperty({ type: [String], description: 'Mandatory settings that were empty or invalid when `status` is `blocked`.' })

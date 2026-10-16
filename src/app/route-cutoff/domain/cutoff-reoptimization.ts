@@ -39,6 +39,8 @@ interface Work {
     proposedDriverId: number | null;
     stops: CutoffStop[];
     open: CutoffStop[];
+    /** Batch each open stop came from (a merge brings the open stops of the absorbed batch along). */
+    openSource: Map<number, number>;
     vehicleId: number | null;
     absorbed: number[];
     splitFrom: number | null;
@@ -158,6 +160,7 @@ export function reoptimizeCutoff(input: CutoffInput): CutoffPlan {
                 proposedDriverId: batch.proposedDriverId,
                 stops: part.eligible,
                 open: part.open,
+                openSource: new Map(part.open.map((stop) => [stop.dispatch.dispatchId, batch.routeBatchId])),
                 vehicleId: batch.vehicleId !== null && fleet.has(batch.vehicleId) ? batch.vehicleId : null,
                 absorbed: [],
                 splitFrom: null,
@@ -165,10 +168,13 @@ export function reoptimizeCutoff(input: CutoffInput): CutoffPlan {
             });
         }
 
-        // Keeps the batch's own vehicle while it fits; otherwise the smallest one of the pool where it does.
-        const adopt = (work: Work, stops: CutoffStop[], pool: PlanVehicle[]): void => {
+        // Keeps the batch's own vehicle while it fits; otherwise the smallest one that is free *now* where it
+        // does. The pool is read here, not passed in: a vehicle taken a moment ago by a split or a move must
+        // not be handed out twice (two batches with one vehicle break the unique index of the day).
+        const adopt = (work: Work, stops: CutoffStop[]): void => {
             const own = work.vehicleId !== null ? fleet.get(work.vehicleId) : undefined;
             if (own && fits(stops, own)) return;
+            const pool = [...ownVehicle(work), ...free];
             const vehicle = smallestFittingVehicle(stops.map((s) => s.dispatch), pool);
             if (!vehicle) return;
             giveBack(work.vehicleId, vehicle.vehicleId);
@@ -203,6 +209,7 @@ export function reoptimizeCutoff(input: CutoffInput): CutoffPlan {
                     record('merged', small.routeBatchId!, target, small.stops.map((s) => s.dispatch.dispatchId));
                     target.stops = sequenced.ordered;
                     target.open = [...target.open, ...small.open];
+                    for (const [dispatchId, source] of small.openSource) target.openSource.set(dispatchId, source);
                     target.vehicleId = vehicle.vehicleId;
                     target.absorbed.push(small.routeBatchId!, ...small.absorbed);
                     works.splice(works.indexOf(small), 1);
@@ -229,7 +236,7 @@ export function reoptimizeCutoff(input: CutoffInput): CutoffPlan {
                     work.incomplete = !sequenced.ok || largest === null || !fits(kept.length ? kept : work.stops, largest);
                     if (!work.incomplete) {
                         work.stops = sequenced.ordered;
-                        adopt(work, work.stops, pool);
+                        adopt(work, work.stops);
                     }
                     break;
                 }
@@ -260,9 +267,11 @@ export function reoptimizeCutoff(input: CutoffInput): CutoffPlan {
                     const vehicle = smallestFittingVehicle(remaining.map((s) => s.dispatch), free)
                         ?? smallestFittingVehicle([remaining[0].dispatch], free);
                     if (!vehicle) {
-                        // No vehicle left: the stops stay and the validator reports why.
+                        // No vehicle left for what could not stay. Stops already moved to another batch are
+                        // there (not here); the rest stay in this batch, each in exactly one place, and the
+                        // validator reports why the batch cannot go to review.
                         work.incomplete = true;
-                        work.stops = sequenced.ordered;
+                        work.stops = [...kept, ...remaining];
                         break;
                     }
                     take(vehicle.vehicleId);
@@ -274,6 +283,7 @@ export function reoptimizeCutoff(input: CutoffInput): CutoffPlan {
                         proposedDriverId: null,
                         stops: remaining,
                         open: [],
+                        openSource: new Map(),
                         vehicleId: vehicle.vehicleId,
                         absorbed: [],
                         splitFrom: work.routeBatchId ?? work.splitFrom,
@@ -284,7 +294,7 @@ export function reoptimizeCutoff(input: CutoffInput): CutoffPlan {
                 }
 
                 work.stops = kept;
-                adopt(work, kept, pool);
+                adopt(work, kept);
             }
         }
 
@@ -337,5 +347,6 @@ function toRemnant(work: Work): CutoffRemnant {
         warehouseId: template.warehouseId,
         reviewerUserId: template.reviewerUserId,
         dispatchIds: work.open.map((stop) => stop.dispatch.dispatchId),
+        sourceBatchByDispatch: Object.fromEntries(work.openSource),
     };
 }

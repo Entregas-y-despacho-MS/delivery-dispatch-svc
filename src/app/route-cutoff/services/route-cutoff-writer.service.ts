@@ -78,6 +78,9 @@ const STALE_CODES: ReadonlySet<CutoffFailureCode> = new Set<CutoffFailureCode>([
     'dispatch_version_changed',
     'dispatch_status_changed',
     'dispatch_in_other_batch',
+    // Only a vehicle that changed hands can collide: another group's rolled-back plan, or a batch created
+    // meanwhile. Writing it would break the unique index of the day, so the group waits for the next run.
+    'vehicle_conflict',
 ]);
 
 /**
@@ -118,9 +121,42 @@ export class RouteCutoffWriterService {
             const facts = await this.buildFacts(manager, group, batchPlan, batches, dispatches, context);
             validations.set(batchPlan, validateCutoffBatch(facts, context.params));
         }
-        const staleReasons = [...validations.values()]
-            .flatMap((validation) => validation.failures)
-            .filter((failure) => STALE_CODES.has(failure.code));
+        // Everything the proposal is going to touch must still be what the cutoff read: the batches of the
+        // group (also the absorbed, emptied and untouched ones, which have no facts of their own) and every
+        // order it moves, releases or leaves in a remnant.
+        const guardIssues: CutoffIssue[] = [];
+        for (const id of group.batchIds) {
+            const locked = batches.get(id);
+            if (!locked || locked.status !== RouteBatchStatusEnum.PROVISIONAL) {
+                guardIssues.push({ code: 'batch_not_found', dispatchIds: [], detail: { routeBatchId: id, status: locked?.status ?? null } });
+            } else if (locked.version !== group.batchVersions[id]) {
+                guardIssues.push({
+                    code: 'batch_version_changed', dispatchIds: [],
+                    detail: { routeBatchId: id, expected: group.batchVersions[id], current: locked.version },
+                });
+            }
+        }
+        for (const id of dispatchIds) {
+            const read = context.stopsById.get(id);
+            const current = dispatches.get(id);
+            if (!current) guardIssues.push({ code: 'dispatch_not_found', dispatchIds: [id], detail: {} });
+            else if (read && current.version !== read.version) {
+                guardIssues.push({
+                    code: 'dispatch_version_changed', dispatchIds: [id],
+                    detail: { expected: read.version, current: current.version },
+                });
+            }
+        }
+        // The guard and the validation see the same change from two sides: one reason per code and order.
+        const staleByKey = new Map<string, CutoffIssue>();
+        for (const issue of [
+            ...guardIssues,
+            ...[...validations.values()].flatMap((validation) => validation.failures).filter((failure) => STALE_CODES.has(failure.code)),
+        ]) {
+            const key = `${issue.code}|${issue.dispatchIds.join(',')}|${(issue.detail as { routeBatchId?: number }).routeBatchId ?? ''}`;
+            if (!staleByKey.has(key)) staleByKey.set(key, issue);
+        }
+        const staleReasons = [...staleByKey.values()];
 
         if (staleReasons.length > 0) {
             // Nothing is moved: the next run (or the coordinator) starts from the data as it is.
@@ -233,7 +269,7 @@ export class RouteCutoffWriterService {
                 to: row.route_batch_id,
                 sequence: index + 1,
                 reason: 'window_open',
-                from: remnant.sourceBatchId,
+                from: remnant.sourceBatchByDispatch[dispatchId] ?? remnant.sourceBatchId,
                 version: context.stopsById.get(dispatchId)!.version,
             }));
         }
@@ -296,7 +332,8 @@ export class RouteCutoffWriterService {
         for (const batch of group.plan.batches) for (const stop of batch.stops) ids.add(stop.dispatchId);
         for (const remnant of group.plan.remnants) for (const id of remnant.dispatchIds) ids.add(id);
         for (const release of group.plan.released) ids.add(release.dispatchId);
-        for (const untouched of group.plan.untouched) for (const id of untouched.openDispatchIds) ids.add(id);
+        // The open orders of an untouched batch are not listed: nothing about them changes, and listing them
+        // would clear their `sequence_order` with no move to put it back.
         return [...ids];
     }
 
@@ -404,7 +441,7 @@ export class RouteCutoffWriterService {
     private async cancelBatches(manager: EntityManager, ids: number[]): Promise<void> {
         await manager.query(
             `UPDATE route_batches SET status = $2, version = version + 1, updated_at = NOW()
-              WHERE route_batch_id = ANY($1) AND status <> $2`,
+              WHERE route_batch_id = ANY($1) AND status = 'provisional'`,
             [ids, RouteBatchStatusEnum.CANCELLED],
         );
     }
@@ -501,7 +538,7 @@ export class RouteCutoffWriterService {
             }));
             for (const dispatchId of remnant.dispatchIds) {
                 batchRows.push(batchEvents.create({
-                    routeBatchId: remnant.sourceBatchId, dispatchId, eventType: 'order_removed', actorUserId: null,
+                    routeBatchId: remnant.sourceBatchByDispatch[dispatchId] ?? remnant.sourceBatchId, dispatchId, eventType: 'order_removed', actorUserId: null,
                     actorType: 'system', reason: 'cutoff_window_open', metadata: { ...meta, dispatchId },
                 }));
             }

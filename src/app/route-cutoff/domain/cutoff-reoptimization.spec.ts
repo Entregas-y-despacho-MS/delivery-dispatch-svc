@@ -127,6 +127,7 @@ describe('reoptimizeCutoff — what stays out of the cutoff', () => {
                 warehouseId: 1,
                 reviewerUserId: 7,
                 dispatchIds: [2],
+                sourceBatchByDispatch: { 2: 1 },
             },
         ]);
     });
@@ -156,5 +157,47 @@ describe('reoptimizeCutoff — what stays out of the cutoff', () => {
         expect(plan.released).toEqual([{ dispatchId: 1, fromBatchId: 1, reason: 'no_promise' }]);
         // The vehicle of the cancelled batch is the one the divided batch of the other zone gets.
         expect(plan.batches.find((p) => p.routeBatchId === null)!.vehicleId).toBe(1);
+    });
+});
+
+describe('reoptimizeCutoff — bookkeeping', () => {
+    // The third stop can never be reached inside its slot (km 40 away, slot ends 09:10), so it is rejected
+    // by the sequencing while the other two overflow the 100 kg vehicle.
+    const overloaded = () => batch(1, [
+        stop(1, { km: 1, kg: 60 }),
+        stop(2, { km: 2, kg: 60, window: ['11:00', '13:00'] }),
+        stop(3, { km: 40, kg: 60, window: ['09:00', '09:10'] }),
+    ], { vehicleId: 1 });
+
+    it('never hands one vehicle to two batches when a stop is shed and the rest needs a bigger one', () => {
+        const plan = reoptimizeCutoff(cutoffInput([overloaded()], {}, [vehicle(1, 100), vehicle(2, 200), vehicle(3, 500)]));
+
+        const vehicles = plan.batches.map((p) => p.vehicleId);
+        expect(new Set(vehicles).size).toBe(vehicles.length);
+        // The shed stop takes the smallest free vehicle and what stays moves up to the one left.
+        expect(plan.batches.find((p) => p.routeBatchId === 1)!.vehicleId).toBe(3);
+        expect(plan.batches.find((p) => p.routeBatchId === null)!.vehicleId).toBe(2);
+    });
+
+    it('keeps every stop in exactly one batch when no vehicle is left for the ones that must leave', () => {
+        const plan = reoptimizeCutoff(cutoffInput([overloaded()], {}, [vehicle(1, 100)]));
+
+        const all = plan.batches.flatMap((p) => ids(p)).sort();
+        expect(all).toEqual([1, 2, 3]);
+        expect(plan.batches).toHaveLength(1);
+        expect(plan.batches[0].reoptimizationIncomplete).toBe(true);
+    });
+
+    it('names the batch an open order really came from when a merge brought it along', () => {
+        const a = batch(1, [stop(1), stop(4, { notifiedAt: NOTIFIED_TODAY, window: ['14:00', '16:00'] })]);
+        const b = batch(2, [stop(2, { window: ['11:00', '13:00'] })]);
+
+        const plan = reoptimizeCutoff(cutoffInput([a, b]));
+
+        // Equal sizes: batch 1 is absorbed into batch 2, and its open order waits in a remnant of batch 2.
+        expect(plan.cancelledBatchIds).toEqual([1]);
+        expect(plan.remnants).toHaveLength(1);
+        expect(plan.remnants[0].sourceBatchId).toBe(2);
+        expect(plan.remnants[0].sourceBatchByDispatch).toEqual({ 4: 1 });
     });
 });

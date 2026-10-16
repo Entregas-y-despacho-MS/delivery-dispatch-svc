@@ -156,4 +156,32 @@ describe('RouteCutoffService', () => {
         await expect(service.run(ctx(TUESDAY_CUTOFF))).rejects.toThrow(/1 group\(s\) could not be written/);
         expect(writer.applyGroup).toHaveBeenCalledTimes(2);
     });
+
+    it('tries a group again when Postgres chose it as the victim of a deadlock', async () => {
+        const { service, writer } = build({ batches: [batch(1, [stop(1)])] });
+        const deadlock = Object.assign(new Error('deadlock detected'), { driverError: { code: '40P01' } });
+        writer.applyGroup.mockRejectedValueOnce(deadlock);
+
+        const summary = await service.run(ctx(TUESDAY_CUTOFF));
+
+        expect(writer.applyGroup).toHaveBeenCalledTimes(2);
+        expect(summary.pendingFinalReviewBatchIds).toEqual([1]);
+    });
+
+    it('gives up after three deadlocks and records a failed run', async () => {
+        const { service, writer } = build({ batches: [batch(1, [stop(1)])] });
+        const deadlock = Object.assign(new Error('deadlock detected'), { driverError: { code: '40P01' } });
+        writer.applyGroup.mockRejectedValue(deadlock);
+
+        await expect(service.run(ctx(TUESDAY_CUTOFF))).rejects.toThrow(/1 group\(s\) could not be written/);
+        expect(writer.applyGroup).toHaveBeenCalledTimes(3);
+    });
+
+    it('does not retry an error that is not a deadlock', async () => {
+        const { service, writer } = build({ batches: [batch(1, [stop(1)])] });
+        writer.applyGroup.mockRejectedValue(new Error('connection reset'));
+
+        await expect(service.run(ctx(TUESDAY_CUTOFF))).rejects.toThrow();
+        expect(writer.applyGroup).toHaveBeenCalledTimes(1);
+    });
 });

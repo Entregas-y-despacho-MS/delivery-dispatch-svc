@@ -457,4 +457,123 @@ describe('Route cutoff (e2e, ST-51.3)', () => {
         const failure = (await eventsOf(batch.batchId)).find((e: { event_type: string }) => e.event_type === 'cutoff_failed');
         expect(failure.metadata.stale).toBe(true);
     });
+
+    it('does not touch a batch whose orders all have an open window, sequence included', async () => {
+        const zone = await newZone();
+        const vehicle = await newVehicle(1000);
+        const batch = await makeBatch(zone, vehicle, [
+            { km: 1, window: ['09:00', '11:00'], kind: 'open' },
+            { km: 2, window: ['11:00', '13:00'], kind: 'open' },
+        ]);
+        const sequences = async () => await Promise.all(batch.dispatchIds.map(async (id) => (await dispatchRow(id)).sequence_order));
+        const runOnce = async () => {
+            focusBatches = new Set([batch.batchId]);
+            try {
+                return await cutoff();
+            } finally {
+                focusBatches = null;
+            }
+        };
+
+        const first = await runOnce();
+
+        expect(first.status).toBe(200);
+        expect((await batchRow(batch.batchId)).status).toBe('provisional');
+        expect(await sequences()).toEqual([1, 2]);
+        expect((await eventsOf(batch.batchId)).map((e: { event_type: string }) => e.event_type)).toContain('cutoff_skipped');
+
+        // A cleared sequence would make the batch "incomplete" and skip it for good on the next run.
+        const second = await runOnce();
+        expect(second.body.summary.skippedBatchIds).toEqual([]);
+        expect(await sequences()).toEqual([1, 2]);
+    });
+
+    it('drops the group when a batch that was going to be absorbed changed meanwhile', async () => {
+        const zone = await newZone();
+        const vehicleA = await newVehicle(1000);
+        const vehicleB = await newVehicle(1000);
+        const a = await makeBatch(zone, vehicleA, [
+            { km: 1, window: ['09:00', '11:00'], kind: 'firm' },
+            { km: 2, window: ['11:00', '13:00'], kind: 'firm' },
+        ]);
+        const b = await makeBatch(zone, vehicleB, [{ km: 3, window: ['14:00', '16:00'], kind: 'firm' }]);
+
+        const read = await app.get(CutoffBatchesRepository).findProvisionalBatches(shiftDate);
+        const mine = read.batches.filter((x) => [a.batchId, b.batchId].includes(x.routeBatchId));
+        const settings = (await loadPlanningSettings(app.get(SettingsService))).values!;
+        const plan = reoptimizeCutoff({
+            now: new Date(), settings, batches: mine,
+            fleet: await app.get(PlanCandidatesRepository).findVehicles(),
+            occupiedVehicleIds: [], maxStopsPerBatch: 50, travelFor: () => () => 60,
+        });
+        const [group] = splitPlanByGroup(plan, mine);
+        expect(group.plan.cancelledBatchIds).toEqual([b.batchId]);
+        const stopsById = new Map<number, CutoffStop>(mine.flatMap((x) => x.stops).map((s) => [s.dispatch.dispatchId, s]));
+
+        // Somebody touches the batch that was going to be absorbed.
+        await dataSource.query(`UPDATE route_batches SET version = version + 1 WHERE route_batch_id = $1`, [b.batchId]);
+
+        const result = await app.get(RouteCutoffWriterService).applyGroup(group, {
+            trigger: 'manual', occurrence: null,
+            fleet: await app.get(PlanCandidatesRepository).findVehicles(),
+            params: buildSimParams(settings, () => 60), stopsById,
+        });
+
+        expect(result.status).toBe('stale');
+        expect(result.staleReasons.map((r) => r.code)).toContain('batch_version_changed');
+        expect((await batchRow(b.batchId)).status).toBe('provisional');
+        expect((await batchRow(a.batchId)).status).toBe('provisional');
+        expect((await dispatchRow(b.dispatchIds[0])).route_batch_id).toBe(b.batchId);
+    });
+
+    it('leaves nothing half-done when the group fails in the middle of its writes', async () => {
+        const zone = await newZone();
+        const vehicleA = await newVehicle(1000);
+        const vehicleB = await newVehicle(1000);
+        const a = await makeBatch(zone, vehicleA, [
+            { km: 1, window: ['09:00', '11:00'], kind: 'firm' },
+            { km: 2, window: ['11:00', '13:00'], kind: 'firm' },
+        ]);
+        const b = await makeBatch(zone, vehicleB, [{ km: 3, window: ['14:00', '16:00'], kind: 'firm' }]);
+        const batchIds = [a.batchId, b.batchId];
+        const dispatchIds = [...a.dispatchIds, ...b.dispatchIds];
+
+        const snapshot = async () => ({
+            batches: await Promise.all(batchIds.map(batchRow)),
+            dispatches: await Promise.all(dispatchIds.map(dispatchRow)),
+            events: (await dataSource.query(
+                `SELECT COUNT(*)::int AS n FROM route_batch_events WHERE route_batch_id = ANY($1::int[])`, [batchIds]))[0].n,
+        });
+        const before = await snapshot();
+
+        // The merge cancels b, frees the vehicles and renumbers the stops before it marks the survivor for
+        // review: making that last step fail proves everything before it is rolled back with it.
+        const fn = `fn_cut_fail_${run}`;
+        const trigger = `trg_cut_fail_${run}`;
+        await dataSource.query(
+            `CREATE FUNCTION ${fn}() RETURNS trigger AS $$
+             BEGIN
+                 IF NEW.status = 'pending_final_review' AND NEW.delivery_zone_id = ${zone} THEN
+                     RAISE EXCEPTION 'forced failure of the cutoff test';
+                 END IF;
+                 RETURN NEW;
+             END;
+             $$ LANGUAGE plpgsql`,
+        );
+        await dataSource.query(`CREATE TRIGGER ${trigger} BEFORE UPDATE ON route_batches FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
+        let res: request.Response;
+        try {
+            focusBatches = new Set(batchIds);
+            res = await cutoff();
+        } finally {
+            focusBatches = null;
+            await dataSource.query(`DROP TRIGGER IF EXISTS ${trigger} ON route_batches`);
+            await dataSource.query(`DROP FUNCTION IF EXISTS ${fn}()`);
+        }
+
+        expect(res.status).toBe(500);
+        expect(res.body.error).toBe('SCHEDULED_TASK_FAILED');
+        expect(await snapshot()).toEqual(before);
+        expect(before.batches.map((x: { status: string }) => x.status)).toEqual(['provisional', 'provisional']);
+    });
 });

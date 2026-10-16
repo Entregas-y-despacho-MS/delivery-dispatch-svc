@@ -108,7 +108,7 @@ export class RouteCutoffService {
             const zone = read.batches.find((batch) => batch.zoneId === group.zoneId)!;
             const zoneDetail = { zoneId: zone.zoneId, zoneCode: zone.zoneCode, zoneName: zone.zoneName };
             try {
-                const written = await this.writer.applyGroup(group, {
+                const written = await this.applyWithRetry(group, {
                     trigger: manual ? 'manual' : 'scheduled',
                     occurrence: context.occurrence,
                     fleet: fleet as PlanVehicle[],
@@ -160,6 +160,26 @@ export class RouteCutoffService {
         return summary;
     }
 
+    /**
+     * One group in one transaction, retried when Postgres picks it as the victim of a deadlock. The cutoff
+     * locks the batch and then its orders, while the handling of a shipment change (ST-72.5) locks the order
+     * and then raises the version of its batch: the two can wait on each other. The aborted transaction
+     * leaves nothing behind, so trying again is safe.
+     */
+    private async applyWithRetry(
+        group: Parameters<RouteCutoffWriterService['applyGroup']>[0],
+        context: Parameters<RouteCutoffWriterService['applyGroup']>[1],
+    ): ReturnType<RouteCutoffWriterService['applyGroup']> {
+        for (let attempt = 1; ; attempt++) {
+            try {
+                return await this.writer.applyGroup(group, context);
+            } catch (error) {
+                if (!isDeadlock(error) || attempt >= MAX_GROUP_ATTEMPTS) throw error;
+                this.logger.warn(`Cutoff of group ${group.key} was a deadlock victim; attempt ${attempt + 1} of ${MAX_GROUP_ATTEMPTS}.`);
+            }
+        }
+    }
+
     private async loadMatrices(
         batches: CutoffBatch[],
         warehouses: Array<{ warehouseId: number; latitude: number; longitude: number }>,
@@ -190,6 +210,14 @@ export class RouteCutoffService {
         }
         return matrices;
     }
+}
+
+/** Attempts per group when it is chosen as a deadlock victim (`40P01`). */
+const MAX_GROUP_ATTEMPTS = 3;
+
+function isDeadlock(error: unknown): boolean {
+    const candidate = error as { code?: string; driverError?: { code?: string } } | null;
+    return (candidate?.driverError?.code ?? candidate?.code) === '40P01';
 }
 
 function emptySummary(

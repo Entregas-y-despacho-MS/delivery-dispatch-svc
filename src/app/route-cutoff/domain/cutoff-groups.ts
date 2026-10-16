@@ -13,6 +13,8 @@ export interface CutoffGroup {
     warehouseId: number;
     /** The provisional batches the group was read with (the ones the writer locks). */
     batchIds: number[];
+    /** Version each batch had when the cutoff read it. */
+    batchVersions: Record<number, number>;
     plan: CutoffPlan;
 }
 
@@ -35,10 +37,12 @@ export function splitPlanByGroup(plan: CutoffPlan, batches: CutoffBatch[]): Cuto
                 zoneId: batch.zoneId,
                 warehouseId: batch.warehouseId,
                 batchIds: [],
+                batchVersions: {},
                 plan: emptyPlan(),
             });
         }
         groups.get(key)!.batchIds.push(batch.routeBatchId);
+        groups.get(key)!.batchVersions[batch.routeBatchId] = batch.version;
     }
 
     const of = (batchId: number): CutoffGroup => {

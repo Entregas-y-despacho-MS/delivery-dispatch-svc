@@ -1,5 +1,5 @@
 import { Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
-import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiServiceUnavailableResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiInternalServerErrorResponse, ApiOkResponse, ApiOperation, ApiServiceUnavailableResponse, ApiTags } from '@nestjs/swagger';
 import { CoordinatorOnly } from '../../auth/decorators/index.js';
 import { ApiConflict, ApiUnauthorized, ApiUnprocessableEntity, errorBody } from '../../../shared/utils/swagger/index.js';
 import { TaskRunResultDto } from '../dto/task-run-result.dto.js';
@@ -23,9 +23,9 @@ const NOT_AVAILABLE = errorBody(
  *   INVALID_TOKEN                  401 — JWT is missing, malformed, or expired.
  *   INSUFFICIENT_PERMISSIONS       403 — Authenticated but not a coordinator (or root).
  *   SCHEDULED_TASK_ALREADY_RUNNING 409 — The task holds its lock right now.
- *   PLANNING_SETTINGS_MISSING      422 — (generate) A mandatory setting is empty or invalid; `details.missingKeys` lists them.
+ *   PLANNING_SETTINGS_MISSING      422 — (generate, cutoff) A mandatory setting is empty or invalid; `details.missingKeys` lists them.
  *   SCHEDULED_TASK_FAILED          500 — The task threw; the cause is in the server log.
- *   OSRM_UNAVAILABLE               503 — (generate) OSRM did not answer in 5 s; nothing was written.
+ *   OSRM_UNAVAILABLE               503 — (generate, cutoff) OSRM did not answer in 5 s; nothing was written.
  *   SCHEDULED_TASK_NOT_AVAILABLE   503 — Nobody registered the task in this service yet.
  *
  * ST-50.3 (D-40) — manual trigger of the scheduled tasks, for demos. Same lock as the schedule.
@@ -69,6 +69,10 @@ export class PlanningController {
     @ApiServiceUnavailableResponse({
         description: 'OSRM did not answer in time (`OSRM_UNAVAILABLE`, nothing was written), or the task is not registered in this service (`SCHEDULED_TASK_NOT_AVAILABLE`).',
         schema: { oneOf: [{ example: OSRM_UNAVAILABLE }, { example: NOT_AVAILABLE }] },
+    })
+    @ApiInternalServerErrorResponse({
+        description: 'The cutoff threw while running (`SCHEDULED_TASK_FAILED`, for example a group that could not be written); the cause is in the server log and a rerun is safe.',
+        schema: { example: errorBody(500, 'SCHEDULED_TASK_FAILED', 'The task failed. Nothing was recorded as done; the cause is in the server log.') },
     })
     async cutoff(): Promise<TaskRunResultDto> {
         return await this.trigger.trigger(ROUTE_CUTOFF_TASK);
