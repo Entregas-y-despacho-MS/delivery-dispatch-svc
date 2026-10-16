@@ -51,16 +51,18 @@ export class AuthService {
             throw new InvalidCredentialsException();
         }
 
-        // The password is checked BEFORE saying the account is locked: otherwise anyone could learn that a
-        // username exists (and is locked) without knowing its password. A locked account with a wrong
-        // password gets the generic answer and does not count another attempt.
-        const locked = !!user.lockedUntil && user.lockedUntil > new Date();
-        const passwordMatch = await comparePassword(dto.password, user.passwordHash);
-        if (!passwordMatch) {
-            if (!locked) await this.registerFailedAttempt(user);
-            throw new InvalidCredentialsException();
-        }
-        if (locked) throw new AccountLockedException();
+        // A locked account answers ACCOUNT_LOCKED to everyone and its password is never compared. Comparing it
+        // and answering differently for the right password (the previous behavior) made the lock useless
+        // against guessing: during the lock an attacker could keep trying and tell the right password apart.
+        // The price is that anyone who has made `max_failed_login_attempts` wrong tries on a username learns
+        // that it exists; that was accepted (RF-A21, 2026-10-16) over leaving the oracle.
+        if (user.lockedUntil && user.lockedUntil > new Date()) throw new AccountLockedException();
+
+        // The attempt is taken BEFORE comparing, in one atomic UPDATE: of the requests in flight at the same
+        // time only as many as the account has attempts left reach bcrypt; the rest find it locked.
+        if (!(await this.reserveAttempt(user))) throw new AccountLockedException();
+
+        if (!(await comparePassword(dto.password, user.passwordHash))) throw new InvalidCredentialsException();
 
         if (user.twoFactorEnabled) {
             if (!dto.totpCode) throw new TotpRequiredException();
@@ -191,15 +193,15 @@ export class AuthService {
         return isPasswordChangeRequired(user, await this.settings.getNumber('password_expiration_days', 90));
     }
 
-    // The counter is incremented inside the database (one atomic UPDATE), not read-modified-written
-    // here: parallel wrong passwords used to overwrite each other and never reached the limit.
-    private async registerFailedAttempt(user: UserForAuthDto): Promise<void> {
+    // The attempt is taken inside the database (one atomic UPDATE), not read-modified-written here. `false`
+    // means the account is locked: there is no attempt left to take.
+    private async reserveAttempt(user: UserForAuthDto): Promise<boolean> {
         const [maxAttempts, lockoutMinutes] = await Promise.all([
             this.settings.getNumber('max_failed_login_attempts', 5),
             this.settings.getNumber('account_lockout_minutes', 15),
         ]);
 
-        await this.usersService.registerFailedLogin(user.id, maxAttempts, lockoutMinutes * 60_000);
+        return await this.usersService.reserveLoginAttempt(user.id, maxAttempts, lockoutMinutes * 60_000);
     }
 
     private async buildTokens(payload: JwtPayload): Promise<{ accessToken: string; refreshToken: string }> {

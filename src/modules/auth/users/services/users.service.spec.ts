@@ -457,22 +457,42 @@ describe('UsersService.assertCanManageRoot — un admin no puede llegar a root',
     });
 });
 
-describe('UsersService.registerFailedLogin — un solo UPDATE atómico', () => {
+describe('UsersService.reserveLoginAttempt — un solo UPDATE atómico que decide quién tiene intento', () => {
     it('manda un único UPDATE con el máximo y el instante de desbloqueo', async () => {
         const { service, rawRepo } = buildService();
-        (rawRepo as any).query = vi.fn();
+        (rawRepo as any).query = vi.fn().mockResolvedValue([{ failed_attempts: 1 }]);
         const before = Date.now();
 
-        await service.registerFailedLogin(7, 5, 15 * 60_000);
+        await service.reserveLoginAttempt(7, 5, 15 * 60_000);
 
         expect((rawRepo as any).query).toHaveBeenCalledTimes(1);
         const [sql, [userId, now, max, until]] = (rawRepo as any).query.mock.calls[0];
-        expect(sql).toMatch(/^\s*UPDATE users SET/);
+        expect(sql).toMatch(/UPDATE users SET/);
         expect(sql).toContain('failed_attempts + 1'); // se incrementa en la base, no se calcula acá
         expect([userId, max]).toEqual([7, 5]);
         expect(now.getTime()).toBeGreaterThanOrEqual(before);
         expect(until.getTime() - now.getTime()).toBe(15 * 60_000);
         expect(rawRepo.update).not.toHaveBeenCalled(); // nada de leer-y-escribir
+    });
+
+    it('solo actualiza una cuenta que no esté bloqueada: así la base reparte los intentos entre pedidos paralelos', async () => {
+        const { service, rawRepo } = buildService();
+        (rawRepo as any).query = vi.fn().mockResolvedValue([]);
+
+        await service.reserveLoginAttempt(7, 5, 15 * 60_000);
+
+        const [sql] = (rawRepo as any).query.mock.calls[0];
+        expect(sql).toMatch(/WHERE user_id = \$1 AND \(locked_until IS NULL OR locked_until <= \$2::timestamptz\)/);
+    });
+
+    it('devuelve true si la base dio un intento y false si la cuenta ya no tiene', async () => {
+        const { service, rawRepo } = buildService();
+        (rawRepo as any).query = vi.fn()
+            .mockResolvedValueOnce([{ failed_attempts: 3 }])
+            .mockResolvedValueOnce([]);
+
+        await expect(service.reserveLoginAttempt(7, 5, 60_000)).resolves.toBe(true);
+        await expect(service.reserveLoginAttempt(7, 5, 60_000)).resolves.toBe(false);
     });
 });
 
