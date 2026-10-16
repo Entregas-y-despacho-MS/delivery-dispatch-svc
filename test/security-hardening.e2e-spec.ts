@@ -134,7 +134,13 @@ describe('Security hardening (e2e)', () => {
             expect(results.every((r) => r.status === 401)).toBe(true);
 
             const row = await userRow(u.id);
-            expect(row.failed_attempts).toBe(12);
+            // Every request reads the user when it starts. One that reads it after the lock was set does not
+            // count (a locked account does not count more attempts, by design: it neither reveals the lock nor
+            // lengthens it), so how many of the 12 count depends on timing. What must hold: the counter never
+            // stays below the limit (the old bug: parallel attempts overwrote each other and stayed at 1), never
+            // exceeds the requests sent, and the account ends locked.
+            expect(row.failed_attempts).toBeGreaterThanOrEqual(5);
+            expect(row.failed_attempts).toBeLessThanOrEqual(12);
             expect(row.locked_until).not.toBeNull();
 
             const correct = await login(u.username);
