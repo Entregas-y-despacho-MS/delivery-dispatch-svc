@@ -43,7 +43,7 @@ Se referencian con `$ref` a `envelope.schema.json#/$defs/<nombre>`:
 3. Si el cambio es incompatible con la versión vigente, subir `schemaVersion` en esquema y ejemplo.
 4. Correr `npm run contracts:check` y `npm test`: el verificador compara catálogo, esquemas, ejemplos y fixtures del simulador; `npm test` lo ejecuta antes de Vitest.
 
-El catálogo se busca en el repositorio hermano `delivery-dispatch-docs`, tanto desde un checkout normal como desde un worktree. Si está en otra ubicación, se puede indicar con `CONTRACTS_CATALOG_PATH` (ruta absoluta al archivo `interoperabilidad-y-flujos.md`). Si no se encuentra, la verificación falla con una instrucción para configurarlo.
+El catálogo se busca como `docs/interoperabilidad-y-flujos.md` en el checkout o en sus directorios superiores, y también en el repositorio hermano `delivery-dispatch-docs` (desde un checkout normal o un worktree). Si está en otra ubicación, se puede indicar con `CONTRACTS_CATALOG_PATH` (ruta absoluta al archivo `interoperabilidad-y-flujos.md`). Si no se encuentra, la verificación falla con una instrucción para configurarlo.
 
 El catálogo y esta carpeta se mantienen sincronizados: un tópico existe en ambos o en ninguno.
 

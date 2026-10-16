@@ -32,17 +32,20 @@ const catalogPath = () => {
     return path;
   }
 
-  // The docs repository is a sibling of the service in normal checkouts and
-  // two levels above service worktrees under backend/worktrees/.
+  // Search the checkout and its ancestors for either supported catalog layout.
   let parent = ROOT;
-  for (let level = 0; level < 5; level += 1) {
+  for (let level = 0; level <= 5; level += 1) {
+    const candidates = [
+      resolve(parent, 'docs/interoperabilidad-y-flujos.md'),
+      resolve(parent, 'delivery-dispatch-docs/interoperabilidad-y-flujos.md'),
+    ];
+    const candidate = candidates.find(existsSync);
+    if (candidate) return candidate;
     parent = dirname(parent);
-    const candidate = resolve(parent, 'delivery-dispatch-docs/interoperabilidad-y-flujos.md');
-    if (existsSync(candidate)) return candidate;
   }
 
   throw new Error(
-    'No se encontró delivery-dispatch-docs/interoperabilidad-y-flujos.md. ' +
+    'No se encontró el catálogo interoperabilidad-y-flujos.md en docs/ ni delivery-dispatch-docs/. ' +
       'Configura CONTRACTS_CATALOG_PATH con la ruta del catálogo.',
   );
 };
