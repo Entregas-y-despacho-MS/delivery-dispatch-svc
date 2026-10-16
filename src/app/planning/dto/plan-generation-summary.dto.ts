@@ -31,13 +31,13 @@ export class PlanGenerationSummaryDto {
     })
     status!: 'executed' | 'blocked';
 
-    @ApiProperty({ type: [Number], description: 'Ids of the provisional batches created in this run.' })
+    @ApiProperty({ type: 'integer', isArray: true, description: 'Ids of the provisional batches created in this run.' })
     createdBatchIds!: number[];
 
-    @ApiProperty({ type: [Number], description: 'Ids of the open batches that received late orders in this run.' })
+    @ApiProperty({ type: 'integer', isArray: true, description: 'Ids of the open batches that received late orders in this run.' })
     updatedBatchIds!: number[];
 
-    @ApiProperty({ type: [Number], description: 'Ids of the orders that went to `in_planning` in this run, in new and open batches.' })
+    @ApiProperty({ type: 'integer', isArray: true, description: 'Ids of the orders that went to `in_planning` in this run, in new and open batches.' })
     plannedDispatchIds!: number[];
 
     @ApiProperty({ type: [PlanAlertDto], description: 'Orders that stay `pending` and need the coordinator (the ones already reported in an earlier run are listed too).' })

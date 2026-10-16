@@ -51,6 +51,10 @@ export class PlanningController {
         description: 'OSRM did not answer in time (`OSRM_UNAVAILABLE`, nothing was written), or the task is not registered in this service (`SCHEDULED_TASK_NOT_AVAILABLE`).',
         schema: { oneOf: [{ example: OSRM_UNAVAILABLE }, { example: NOT_AVAILABLE }] },
     })
+    @ApiInternalServerErrorResponse({
+        description: 'The generator threw an unexpected error while running (`SCHEDULED_TASK_FAILED`); the cause is in the server log and a rerun is safe.',
+        schema: { example: errorBody(500, 'SCHEDULED_TASK_FAILED', 'The task failed. Nothing was recorded as done; the cause is in the server log.') },
+    })
     async generate(): Promise<TaskRunResultDto> {
         return await this.trigger.trigger(PLAN_GENERATION_TASK);
     }
