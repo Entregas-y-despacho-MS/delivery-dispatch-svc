@@ -143,7 +143,9 @@ export class SyncService {
         if (!(err instanceof QueryFailedError)) return null;
         const driverError = err.driverError as { code?: string; detail?: string } | undefined;
         if (driverError?.code === '23503') {
-            const column = driverError.detail?.match(/Key \((\w+)\)/)?.[1];
+            // `lc_messages` translates the sentence ("Key (col)=(1) is not present..." / "La llave (col)=(1) no
+            // está presente..."), but the column always comes as `(column)=(value)`: anchor on that, not on words.
+            const column = driverError.detail?.match(/\((\w+)\)=\(/)?.[1];
             return column ? `The given ${column.replace(/_id$/, '').replace(/_/g, ' ')} does not exist.` : 'A referenced record does not exist.';
         }
         if (driverError?.code === '22003') return 'A numeric value is out of range.';

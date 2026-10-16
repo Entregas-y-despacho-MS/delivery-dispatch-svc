@@ -28,7 +28,7 @@ function build(over: { assigned?: boolean } = {}) {
 const recent = () => new Date(Date.now() - 60_000).toISOString();
 const statusEvent = (over: object = {}) => ({ type: SyncEventType.STATUS_CHANGE, clientEventId: ID1, dispatchId: 42, occurredAt: recent(), dispatchStatusId: 2, ...over }) as any;
 const incidentEvent = (over: object = {}) => ({ type: SyncEventType.INCIDENT, clientEventId: ID1, dispatchId: 42, occurredAt: recent(), incidentReasonId: 2, ...over }) as any;
-const fkError = (column: string) => new QueryFailedError('UPDATE ...', [], Object.assign(new Error('fk'), { code: '23503', detail: `Key (${column})=(999) is not present in table "x".` }));
+const fkError = (column: string, detail = `Key (${column})=(999) is not present in table "x".`) => new QueryFailedError('UPDATE ...', [], Object.assign(new Error('fk'), { code: '23503', detail }));
 
 describe('SyncService.processBatch — a driver only syncs their own dispatches', () => {
     it('checks the dispatch against the calling driver, inside the event transaction', async () => {
@@ -167,6 +167,36 @@ describe('SyncService — references that do not exist are reported clearly (it 
         const { results } = await service.processBatch([incidentEvent({ incidentReasonId: 999 })], DRIVER);
 
         expect(results[0]).toMatchObject({ outcome: 'failed', error: 'The given incident reason does not exist.' });
+    });
+
+    // `lc_messages` of the server translates the text of the error; the device must get the same message.
+    it('reads the column when Postgres answers in Spanish', async () => {
+        const { service, dispatches } = build();
+        dispatches.updateStatus.mockRejectedValue(
+            fkError('dispatch_status_id', 'La llave (dispatch_status_id)=(999) no está presente en la tabla «dispatch_statuses».'),
+        );
+
+        const { results } = await service.processBatch([statusEvent({ dispatchStatusId: 999 })], DRIVER);
+
+        expect(results[0]).toMatchObject({ outcome: 'failed', error: 'The given dispatch status does not exist.' });
+    });
+
+    it('falls back to the generic message when the error carries no detail', async () => {
+        const { service, incidents } = build();
+        incidents.create.mockRejectedValue(fkError('incident_reason_id', null as unknown as string));
+
+        const { results } = await service.processBatch([incidentEvent({ incidentReasonId: 999 })], DRIVER);
+
+        expect(results[0]).toMatchObject({ outcome: 'failed', error: 'A referenced record does not exist.' });
+    });
+
+    it('falls back to the generic message for a composite key it cannot name', async () => {
+        const { service, dispatches } = build();
+        dispatches.updateStatus.mockRejectedValue(fkError('x', 'Key (a, b)=(1, 2) is not present in table "x".'));
+
+        const { results } = await service.processBatch([statusEvent({ dispatchStatusId: 999 })], DRIVER);
+
+        expect(results[0]).toMatchObject({ outcome: 'failed', error: 'A referenced record does not exist.' });
     });
 
     it('a numeric value out of range', async () => {
