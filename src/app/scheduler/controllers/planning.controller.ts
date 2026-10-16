@@ -1,5 +1,5 @@
 import { Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
-import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiServiceUnavailableResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiInternalServerErrorResponse, ApiOkResponse, ApiOperation, ApiServiceUnavailableResponse, ApiTags } from '@nestjs/swagger';
 import { CoordinatorOnly } from '../../auth/decorators/index.js';
 import { ApiConflict, ApiUnauthorized, ApiUnprocessableEntity, errorBody } from '../../../shared/utils/swagger/index.js';
 import { TaskRunResultDto } from '../dto/task-run-result.dto.js';
@@ -50,6 +50,10 @@ export class PlanningController {
     @ApiServiceUnavailableResponse({
         description: 'OSRM did not answer in time (`OSRM_UNAVAILABLE`, nothing was written), or the task is not registered in this service (`SCHEDULED_TASK_NOT_AVAILABLE`).',
         schema: { oneOf: [{ example: OSRM_UNAVAILABLE }, { example: NOT_AVAILABLE }] },
+    })
+    @ApiInternalServerErrorResponse({
+        description: 'The generator threw an unexpected error while running (`SCHEDULED_TASK_FAILED`); the cause is in the server log and a rerun is safe.',
+        schema: { example: errorBody(500, 'SCHEDULED_TASK_FAILED', 'The task failed. Nothing was recorded as done; the cause is in the server log.') },
     })
     async generate(): Promise<TaskRunResultDto> {
         return await this.trigger.trigger(PLAN_GENERATION_TASK);
