@@ -27,7 +27,9 @@ export type PlanAlertKind =
     | 'cutoff_window_open'
     | 'cutoff_batch_failed'
     | 'cutoff_group_stale'
-    | 'cutoff_batch_skipped';
+    | 'cutoff_batch_skipped'
+    | 'final_review_overdue'
+    | 'final_review_escalated';
 
 export interface PlanningAlertEvent {
     kind: PlanAlertKind;
@@ -53,6 +55,8 @@ const SEVERITY: Record<PlanAlertKind, PlanAlertSeverity> = {
     cutoff_batch_failed: 'exception',
     cutoff_group_stale: 'warning',
     cutoff_batch_skipped: 'warning',
+    final_review_overdue: 'exception',
+    final_review_escalated: 'exception',
 };
 
 /**

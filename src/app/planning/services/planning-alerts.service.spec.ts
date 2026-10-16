@@ -27,6 +27,7 @@ describe('PlanningAlertsService', () => {
     it.each([
         ['settings_missing', 'blocking'], ['osrm_unavailable', 'blocking'],
         ['deadline_exceeded', 'exception'], ['osrm_table_limit_exceeded', 'exception'],
+        ['final_review_overdue', 'exception'], ['final_review_escalated', 'exception'],
         ['below_min_orders', 'warning'], ['zone_deleted', 'warning'], ['holidays_not_configured', 'warning'],
     ] as const)('classifies %s as %s', (kind, severity) => {
         expect(build().service.severityOf(kind)).toBe(severity);
