@@ -53,7 +53,7 @@ describe('Final review timeline (e2e, ST-51.4)', () => {
                 send: async (options: { to: string | string[]; template?: string }) => {
                     const to = Array.isArray(options.to) ? options.to[0] : options.to;
                     sent.push({ to, template: options.template ?? '' });
-                    return { status: 'sent' };
+                    return { status: to.includes('-bounce@') ? 'bounced' : 'sent' };
                 },
             })
             .compile();
@@ -82,7 +82,7 @@ describe('Final review timeline (e2e, ST-51.4)', () => {
     });
 
     /** A batch of the route day with one order per entry; `promised` orders already got their promise email. */
-    async function makeBatch(status: string, orders: Array<{ status: OrderStatus; promised?: boolean }>) {
+    async function makeBatch(status: string, orders: Array<{ status: OrderStatus; promised?: boolean; contact?: 'none' | 'bounce' }>) {
         const [{ route_batch_id }] = await db.query(
             `INSERT INTO route_batches (status, shift_date) VALUES ($1, $2) RETURNING route_batch_id`, [status, SHIFT],
         );
@@ -92,7 +92,7 @@ describe('Final review timeline (e2e, ST-51.4)', () => {
         for (const order of orders) {
             const ref = `${tag}-${++seq}`;
             refs.push(ref);
-            const email = `${ref.toLowerCase()}@example.test`;
+            const email = order.contact === 'none' ? null : `${ref.toLowerCase()}${order.contact === 'bounce' ? '-bounce' : ''}@example.test`;
             const [{ dispatch_id }] = await db.query(
                 `INSERT INTO dispatches (dispatch_type_id, dispatch_status_id, route_batch_id, sequence_order, source_order_ref,
                         delivery_address, contact_name, contact_email, estimated_weight_kg, origin_warehouse_id, tracking_code,
@@ -105,7 +105,7 @@ describe('Final review timeline (e2e, ST-51.4)', () => {
                 [route_batch_id, order.status, ref, email, warehouseId, `tok-${ref}`, order.promised ?? true, dispatchIds.length + 1],
             );
             dispatchIds.push(dispatch_id);
-            emails.push(email);
+            emails.push(email ?? '');
         }
         return { id: route_batch_id as number, dispatchIds, emails };
     }
@@ -251,26 +251,128 @@ describe('Final review timeline (e2e, ST-51.4)', () => {
         });
     });
 
-    describe('idempotency record', () => {
-        it('two callers claiming the same order event at once: exactly one wins', async () => {
+    describe('idempotency record and the lock of the batch', () => {
+        it('twenty callers claiming the same order event at once: exactly one wins', async () => {
             const batch = await makeBatch('confirmed', [{ status: 'assigned' }]);
 
-            const results = await Promise.all([
-                repository.claimDispatchEvent(batch.dispatchIds[0], 'route_reminder_sent', 'race', {}),
-                repository.claimDispatchEvent(batch.dispatchIds[0], 'route_reminder_sent', 'race', {}),
-            ]);
+            const results = await Promise.all(Array.from({ length: 20 }, () =>
+                repository.inBatchLock(batch.id, (scope) => scope.claimDispatchEvent(batch.dispatchIds[0], 'route_reminder_sent', 'race', {}))));
 
             expect(results.filter(Boolean)).toHaveLength(1);
             expect(await dispatchEvents(batch.dispatchIds[0], 'route_reminder_sent')).toBe(1);
         });
 
-        it('a batch event is not written for a batch that left the required status', async () => {
+        it('the lock is held until the transaction ends: a second caller waits for the first', async () => {
+            const batch = await makeBatch('confirmed', [{ status: 'assigned' }]);
+            const order: string[] = [];
+
+            await Promise.all([
+                repository.inBatchLock(batch.id, async () => { order.push('first in'); await new Promise((r) => setTimeout(r, 300)); order.push('first out'); }),
+                (async () => {
+                    await new Promise((r) => setTimeout(r, 100));
+                    await repository.inBatchLock(batch.id, async () => { order.push('second in'); });
+                })(),
+            ]);
+
+            expect(order).toEqual(['first in', 'first out', 'second in']);
+        });
+
+        it('a batch event is written once per batch', async () => {
+            const batch = await makeBatch('pending_final_review', [{ status: 'scheduled' }]);
+
+            const results = await Promise.all(Array.from({ length: 10 }, () =>
+                repository.inBatchLock(batch.id, (scope) => scope.recordBatchEventOnce('final_review_alerted', 'race', {}))));
+
+            expect(results.filter(Boolean)).toHaveLength(1);
+            expect(await batchEvents(batch.id, 'final_review_alerted')).toBe(1);
+        });
+
+        it('an order that enters another batch is owed its reminder again (events are per batch)', async () => {
+            const first = await makeBatch('confirmed', [{ status: 'assigned' }]);
+            await reminder.run(context(REMINDER));
+            expect(mailsTo(first.emails).map((mail) => mail.template)).toEqual(['reminder']);
+            const second = await makeBatch('confirmed', [{ status: 'in_planning', promised: false }]);
+            await db.query(`DELETE FROM dispatches WHERE dispatch_id = $1`, [second.dispatchIds[0]]);
+            await db.query(`UPDATE dispatches SET route_batch_id = $1 WHERE dispatch_id = $2`, [second.id, first.dispatchIds[0]]);
+
+            await reminder.run(context(REMINDER));
+
+            expect(mailsTo(first.emails).map((mail) => mail.template)).toEqual(['reminder', 'reminder']);
+            expect(await dispatchEvents(first.dispatchIds[0], 'route_reminder_sent')).toBe(2);
+        });
+    });
+
+    describe('hardening found in the review', () => {
+        it('the 16:29:59.9 tick still sends the 16:30 reminder', async () => {
             const batch = await makeBatch('confirmed', [{ status: 'assigned' }]);
 
-            const wrote = await repository.recordBatchEventOnce(batch.id, 'final_review_alerted', ['pending_final_review'], 'late', {});
+            await reminder.run(context(new Date('2031-03-11T20:29:59.900Z')));
 
-            expect(wrote).toBe(false);
-            expect(await batchEvents(batch.id, 'final_review_alerted')).toBe(0);
+            expect(mailsTo(batch.emails).map((mail) => mail.template)).toEqual(['reminder']);
+        });
+
+        it('an order without email opens a coordinator follow-up, once, and sends nothing', async () => {
+            const batch = await makeBatch('confirmed', [{ status: 'assigned', contact: 'none' }]);
+
+            await reminder.run(context(REMINDER));
+            await reminder.run(context(REMINDER));
+
+            const events = await db.query(
+                `SELECT 1 FROM route_batch_events WHERE route_batch_id = $1 AND event_type = 'contact_management_required'`, [batch.id],
+            );
+            expect(events).toHaveLength(1);
+            expect(await dispatchEvents(batch.dispatchIds[0], 'route_reminder_sent')).toBe(0);
+        });
+
+        it('a bounced risk notice is recorded as NOT delivered: a late approval then sends the reminder, not «se mantiene»', async () => {
+            const batch = await makeBatch('pending_final_review', [{ status: 'scheduled', contact: 'bounce' }]);
+
+            await escalation.run(context(ESCALATION));
+            expect(await dispatchEvents(batch.dispatchIds[0], 'risk_notice_failed')).toBe(1);
+            const followUps = await db.query(
+                `SELECT 1 FROM route_batch_events WHERE route_batch_id = $1 AND event_type = 'contact_management_required'`, [batch.id],
+            );
+            expect(followUps).toHaveLength(1);
+
+            await approve(batch);
+            await lateApproval.handleRouteAssigned({ routeId: batch.id, driverId: 1, vehicleId: 1, dispatchIds: batch.dispatchIds, version: 1 }, AFTER_RISK);
+
+            expect(mailsTo(batch.emails).map((mail) => mail.template)).toEqual(['risk-notice', 'reminder']);
+        });
+
+        it('the escalation never writes an incident for an order whose batch was approved first', async () => {
+            const batch = await makeBatch('pending_final_review', [{ status: 'scheduled' }]);
+            await approve(batch);
+
+            const summary = await escalation.run(context(ESCALATION));
+
+            expect(summary.escalatedBatchIds).not.toContain(batch.id);
+            const incidents = await db.query(`SELECT 1 FROM dispatch_incidents WHERE dispatch_id = ANY($1::int[])`, [batch.dispatchIds]);
+            expect(incidents).toHaveLength(0);
+            expect(mailsTo(batch.emails)).toHaveLength(0);
+        });
+
+        it('the escalation waits for a concurrent approval that holds the batch lock, then does nothing', async () => {
+            const batch = await makeBatch('pending_final_review', [{ status: 'scheduled' }]);
+            let released = false;
+
+            const approval = repository.inBatchLock(batch.id, async (scope) => {
+                await new Promise((r) => setTimeout(r, 400));
+                await scope.manager.query(`UPDATE route_batches SET status = 'confirmed' WHERE route_batch_id = $1`, [batch.id]);
+                await scope.manager.query(
+                    `UPDATE dispatches SET dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = 'assigned') WHERE dispatch_id = ANY($1::int[])`,
+                    [batch.dispatchIds],
+                );
+                released = true;
+            });
+            await new Promise((r) => setTimeout(r, 100));
+            const summary = await escalation.run(context(ESCALATION));
+            await approval;
+
+            expect(released).toBe(true);
+            expect(summary.escalatedBatchIds).not.toContain(batch.id);
+            expect(await db.query(`SELECT 1 FROM dispatch_incidents WHERE dispatch_id = ANY($1::int[])`, [batch.dispatchIds])).toHaveLength(0);
+            expect(mailsTo(batch.emails)).toHaveLength(0);
         });
     });
 

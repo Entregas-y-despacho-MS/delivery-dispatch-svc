@@ -10,7 +10,7 @@ const AT_REMINDER = { trigger: 'schedule' as const, occurrence: 'route-reminder@
 function build(batches: Array<{ routeBatchId: number }> = [], settings: Record<string, string> = SETTINGS) {
     const settingsService = { getString: vi.fn(async (key: string) => settings[key] ?? '') };
     const repository = { findBatches: vi.fn(async () => batches) };
-    const notices = { sendDueNotices: vi.fn(async () => ({ reminders: 2, maintained: 0, skipped: 1, waiting: 0, failed: 0 })) };
+    const notices = { sendDueNotices: vi.fn(async () => ({ reminders: 2, maintained: 0, skipped: 1, waiting: 0, failed: 0, errors: 0 })) };
     const alerts = { raise: vi.fn(async () => undefined) };
     const service = new RouteReminderService(settingsService as any, repository as any, notices as any, alerts as any);
     return { service, repository, notices, alerts };
@@ -24,8 +24,16 @@ describe('RouteReminderService', () => {
 
         expect(repository.findBatches).toHaveBeenCalledWith('2026-10-14', ['confirmed']);
         expect(notices.sendDueNotices).toHaveBeenCalledTimes(2);
-        expect(notices.sendDueNotices).toHaveBeenCalledWith(11, '2026-10-14', AT_REMINDER.startedAt, expect.anything());
+        expect(notices.sendDueNotices).toHaveBeenCalledWith(11, '2026-10-14', new Date('2026-10-13T20:30:00.000Z'), expect.anything());
         expect(summary).toMatchObject({ status: 'executed', shiftDate: '2026-10-14', batchIds: [11, 12], totals: { reminders: 4, skipped: 2 } });
+    });
+
+    it('evaluates the nearest minute the ticker saw: 16:29:59.9 is 16:30, not "too early"', async () => {
+        const { service, notices } = build([{ routeBatchId: 11 }]);
+
+        await service.run({ ...AT_REMINDER, startedAt: new Date('2026-10-13T20:29:59.900Z') });
+
+        expect(notices.sendDueNotices).toHaveBeenCalledWith(11, '2026-10-14', new Date('2026-10-13T20:30:00.000Z'), expect.anything());
     });
 
     it('reads no pending_final_review batch: its customers get no normal reminder', async () => {

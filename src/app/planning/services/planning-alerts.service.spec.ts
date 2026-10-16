@@ -40,3 +40,26 @@ describe('PlanningAlertsService', () => {
         expect(events.emit).not.toHaveBeenCalled();
     });
 });
+
+describe('PlanningAlertsService.store / announce', () => {
+    it('store writes through the given transaction and throws when it cannot, without announcing', async () => {
+        const { service, dataSource, events } = build();
+        const manager = { query: vi.fn(async () => { throw new Error('tx aborted'); }) };
+
+        await expect(service.store('final_review_overdue', { routeBatchId: 1 }, manager as any)).rejects.toThrow('tx aborted');
+        expect(dataSource.query).not.toHaveBeenCalled();
+        expect(events.emit).not.toHaveBeenCalled();
+    });
+
+    it('store returns the event without announcing it; announce emits it afterwards', async () => {
+        const { service, events } = build();
+        const manager = { query: vi.fn(async () => undefined) };
+
+        const event = await service.store('final_review_escalated', { routeBatchId: 2 }, manager as any);
+
+        expect(manager.query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO audit_logs'), [PLAN_ALERT_ACTION, expect.stringContaining('"kind":"final_review_escalated"')]);
+        expect(events.emit).not.toHaveBeenCalled();
+        service.announce(event);
+        expect(events.emit).toHaveBeenCalledWith(PLANNING_ALERT_EVENT, event);
+    });
+});

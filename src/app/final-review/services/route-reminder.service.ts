@@ -7,7 +7,8 @@ import {
     MILESTONE_BATCH_STATUSES,
     shiftDateOfMilestone,
 } from '../domain/final-review-timeline.js';
-import { CustomerNoticeService, type CustomerNoticeSummary } from './customer-notice.service.js';
+import { nearestMinute } from '../../scheduler/domain/task-schedule.js';
+import { CustomerNoticeService, emptyNoticeSummary, type CustomerNoticeSummary } from './customer-notice.service.js';
 import { FinalReviewRepository } from './final-review.repository.js';
 
 export interface RouteReminderSummary {
@@ -17,7 +18,7 @@ export interface RouteReminderSummary {
     totals: CustomerNoticeSummary;
 }
 
-const emptyTotals = (): CustomerNoticeSummary => ({ reminders: 0, maintained: 0, skipped: 0, waiting: 0, failed: 0 });
+const emptyTotals = emptyNoticeSummary;
 
 /**
  * `route_reminder_time` (ST-51.4, D-46): the reminder (date, window and tracking link) for the customers
@@ -42,12 +43,15 @@ export class RouteReminderService {
         }
         const settings = loaded.values!;
 
-        const shiftDate = shiftDateOfMilestone('reminder', context.startedAt, settings.calendar);
+        // The ticker fires on the nearest minute, but the runner stamps the real clock: at 16:29:59.9 the
+        // reminder would read "not yet" and nobody would send it. Evaluate at the minute the ticker saw.
+        const now = nearestMinute(context.startedAt);
+        const shiftDate = shiftDateOfMilestone('reminder', now, settings.calendar);
         if (!shiftDate) return { status: 'not_reminder_day', shiftDate: null, batchIds: [], totals: emptyTotals() };
 
         const summary: RouteReminderSummary = { status: 'executed', shiftDate, batchIds: [], totals: emptyTotals() };
         for (const batch of await this.repository.findBatches(shiftDate, MILESTONE_BATCH_STATUSES.reminder)) {
-            const sent = await this.notices.sendDueNotices(batch.routeBatchId, shiftDate, context.startedAt, settings);
+            const sent = await this.notices.sendDueNotices(batch.routeBatchId, shiftDate, now, settings);
             summary.batchIds.push(batch.routeBatchId);
             for (const key of Object.keys(summary.totals) as Array<keyof CustomerNoticeSummary>) summary.totals[key] += sent[key];
         }
