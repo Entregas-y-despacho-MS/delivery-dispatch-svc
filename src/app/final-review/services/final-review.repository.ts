@@ -152,8 +152,8 @@ export class FinalReviewRepository {
         return await this.dataSource.transaction(async (manager) => {
             const claimed: unknown[] = await manager.query(
                 `INSERT INTO dispatch_events (dispatch_id, event_type, actor_type, reason, metadata)
-                 SELECT $1, $2, 'system', 'Second approval still pending at final_review_escalation_time (case 5.2)', $3::jsonb
-                  WHERE NOT EXISTS (SELECT 1 FROM dispatch_events e WHERE e.dispatch_id = $1 AND e.event_type = $2)
+                 SELECT $1::int, $2::varchar, 'system', 'Second approval still pending at final_review_escalation_time (case 5.2)', $3::jsonb
+                  WHERE NOT EXISTS (SELECT 1 FROM dispatch_events e WHERE e.dispatch_id = $1::int AND e.event_type = $2::varchar)
                  RETURNING dispatch_event_id`,
                 [dispatchId, FINAL_REVIEW_ESCALATED_EVENT, JSON.stringify(metadata)],
             );
@@ -172,8 +172,8 @@ export class FinalReviewRepository {
     async claimDispatchEvent(dispatchId: number, eventType: string, reason: string, metadata: Record<string, unknown>): Promise<boolean> {
         const rows: unknown[] = await this.dataSource.query(
             `INSERT INTO dispatch_events (dispatch_id, event_type, actor_type, reason, metadata)
-             SELECT $1, $2, 'system', $3, $4::jsonb
-              WHERE NOT EXISTS (SELECT 1 FROM dispatch_events e WHERE e.dispatch_id = $1 AND e.event_type = $2)
+             SELECT $1::int, $2::varchar, 'system', $3::text, $4::jsonb
+              WHERE NOT EXISTS (SELECT 1 FROM dispatch_events e WHERE e.dispatch_id = $1::int AND e.event_type = $2::varchar)
              RETURNING dispatch_event_id`,
             [dispatchId, eventType, reason, JSON.stringify(metadata)],
         );
@@ -205,11 +205,11 @@ export class FinalReviewRepository {
         const runner = manager ?? this.dataSource;
         const rows: unknown[] = await runner.query(
             `INSERT INTO route_batch_events (route_batch_id, event_type, actor_type, reason, metadata)
-             SELECT b.route_batch_id, $2, 'system', $4, $5::jsonb
+             SELECT b.route_batch_id, $2::varchar, 'system', $4::text, $5::jsonb
                FROM route_batches b
-              WHERE b.route_batch_id = $1
+              WHERE b.route_batch_id = $1::int
                 AND b.status = ANY($3::text[])
-                AND NOT EXISTS (SELECT 1 FROM route_batch_events e WHERE e.route_batch_id = b.route_batch_id AND e.event_type = $2)
+                AND NOT EXISTS (SELECT 1 FROM route_batch_events e WHERE e.route_batch_id = b.route_batch_id AND e.event_type = $2::varchar)
              RETURNING route_batch_event_id`,
             [routeBatchId, eventType, [...requiredStatuses], reason, JSON.stringify(metadata)],
         );
