@@ -54,7 +54,8 @@ function buildService(options: ServiceOptions = {}) {
         findOneByUsername: vi.fn().mockResolvedValue(user),
         findOneById:        vi.fn().mockResolvedValue(user ? { id: user.id, username: user.username } : null),
         setLockoutState:    vi.fn(),
-        registerFailedLogin: vi.fn(),
+        // true = the account still had an attempt to give; false = locked (see UsersService.reserveLoginAttempt)
+        reserveLoginAttempt: vi.fn().mockResolvedValue(true),
         setLastLogin:       vi.fn(),
         setRefreshToken:    vi.fn(),
     };
@@ -91,16 +92,33 @@ describe('AuthService — login / bloqueo temporal (RF-A21, ST-13.3)', () => {
             .rejects.toThrow(InvalidCredentialsException);
     });
 
-    it('password incorrecta → INVALID_CREDENTIALS y registra un intento fallido más', async () => {
+    it('password incorrecta → INVALID_CREDENTIALS, con el intento ya tomado antes de comparar', async () => {
         const user = buildAuthUser({ passwordHash: await hashPassword('Passw0rd!'), failedAttempts: 1 });
         const { service, usersService } = buildService({ user });
 
         await expect(service.login({ username: user.username, password: 'Incorrecta1!' } as any))
             .rejects.toThrow(InvalidCredentialsException);
 
-        // El contador lo incrementa la base en un solo UPDATE atómico (ver e2e): acá solo se pide.
-        expect(usersService.registerFailedLogin).toHaveBeenCalledWith(user.id, 5, 15 * 60_000);
+        // El intento lo toma la base en un solo UPDATE atómico (ver e2e): acá solo se pide.
+        expect(usersService.reserveLoginAttempt).toHaveBeenCalledWith(user.id, 5, 15 * 60_000);
         expect(usersService.setLastLogin).not.toHaveBeenCalled(); // un intento fallido no es un acceso
+    });
+
+    it('toma el intento ANTES de comparar la contraseña, también cuando la contraseña es correcta', async () => {
+        const password = 'Passw0rd!';
+        const user = buildAuthUser({ passwordHash: await hashPassword(password) });
+        const { service, usersService } = buildService({ user });
+        const bcrypt = (await import('bcrypt')).default;
+        const order: string[] = [];
+        usersService.reserveLoginAttempt.mockImplementation(async () => { order.push('reserve'); return true; });
+        const compare = vi.spyOn(bcrypt, 'compare').mockImplementation((async () => { order.push('compare'); return true; }) as any);
+
+        await service.login({ username: user.username, password } as any);
+
+        expect(order).toEqual(['reserve', 'compare']);
+        // El éxito devuelve los intentos: reinicia el contador y quita el bloqueo.
+        expect(usersService.setLockoutState).toHaveBeenCalledWith(user.id, 0, null);
+        compare.mockRestore();
     });
 
     // Cuándo se llega al máximo y se bloquea la cuenta lo decide el UPDATE atómico de la base:
@@ -112,35 +130,88 @@ describe('AuthService — login / bloqueo temporal (RF-A21, ST-13.3)', () => {
         await expect(service.login({ username: user.username, password: 'Incorrecta1!' } as any))
             .rejects.toThrow(InvalidCredentialsException);
 
-        expect(usersService.registerFailedLogin).toHaveBeenCalledTimes(1);
+        expect(usersService.reserveLoginAttempt).toHaveBeenCalledTimes(1);
         expect(usersService.setLockoutState).not.toHaveBeenCalled();
     });
 
-    it('cuenta bloqueada + contraseña CORRECTA → ACCOUNT_LOCKED', async () => {
-        const user = buildAuthUser({
-            passwordHash: await hashPassword('Passw0rd!'),
-            lockedUntil:  new Date(Date.now() + 5 * 60_000),
+    // RF-A21, opción B (2026-10-16): una cuenta bloqueada responde ACCOUNT_LOCKED a cualquiera y su contraseña
+    // no se compara. Comparar y responder distinto con la correcta dejaba adivinar durante el bloqueo.
+    describe('cuenta bloqueada: ACCOUNT_LOCKED para todos y sin comparar la contraseña', () => {
+        for (const [label, password] of [['CORRECTA', 'Passw0rd!'], ['incorrecta', 'Incorrecta1!']] as const) {
+            it(`contraseña ${label} → ACCOUNT_LOCKED, sin comparar ni tomar otro intento`, async () => {
+                const user = buildAuthUser({
+                    passwordHash: await hashPassword('Passw0rd!'),
+                    lockedUntil:  new Date(Date.now() + 5 * 60_000),
+                });
+                const { service, usersService } = buildService({ user });
+                const bcrypt = (await import('bcrypt')).default;
+                const compare = vi.spyOn(bcrypt, 'compare');
+
+                await expect(service.login({ username: user.username, password } as any))
+                    .rejects.toThrow(AccountLockedException);
+
+                expect(compare).not.toHaveBeenCalled();
+                expect(usersService.reserveLoginAttempt).not.toHaveBeenCalled();
+                expect(usersService.setLockoutState).not.toHaveBeenCalled();
+                expect(usersService.setLastLogin).not.toHaveBeenCalled();
+                compare.mockRestore();
+            });
+        }
+
+        it('un bloqueo ya vencido deja intentar de nuevo', async () => {
+            const password = 'Passw0rd!';
+            const user = buildAuthUser({ passwordHash: await hashPassword(password), lockedUntil: new Date(Date.now() - 1_000) });
+            const { service } = buildService({ user });
+
+            await expect(service.login({ username: user.username, password } as any)).resolves.toBeDefined();
         });
-        const { service, usersService } = buildService({ user });
 
-        await expect(service.login({ username: user.username, password: 'Passw0rd!' } as any))
-            .rejects.toThrow(AccountLockedException);
+        it('si entre la lectura y el intento otra petición bloqueó la cuenta, no se compara la contraseña', async () => {
+            // La lectura inicial vio la cuenta libre, pero la base ya no tiene intentos que dar.
+            const user = buildAuthUser({ passwordHash: await hashPassword('Passw0rd!') });
+            const { service, usersService } = buildService({ user });
+            usersService.reserveLoginAttempt.mockResolvedValue(false);
+            const bcrypt = (await import('bcrypt')).default;
+            const compare = vi.spyOn(bcrypt, 'compare');
 
-        expect(usersService.setLockoutState).not.toHaveBeenCalled();
-        expect(usersService.setLastLogin).not.toHaveBeenCalled();
+            await expect(service.login({ username: user.username, password: 'Passw0rd!' } as any))
+                .rejects.toThrow(AccountLockedException);
+
+            expect(compare).not.toHaveBeenCalled();
+            expect(usersService.setLastLogin).not.toHaveBeenCalled();
+            compare.mockRestore();
+        });
     });
 
-    it('cuenta bloqueada + contraseña incorrecta → INVALID_CREDENTIALS genérico y NO suma otro intento (no revela que el usuario existe)', async () => {
-        const user = buildAuthUser({
-            passwordHash: await hashPassword('Passw0rd!'),
-            lockedUntil:  new Date(Date.now() + 5 * 60_000),
-        });
+    it('una ráfaga de intentos en paralelo no comprueba más contraseñas que el límite', async () => {
+        const user = buildAuthUser({ passwordHash: await hashPassword('Passw0rd!') });
+        const { service, usersService } = buildService({ user, maxFailedAttempts: 5 });
+        // La base como árbitro: da un intento por pedido hasta el límite y después responde que no hay más.
+        let given = 0;
+        usersService.reserveLoginAttempt.mockImplementation(async (_id: number, max: number) => given++ < max);
+        const bcrypt = (await import('bcrypt')).default;
+        const compare = vi.spyOn(bcrypt, 'compare');
+
+        const results = await Promise.allSettled(
+            Array.from({ length: 30 }, (_, i) => service.login({ username: user.username, password: `Incorrecta${i}!` } as any)),
+        );
+
+        expect(compare).toHaveBeenCalledTimes(5);
+        expect(results.filter((r) => r.status === 'rejected' && r.reason instanceof InvalidCredentialsException)).toHaveLength(5);
+        expect(results.filter((r) => r.status === 'rejected' && r.reason instanceof AccountLockedException)).toHaveLength(25);
+        compare.mockRestore();
+    });
+
+    it('un código TOTP incorrecto también gasta un intento (el intento se toma antes de verificar el código)', async () => {
+        const password = 'Passw0rd!';
+        const user = buildAuthUser({ passwordHash: await hashPassword(password), twoFactorEnabled: true, twoFactorSecret: 'S' });
         const { service, usersService } = buildService({ user });
+        (service as any).twoFactor.verify.mockResolvedValue(false);
 
-        await expect(service.login({ username: user.username, password: 'Incorrecta1!' } as any))
-            .rejects.toThrow(InvalidCredentialsException);
+        await expect(service.login({ username: user.username, password, totpCode: '000000' } as any)).rejects.toThrow();
 
-        expect(usersService.registerFailedLogin).not.toHaveBeenCalled();
+        expect(usersService.reserveLoginAttempt).toHaveBeenCalledTimes(1);
+        expect(usersService.setLockoutState).not.toHaveBeenCalled();
     });
 
     it('username inexistente o cuenta inactiva: también compara una contraseña (misma demora que una incorrecta)', async () => {
@@ -162,7 +233,7 @@ describe('AuthService — login / bloqueo temporal (RF-A21, ST-13.3)', () => {
         await expect(service.login({ username: user.username, password: 'Incorrecta1!' } as any))
             .rejects.toThrow(InvalidCredentialsException);
 
-        expect(usersService.registerFailedLogin).toHaveBeenCalledWith(user.id, 2, 30 * 60_000);
+        expect(usersService.reserveLoginAttempt).toHaveBeenCalledWith(user.id, 2, 30 * 60_000);
     });
 
     it('cuenta inactiva → INVALID_CREDENTIALS, mismo mensaje genérico que credenciales inválidas', async () => {
@@ -241,6 +312,7 @@ describe('AuthService — refresh token: se guarda la huella completa, no un bcr
         const usersService = {
             findOneByUsername: vi.fn().mockResolvedValue(user),
             findOneById:       vi.fn(async () => ({ ...user })), // a fresh copy per call: tests change user.refreshTokenHash
+            reserveLoginAttempt: vi.fn().mockResolvedValue(true),
             setLockoutState:   vi.fn(),
             setLastLogin:      vi.fn(),
             setRefreshToken:   vi.fn(),

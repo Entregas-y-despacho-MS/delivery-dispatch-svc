@@ -128,19 +128,23 @@ describe('Security hardening (e2e)', () => {
 
     // ── account lockout ────────────────────────────────────────────────────────
     describe('account lockout (RF-A21)', () => {
-        it('parallel wrong passwords all count: the account locks (it used to stay at 1 attempt and never lock)', async () => {
+        // The attempt is taken in the database BEFORE the password is compared, so of N requests in flight at the
+        // same time exactly `max_failed_login_attempts` (5) are granted one and reach bcrypt; the rest find the
+        // account locked. It used to depend on timing: every request read the user first, so a burst of N compared
+        // N passwords before the lock took effect (and the old test could only say "at least 5").
+        it('a burst of parallel wrong passwords compares exactly 5 of them, then the account is locked', async () => {
             const u = await mkUser('coordinator', 'lock1');
-            const results = await Promise.all(Array.from({ length: 12 }, () => login(u.username, 'Wrong-Passw0rd!')));
+            const results = await Promise.all(Array.from({ length: 30 }, () => login(u.username, 'Wrong-Passw0rd!')));
             expect(results.every((r) => r.status === 401)).toBe(true);
 
+            // 401 INVALID_CREDENTIALS = the password was compared (an attempt was granted); ACCOUNT_LOCKED = not.
+            const compared = results.filter((r) => r.body.error === 'INVALID_CREDENTIALS').length;
+            const refused = results.filter((r) => r.body.error === 'ACCOUNT_LOCKED').length;
+            expect(compared).toBe(5);
+            expect(refused).toBe(25);
+
             const row = await userRow(u.id);
-            // Every request reads the user when it starts. One that reads it after the lock was set does not
-            // count (a locked account does not count more attempts, by design: it neither reveals the lock nor
-            // lengthens it), so how many of the 12 count depends on timing. What must hold: the counter never
-            // stays below the limit (the old bug: parallel attempts overwrote each other and stayed at 1), never
-            // exceeds the requests sent, and the account ends locked.
-            expect(row.failed_attempts).toBeGreaterThanOrEqual(5);
-            expect(row.failed_attempts).toBeLessThanOrEqual(12);
+            expect(row.failed_attempts).toBe(5);
             expect(row.locked_until).not.toBeNull();
 
             const correct = await login(u.username);
@@ -500,19 +504,32 @@ describe('Security hardening (e2e)', () => {
     });
 
     // ── login does not reveal which accounts exist ─────────────────────────────
-    describe('login answers do not reveal accounts', () => {
-        it('a locked account with a WRONG password gets the generic answer, and no extra attempt is counted', async () => {
+    describe('a locked account answers the same to everyone (RF-A21)', () => {
+        // Before: a locked account compared the password and answered ACCOUNT_LOCKED only for the right one, so
+        // during the lock an attacker could keep guessing and tell the right password apart. Now the password of
+        // a locked account is never compared. The cost, accepted on 2026-10-16: whoever has made
+        // `max_failed_login_attempts` wrong tries on a username learns that the username exists.
+        it('a locked account answers ACCOUNT_LOCKED to a WRONG and to the RIGHT password, and counts no extra attempt', async () => {
             const u = await mkUser('coordinator', 'en1');
             for (let i = 0; i < 5; i++) await login(u.username, 'Wrong-Passw0rd!');
             const before = (await userRow(u.id)).failed_attempts;
 
             const wrong = await login(u.username, 'Another-Wrong1!');
-            expect(wrong.status).toBe(401);
-            expect(wrong.body.error).toBe('INVALID_CREDENTIALS');
-            expect((await userRow(u.id)).failed_attempts).toBe(before);
-
             const right = await login(u.username);
-            expect(right.body.error).toBe('ACCOUNT_LOCKED'); // the real owner still learns why
+
+            for (const answer of [wrong, right]) {
+                expect(answer.status).toBe(401);
+                expect(answer.body.error).toBe('ACCOUNT_LOCKED');
+            }
+            expect((await userRow(u.id)).failed_attempts).toBe(before);
+        });
+
+        it('an unknown username and a wrong password on a free account still look the same (no new tell)', async () => {
+            const u = await mkUser('coordinator', 'en2');
+            const unknown = await login(`nobody_${run}`, 'Wrong-Passw0rd!');
+            const wrong = await login(u.username, 'Wrong-Passw0rd!');
+            expect(unknown.body.error).toBe('INVALID_CREDENTIALS');
+            expect(wrong.body.error).toBe('INVALID_CREDENTIALS');
         });
     });
 

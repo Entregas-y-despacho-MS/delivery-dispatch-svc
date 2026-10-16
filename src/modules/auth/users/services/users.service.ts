@@ -188,22 +188,35 @@ export class UsersService {
     }
 
     /**
-     * RF-A21 — counts one more wrong password and locks the account when the limit is reached.
-     * A single UPDATE: read-modify-write lost increments when wrong passwords arrived in parallel
-     * (12 at once counted as 1 and never locked the account). When a previous lock has already
-     * expired the count starts again from 1, so one typo after the lock does not lock it anew.
+     * RF-A21 — takes one of the login attempts the account has left, **before** the password is compared.
+     * Returns `false` when the account is locked, i.e. there is no attempt left and the password must not
+     * even be looked at.
+     *
+     * One UPDATE, so the database decides who gets a slot: when many requests arrive at once they queue on
+     * the row lock and each one re-evaluates `locked_until` after the previous one committed. At most
+     * `maxAttempts` of them are granted, however many are in flight (checking "is it locked?" from an
+     * earlier read let a burst of N guesses through before the lock took effect). The slot that reaches the
+     * limit sets the lock, and a successful login gives the attempts back (`setLockoutState(id, 0, null)`).
+     * When a previous lock has already expired the count starts again from 1.
+     *
+     * A CTE returns the rows: the driver's result of a bare `UPDATE ... RETURNING` is not a plain array.
      */
-    async registerFailedLogin(userId: number, maxAttempts: number, lockoutMs: number): Promise<void> {
+    async reserveLoginAttempt(userId: number, maxAttempts: number, lockoutMs: number): Promise<boolean> {
         const now         = new Date();
         const lockedUntil = new Date(now.getTime() + lockoutMs);
-        await this.rawRepo.query(
-            `UPDATE users SET
-                failed_attempts = CASE WHEN locked_until IS NOT NULL AND locked_until <= $2::timestamptz THEN 1 ELSE failed_attempts + 1 END,
-                locked_until    = CASE WHEN (CASE WHEN locked_until IS NOT NULL AND locked_until <= $2::timestamptz THEN 1 ELSE failed_attempts + 1 END) >= $3
-                                       THEN $4::timestamptz ELSE NULL END
-             WHERE user_id = $1`,
+        const granted: { failed_attempts: number }[] = await this.rawRepo.query(
+            `WITH reserved AS (
+                UPDATE users SET
+                    failed_attempts = CASE WHEN locked_until IS NOT NULL AND locked_until <= $2::timestamptz THEN 1 ELSE failed_attempts + 1 END,
+                    locked_until    = CASE WHEN (CASE WHEN locked_until IS NOT NULL AND locked_until <= $2::timestamptz THEN 1 ELSE failed_attempts + 1 END) >= $3
+                                           THEN $4::timestamptz ELSE NULL END
+                 WHERE user_id = $1 AND (locked_until IS NULL OR locked_until <= $2::timestamptz)
+             RETURNING failed_attempts
+             )
+             SELECT failed_attempts FROM reserved`,
             [userId, now, maxAttempts, lockedUntil],
         );
+        return granted.length > 0;
     }
 
     /**
