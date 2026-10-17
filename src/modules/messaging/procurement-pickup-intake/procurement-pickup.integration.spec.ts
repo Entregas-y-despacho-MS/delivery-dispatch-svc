@@ -169,4 +169,34 @@ describe('Procurement pickup messaging integration', () => {
     expect(pickups.records[0]).toMatchObject({ status: 'address_review', warehouseId: 'WH-MISSING' });
   });
 
+
+  it('applies a newer update and cancellation while the pickup is pending', async () => {
+    const { bus, pickups, syncStates, consumer } = buildConsumerCircuit();
+    await consumer.onModuleInit();
+    const requested = message('procurement.pickup.requested', pickupRequest());
+    await bus.publishRaw(requested.type, requested);
+
+    const updated = message('procurement.pickup.updated', {
+      purchaseOrderId: ORDER_ID,
+      recordVersion: 2,
+      updatedAt: new Date().toISOString(),
+      estimates: { packages: 3, weightKg: 550, volumeM3: 4 },
+    });
+    expect(await bus.publishRaw(updated.type, updated)).toBe('processed');
+    expect(pickups.records[0]).toMatchObject({ status: 'pending', weightKg: 550 });
+    expect(await syncStates.find(ORDER_ID, 'procurement')).toMatchObject({ lastRecordVersion: 2 });
+
+    const cancelledAt = new Date().toISOString();
+    const cancelled = message('procurement.pickup.cancelled', {
+      purchaseOrderId: ORDER_ID,
+      recordVersion: 3,
+      updatedAt: cancelledAt,
+      cancelledAt,
+      reason: 'Orden cancelada por Compras',
+    });
+    expect(await bus.publishRaw(cancelled.type, cancelled)).toBe('processed');
+    expect(pickups.records[0].status).toBe('cancelled');
+    expect(await syncStates.find(ORDER_ID, 'procurement')).toMatchObject({ lastRecordVersion: 3, cancelledAt });
+  });
+
 });
