@@ -24,6 +24,11 @@ interface BatchRow {
     proposed_driver_id: number | null;
 }
 
+function isDeadlock(error: unknown): boolean {
+    const candidate = error as { code?: string; driverError?: { code?: string } } | null;
+    return (candidate?.driverError?.code ?? candidate?.code) === '40P01';
+}
+
 const CORRECTABLE: ReadonlySet<string> = new Set([RouteBatchStatusEnum.PROVISIONAL, RouteBatchStatusEnum.PENDING_FINAL_REVIEW]);
 
 /**
@@ -58,21 +63,32 @@ export class RouteBatchCorrectionService {
 
     private async correct(routeBatchId: number, correction: Correction, expectedVersion: number, actorUserId: number): Promise<RouteBatchCorrectionResultDto> {
         // Not locked: only to know whether the validation needs OSRM, which must not be called under a lock.
-        const [seen]: { status: string }[] = await this.dataSource.query(
-            `SELECT status FROM route_batches WHERE route_batch_id = $1`,
+        const [seen]: { status: string; vehicle_id: number | null; proposed_driver_id: number | null }[] = await this.dataSource.query(
+            `SELECT status, vehicle_id, proposed_driver_id FROM route_batches WHERE route_batch_id = $1`,
             [routeBatchId],
         );
         if (!seen) throw new RouteBatchNotFoundException();
         this.assertCorrectable(seen.status);
-        const prepared = seen.status === RouteBatchStatusEnum.PENDING_FINAL_REVIEW
+        // Sending what the batch already has changes nothing, so it must not need OSRM (or fail because it is down).
+        const unchanged = (correction.kind === 'vehicle' ? seen.vehicle_id : seen.proposed_driver_id)
+            === (correction.kind === 'vehicle' ? correction.vehicleId : correction.driverId);
+        const prepared = seen.status === RouteBatchStatusEnum.PENDING_FINAL_REVIEW && !unchanged
             ? await this.revalidation.prepare(routeBatchId)
             : null;
 
         try {
             return await this.dataSource.transaction(
-                async (manager) => await this.apply(manager, routeBatchId, correction, expectedVersion, actorUserId, seen.status, prepared),
+                async (manager) => await this.apply(manager, routeBatchId, correction, expectedVersion, actorUserId, prepared),
             );
         } catch (error) {
+            if (isDeadlock(error)) {
+                // Two corrections (or a correction and an approval) swapping the same driver or vehicle wait on each
+                // other's rows. Postgres aborted this one and nothing was written: reloading and sending it again is safe.
+                throw new RouteBatchApprovalConflictException(
+                    'ROUTE_BATCH_VERSION_CONFLICT',
+                    `Route batch ${routeBatchId} was being changed at the same time by another request. Nothing was changed; reload it and try again.`,
+                );
+            }
             throw this.mapUniqueConflict(error);
         }
     }
@@ -83,7 +99,6 @@ export class RouteBatchCorrectionService {
         correction: Correction,
         expectedVersion: number,
         actorUserId: number,
-        statusSeen: string,
         prepared: PreparedRevalidation | null,
     ): Promise<RouteBatchCorrectionResultDto> {
         const [batch]: BatchRow[] = await manager.query(
@@ -96,9 +111,6 @@ export class RouteBatchCorrectionService {
         this.assertCorrectable(batch.status);
         if (batch.version !== expectedVersion) {
             throw new RouteBatchApprovalConflictException('ROUTE_BATCH_VERSION_CONFLICT', `Route batch ${routeBatchId} changed; expected version ${expectedVersion}, current version ${batch.version}.`);
-        }
-        if (batch.status !== statusSeen) {
-            throw new RouteBatchApprovalConflictException('ROUTE_BATCH_VERSION_CONFLICT', `Route batch ${routeBatchId} changed from ${statusSeen} to ${batch.status} while the correction was prepared. Reload it.`);
         }
 
         const current = correction.kind === 'vehicle' ? batch.vehicle_id : batch.proposed_driver_id;
@@ -114,6 +126,7 @@ export class RouteBatchCorrectionService {
         // Same order as the 2nd approval: the batch, then its orders, then the resources.
         let validation: CutoffValidation | null = null;
         if (batch.status === RouteBatchStatusEnum.PENDING_FINAL_REVIEW) {
+            // Seen as provisional (or as a no-op) and pending review now: it changed while the correction was prepared.
             if (prepared === null) {
                 throw new RouteBatchApprovalConflictException('ROUTE_BATCH_VERSION_CONFLICT', `Route batch ${routeBatchId} changed while the correction was prepared. Reload it.`);
             }

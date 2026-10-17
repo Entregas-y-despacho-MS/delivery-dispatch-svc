@@ -102,6 +102,10 @@ export class BatchRevalidationService {
     async evaluate(manager: EntityManager, prepared: PreparedRevalidation, state: LockedBatchState): Promise<RevalidationOutcome> {
         const { read, params } = prepared;
         if (prepared.unvalidatable !== null || read === null || params === null) {
+            // Nothing to simulate, but a batch that moved since it was read is still stale, not "not validatable".
+            if (read !== null && state.version !== read.batch.version) {
+                return { kind: 'stale', issues: [{ code: 'batch_version_changed', dispatchIds: [], detail: { expected: read.batch.version, current: state.version } }] };
+            }
             return { kind: 'evaluated', validation: notValidatable(prepared) };
         }
         const batch = read.batch;

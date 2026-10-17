@@ -50,7 +50,7 @@ function build(over: {
         }),
     };
     const dataSource = {
-        query: vi.fn(async () => (over.missing ? [] : [{ status }])),
+        query: vi.fn(async () => (over.missing ? [] : [{ status, vehicle_id: batch.vehicle_id, proposed_driver_id: batch.proposed_driver_id }])),
         transaction: vi.fn(async (callback: (m: unknown) => unknown) => {
             order.push('transaction');
             return await callback(manager);
@@ -148,9 +148,10 @@ describe('RouteBatchCorrectionService — driver', () => {
         expect(h.events()).toHaveLength(0);
     });
 
-    it('answers 200 and writes nothing when the driver is the one the batch already has', async () => {
+    it('answers 200 and writes nothing when the driver is the one the batch already has, without asking OSRM', async () => {
         const h = build();
         const result = await h.service.changeDriver(12, 34, 4, 9);
+        expect(h.revalidation.prepare).not.toHaveBeenCalled();
         expect(result).toMatchObject({ changed: false, version: 4, proposedDriverId: 34, validation: null });
         expect(h.updates()).toHaveLength(0);
         expect(h.events()).toHaveLength(0);
@@ -228,6 +229,15 @@ describe('RouteBatchCorrectionService — concurrency and state', () => {
         const h = build({ prepareFails: true });
         expect(await catchError(h.service.changeDriver(12, 50, 4, 9))).toBeInstanceOf(OsrmUnavailableException);
         expect(h.dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('answers 409 (try again) when Postgres picks the correction as a deadlock victim', async () => {
+        const h = build();
+        const victim = new QueryFailedError('SELECT', [], Object.assign(new Error('deadlock detected'), { code: '40P01' }));
+        h.dataSource.transaction.mockRejectedValueOnce(victim);
+        const error = await catchError(h.service.changeDriver(12, 50, 4, 9));
+        expect(error).toBeInstanceOf(RouteBatchApprovalConflictException);
+        expect((error as RouteBatchApprovalConflictException).getResponse()).toMatchObject({ error: 'ROUTE_BATCH_VERSION_CONFLICT' });
     });
 
     it('answers 409 when the guarded UPDATE finds a different version', async () => {

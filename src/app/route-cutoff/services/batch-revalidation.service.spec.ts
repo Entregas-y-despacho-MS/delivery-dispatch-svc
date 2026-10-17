@@ -158,6 +158,12 @@ describe('BatchRevalidationService.evaluate', () => {
         expect(manager.query).not.toHaveBeenCalled();
     });
 
+    it('answers stale, not not-validatable, when a batch that could not be simulated also changed version', async () => {
+        const { service } = build({ read: read({ incompleteDispatchIds: [2] }) });
+        const outcome = await service.evaluate(managerFor(), await service.prepare(12), { ...state, version: 5 });
+        expect(outcome).toMatchObject({ kind: 'stale', issues: [{ code: 'batch_version_changed' }] });
+    });
+
     it('uses the date of the batch to look for the resources of that day', async () => {
         const { service } = build();
         const manager = managerFor();

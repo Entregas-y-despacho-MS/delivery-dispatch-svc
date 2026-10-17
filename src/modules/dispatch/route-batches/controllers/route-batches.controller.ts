@@ -36,7 +36,12 @@ import {
  * ST-215.5 — list and detail of the batches for the review screens.
  *
  * Error dictionary: VALIDATION_FAILED 400 | INVALID_TOKEN 401 | INSUFFICIENT_PERMISSIONS 403 |
- * ROUTE_BATCH_NOT_FOUND 404 | ROUTE_BATCH_NOT_PROVISIONAL 409 | ROUTE_BATCH_REVIEWER_NOT_ELIGIBLE 409.
+ * ROUTE_BATCH_REVIEWER_MISMATCH 403 | ROUTE_BATCH_NOT_FOUND 404 | ROUTE_BATCH_NOT_PROVISIONAL 409 |
+ * ROUTE_BATCH_REVIEWER_NOT_ELIGIBLE 409 | ROUTE_BATCH_VERSION_CONFLICT 409 | DISPATCH_VERSION_CONFLICT 409 |
+ * ROUTE_BATCH_VEHICLE_REQUIRED 409 | ROUTE_BATCH_HAS_NO_APPROVALS 409 | ROUTE_CAPACITY_EXCEEDED 409 |
+ * ROUTE_BATCH_NOT_PENDING_FINAL_REVIEW 409 | ROUTE_BATCH_DRIVER_REQUIRED 409 | ROUTE_BATCH_DRIVER_NOT_AVAILABLE 409 |
+ * ROUTE_BATCH_VEHICLE_NOT_ACTIVE 409 | ROUTE_BATCH_RESOURCE_CONFLICT 409 | DISPATCH_NOT_READY_FOR_FINAL_APPROVAL 409 |
+ * DISPATCH_PACKAGES_REQUIRED 409 | DISPATCH_ORDER_IN_MULTIPLE_BATCHES 409.
  * The driver and vehicle corrections (ST-50.1, ST-51.6) live in `app/route-batch-correction`.
  */
 @ApiTags('Route batches')
@@ -104,7 +109,7 @@ export class RouteBatchesController {
     { code: 'DISPATCH_VERSION_CONFLICT', message: 'One or more dispatches changed. Reload the route batch.' },
     { code: 'ROUTE_BATCH_VEHICLE_REQUIRED', message: 'Assign a vehicle before approving promises.' },
     { code: 'ROUTE_BATCH_HAS_NO_APPROVALS', message: 'At least one dispatch must remain in the batch.' },
-    { code: 'ROUTE_CAPACITY_EXCEEDED', message: 'The route exceeds the selected vehicle capacity or package dimensions.' },
+    { code: 'ROUTE_CAPACITY_EXCEEDED', message: 'The route cannot be assigned to this vehicle because its cargo exceeds the vehicle capacity or package dimensions.' },
   )
   async approvePromises(
     @Param('id', ParseIdPipe) id: number,
@@ -136,7 +141,7 @@ export class RouteBatchesController {
     { code: 'ROUTE_BATCH_VEHICLE_REQUIRED', message: 'Assign a vehicle before final approval.' },
     { code: 'ROUTE_BATCH_VEHICLE_NOT_ACTIVE', message: 'The assigned vehicle must be active.' },
     { code: 'ROUTE_BATCH_RESOURCE_CONFLICT', message: 'The assigned vehicle is unavailable for this date.' },
-    { code: 'ROUTE_CAPACITY_EXCEEDED', message: 'The route exceeds vehicle capacity.' },
+    { code: 'ROUTE_CAPACITY_EXCEEDED', message: 'The route cannot be assigned to this vehicle because its cargo exceeds the vehicle capacity or package dimensions.' },
     { code: 'DISPATCH_NOT_READY_FOR_FINAL_APPROVAL', message: 'A dispatch has an incomplete destination, invalid promise window or unsupported pickup type.' },
     { code: 'DISPATCH_PACKAGES_REQUIRED', message: 'Every dispatch must have registered packages.' },
     { code: 'DISPATCH_ORDER_IN_MULTIPLE_BATCHES', message: 'An order already belongs to another active batch.' },
