@@ -1,4 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiExtraModels, ApiProperty } from '@nestjs/swagger';
+import { nullableRef } from './nullable-ref.js';
 
 export class RouteBatchZoneDto {
     @ApiProperty({ type: 'integer', example: 3, description: 'Id of the delivery zone' })
@@ -58,6 +59,7 @@ export class RouteBatchOccupancyDto {
     assignable!: boolean;
 }
 
+@ApiExtraModels(RouteBatchZoneDto, RouteBatchVehicleDto, RouteBatchUserDto, RouteBatchOccupancyDto)
 export class RouteBatchSummaryDto {
     @ApiProperty({ type: 'integer', example: 40, description: 'Id of the route batch' })
     id!: number;
@@ -71,21 +73,21 @@ export class RouteBatchSummaryDto {
     @ApiProperty({ type: String, format: 'date', example: '2026-10-17', description: 'Shift date of the batch (YYYY-MM-DD)' })
     shiftDate!: string;
 
-    @ApiProperty({ type: () => RouteBatchZoneDto, nullable: true, description: 'Delivery zone of the batch; null when it has none' })
+    @ApiProperty({ ...nullableRef(RouteBatchZoneDto), description: 'Delivery zone of the batch; null when it has none' })
     zone!: RouteBatchZoneDto | null;
 
-    @ApiProperty({ type: () => RouteBatchVehicleDto, nullable: true, description: 'Vehicle assigned or proposed; null while the batch has none (approving the promises requires one)' })
+    @ApiProperty({ ...nullableRef(RouteBatchVehicleDto), description: 'Vehicle assigned or proposed; null while the batch has none (approving the promises requires one)' })
     vehicle!: RouteBatchVehicleDto | null;
 
-    @ApiProperty({ type: () => RouteBatchUserDto, nullable: true, description: 'Driver proposed for the batch (`proposed_driver_id`); null when none' })
+    @ApiProperty({ ...nullableRef(RouteBatchUserDto), description: 'Driver proposed for the batch (`proposed_driver_id`); null when none' })
     proposedDriver!: RouteBatchUserDto | null;
 
-    @ApiProperty({ type: () => RouteBatchUserDto, nullable: true, description: 'Reviewer of the batch; null when it has none and every coordinator can see it' })
+    @ApiProperty({ ...nullableRef(RouteBatchUserDto), description: 'Reviewer of the batch; null when it has none and every coordinator can see it' })
     reviewer!: RouteBatchUserDto | null;
 
     @ApiProperty({ type: 'integer', example: 6, description: 'Number of dispatches currently in the batch' })
     dispatchCount!: number;
 
-    @ApiProperty({ type: () => RouteBatchOccupancyDto, nullable: true, description: 'Weight and volume occupancy of the vehicle; null when the batch has no vehicle' })
+    @ApiProperty({ ...nullableRef(RouteBatchOccupancyDto), description: 'Weight and volume occupancy of the vehicle; null when the batch has no vehicle' })
     occupancy!: RouteBatchOccupancyDto | null;
 }

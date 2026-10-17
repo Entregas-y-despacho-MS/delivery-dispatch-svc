@@ -12,13 +12,13 @@ export class FindRouteBatchesParamsDto extends PaginationParamsDto {
     @IsEnum(RouteBatchStatusEnum, { message: "The 'status' parameter must be one of: provisional, pending_final_review, confirmed, in_execution, closed, cancelled." })
     status?: RouteBatchStatusEnum;
 
-    @ApiPropertyOptional({ type: String, format: 'date', example: '2026-10-17', description: 'Only the batches of this shift date (YYYY-MM-DD)' })
+    @ApiPropertyOptional({ type: String, format: 'date', description: 'E.g. 2026-10-17. Only the batches of this shift date (YYYY-MM-DD)' })
     @IsOptional()
     @IsDateString({ strict: true }, { message: 'shiftDate must be a valid date in YYYY-MM-DD format.' })
     @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'shiftDate must be a valid date in YYYY-MM-DD format.' })
     shiftDate?: string;
 
-    @ApiPropertyOptional({ type: 'integer', minimum: 1, example: 7, description: 'Only the batches reviewed by this user. Combine with `withoutReviewer=true` to also get the batches nobody reviews (the coordinator\'s own queue, D-42)' })
+    @ApiPropertyOptional({ type: 'integer', minimum: 1, description: 'Only the batches reviewed by this user. Combine with `withoutReviewer=true` to also get the batches nobody reviews (the coordinator\'s own queue, D-42)' })
     @IsOptional()
     @Type(() => Number)
     @IsInt({ message: "The 'reviewerUserId' parameter must be an integer." })

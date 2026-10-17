@@ -1,4 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiExtraModels, ApiProperty } from '@nestjs/swagger';
+import { nullableRef } from './nullable-ref.js';
 import { RouteCapacityReportDto } from './route-capacity-report.dto.js';
 import { RouteBatchSummaryDto } from './route-batch-summary.dto.js';
 
@@ -71,13 +72,14 @@ export class RouteBatchValidationDto {
     warnings!: Array<Record<string, unknown>>;
 }
 
+@ApiExtraModels(RouteCapacityReportDto, RouteBatchValidationDto)
 export class RouteBatchDetailDto extends RouteBatchSummaryDto {
     @ApiProperty({ type: () => RouteBatchDispatchDto, isArray: true, description: 'Dispatches of the batch in route order (`sequenceOrder`, then id)' })
     dispatches!: RouteBatchDispatchDto[];
 
-    @ApiProperty({ type: () => RouteCapacityReportDto, nullable: true, description: 'Full capacity report of the vehicle (including `assignable`); null when the batch has no vehicle' })
+    @ApiProperty({ ...nullableRef(RouteCapacityReportDto), description: 'Full capacity report of the vehicle (including `assignable`); null when the batch has no vehicle' })
     capacity!: RouteCapacityReportDto | null;
 
-    @ApiProperty({ type: () => RouteBatchValidationDto, nullable: true, description: 'Result of the last system validation (cutoff) of the batch; null when it has never been validated' })
+    @ApiProperty({ ...nullableRef(RouteBatchValidationDto), description: 'Result of the last system validation (cutoff) of the batch; null when it has never been validated' })
     validation!: RouteBatchValidationDto | null;
 }
