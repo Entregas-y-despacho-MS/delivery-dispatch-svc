@@ -18,6 +18,7 @@ import { FinalReviewEscalationService } from '../src/app/final-review/services/f
 import { FinalReviewRepository } from '../src/app/final-review/services/final-review.repository.js';
 import { RouteReminderService } from '../src/app/final-review/services/route-reminder.service.js';
 import { LateApprovalNoticeListener } from '../src/app/final-review/late-approval-notice.listener.js';
+import { NoticeReconciliationService } from '../src/app/final-review/services/notice-reconciliation.service.js';
 import { withEventPurge } from './helpers/purge-append-only-events.js';
 
 const SHIFT = '2031-03-12';
@@ -37,8 +38,11 @@ describe('Final review timeline (e2e, ST-51.4)', () => {
     let escalation: FinalReviewEscalationService;
     let lateApproval: LateApprovalNoticeListener;
     let repository: FinalReviewRepository;
+    let reconciliation: NoticeReconciliationService;
     let warehouseId = 0;
     const sent: Array<{ to: string; template: string }> = [];
+    /** The risk notice sent to a `-hold@` address waits here until the test resolves them: an email "in flight". */
+    const held: Array<{ to: string; template: string; resolve: (status: 'sent' | 'bounced' | 'failed') => void }> = [];
 
     const run = Date.now().toString(36).toUpperCase();
     const tag = `E2EFR-${run}`;
@@ -53,6 +57,12 @@ describe('Final review timeline (e2e, ST-51.4)', () => {
                 send: async (options: { to: string | string[]; template?: string }) => {
                     const to = Array.isArray(options.to) ? options.to[0] : options.to;
                     sent.push({ to, template: options.template ?? '' });
+                    // Only the risk notice is held: whatever follows it (reminder, «se mantiene») must go through.
+                    if (to.includes('-hold@') && options.template === 'risk-notice') {
+                        return await new Promise<{ status: 'sent' | 'bounced' | 'failed' }>((resolve) => {
+                            held.push({ to, template: options.template ?? '', resolve: (status) => resolve({ status }) });
+                        });
+                    }
                     return { status: to.includes('-bounce@') ? 'bounced' : 'sent' };
                 },
             })
@@ -65,6 +75,7 @@ describe('Final review timeline (e2e, ST-51.4)', () => {
         escalation = moduleRef.get(FinalReviewEscalationService);
         lateApproval = moduleRef.get(LateApprovalNoticeListener);
         repository = moduleRef.get(FinalReviewRepository);
+        reconciliation = moduleRef.get(NoticeReconciliationService);
         const [wh] = await db.query(`SELECT warehouse_id FROM warehouses WHERE active = TRUE ORDER BY warehouse_id LIMIT 1`);
         warehouseId = wh.warehouse_id;
     });
@@ -82,7 +93,7 @@ describe('Final review timeline (e2e, ST-51.4)', () => {
     });
 
     /** A batch of the route day with one order per entry; `promised` orders already got their promise email. */
-    async function makeBatch(status: string, orders: Array<{ status: OrderStatus; promised?: boolean; contact?: 'none' | 'bounce' }>) {
+    async function makeBatch(status: string, orders: Array<{ status: OrderStatus; promised?: boolean; contact?: 'none' | 'bounce' | 'hold' }>) {
         const [{ route_batch_id }] = await db.query(
             `INSERT INTO route_batches (status, shift_date) VALUES ($1, $2) RETURNING route_batch_id`, [status, SHIFT],
         );
@@ -92,7 +103,7 @@ describe('Final review timeline (e2e, ST-51.4)', () => {
         for (const order of orders) {
             const ref = `${tag}-${++seq}`;
             refs.push(ref);
-            const email = order.contact === 'none' ? null : `${ref.toLowerCase()}${order.contact === 'bounce' ? '-bounce' : ''}@example.test`;
+            const email = order.contact === 'none' ? null : `${ref.toLowerCase()}${order.contact === 'bounce' ? '-bounce' : order.contact === 'hold' ? '-hold' : ''}@example.test`;
             const [{ dispatch_id }] = await db.query(
                 `INSERT INTO dispatches (dispatch_type_id, dispatch_status_id, route_batch_id, sequence_order, source_order_ref,
                         delivery_address, contact_name, contact_email, estimated_weight_kg, origin_warehouse_id, tracking_code,
@@ -399,6 +410,187 @@ describe('Final review timeline (e2e, ST-51.4)', () => {
             expect(mailsTo(batch.emails).map((mail) => mail.template)).toEqual(['risk-notice', 'delivery-maintained']);
             expect(await reserved(batch.dispatchIds[0], 'delivery-maintained')).toBe(1);
             expect(await reserved(batch.dispatchIds[0], 'reminder')).toBe(0);
+        });
+    });
+
+    /** Waits until the mailer holds a send of `template` to this address (the email is "in flight"). */
+    async function waitForHeld(email: string, template: string) {
+        for (let attempt = 0; attempt < 100; attempt++) {
+            const found = held.find((entry) => entry.to === email && entry.template === template);
+            if (found) return found;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        throw new Error(`The mailer never received "${template}" for ${email}`);
+    }
+
+    const routeAssigned = (batch: { id: number; dispatchIds: number[] }) =>
+        ({ routeId: batch.id, driverId: 1, vehicleId: 1, dispatchIds: batch.dispatchIds, version: 1 });
+
+    describe('risk notice in flight when the batch is approved (review of ST-51.4)', () => {
+        it('resolved as bounced: the late approval decides nothing meanwhile, then the reminder goes out — never «se mantiene», never twice', async () => {
+            const batch = await makeBatch('pending_final_review', [{ status: 'scheduled', contact: 'hold' }]);
+
+            const escalating = escalation.run(context(ESCALATION)); // the mailer holds the risk notice
+            const risk = await waitForHeld(batch.emails[0], 'risk-notice');
+            expect(await reserved(batch.dispatchIds[0], 'risk-notice')).toBe(1);
+            expect(await results(batch.dispatchIds[0], 'risk-notice', 'sent')).toBe(0);
+
+            await approve(batch);
+            await lateApproval.handleRouteAssigned(routeAssigned(batch), AFTER_RISK);
+            // Nothing was decided around the notice that is still being sent.
+            expect(mailsTo(batch.emails).map((mail) => mail.template)).toEqual(['risk-notice']);
+            expect(await reserved(batch.dispatchIds[0], 'delivery-maintained')).toBe(0);
+            expect(await reserved(batch.dispatchIds[0], 'reminder')).toBe(0);
+
+            risk.resolve('bounced');
+            await escalating;
+
+            expect(mailsTo(batch.emails).map((mail) => mail.template)).toEqual(['risk-notice', 'reminder']);
+            expect(await results(batch.dispatchIds[0], 'risk-notice', 'bounced')).toBe(1);
+            expect(await reserved(batch.dispatchIds[0], 'reminder')).toBe(1);
+            expect(await reserved(batch.dispatchIds[0], 'delivery-maintained')).toBe(0);
+            const followUps = await db.query(
+                `SELECT 1 FROM route_batch_events WHERE route_batch_id = $1 AND event_type = 'contact_management_required'`, [batch.id],
+            );
+            expect(followUps.length).toBeGreaterThanOrEqual(1);
+        });
+
+        it('resolved as failed by the transport: the same, the reminder and never «se mantiene»', async () => {
+            const batch = await makeBatch('pending_final_review', [{ status: 'scheduled', contact: 'hold' }]);
+
+            const escalating = escalation.run(context(ESCALATION));
+            const risk = await waitForHeld(batch.emails[0], 'risk-notice');
+            await approve(batch);
+            await lateApproval.handleRouteAssigned(routeAssigned(batch), AFTER_RISK);
+            risk.resolve('failed');
+            await escalating;
+
+            expect(mailsTo(batch.emails).map((mail) => mail.template)).toEqual(['risk-notice', 'reminder']);
+            expect(await results(batch.dispatchIds[0], 'risk-notice', 'failed')).toBe(1);
+            expect(await reserved(batch.dispatchIds[0], 'delivery-maintained')).toBe(0);
+        });
+
+        it('resolved as sent: «tu entrega se mantiene», never the reminder, once', async () => {
+            const batch = await makeBatch('pending_final_review', [{ status: 'scheduled', contact: 'hold' }]);
+
+            const escalating = escalation.run(context(ESCALATION));
+            const risk = await waitForHeld(batch.emails[0], 'risk-notice');
+            await approve(batch);
+            await lateApproval.handleRouteAssigned(routeAssigned(batch), AFTER_RISK);
+            expect(mailsTo(batch.emails).map((mail) => mail.template)).toEqual(['risk-notice']);
+
+            risk.resolve('sent');
+            await escalating;
+            // Asking again changes nothing: each email is reserved once.
+            await lateApproval.handleRouteAssigned(routeAssigned(batch), new Date(AFTER_RISK.getTime() + 60_000));
+
+            expect(mailsTo(batch.emails).map((mail) => mail.template)).toEqual(['risk-notice', 'delivery-maintained']);
+            expect(await results(batch.dispatchIds[0], 'risk-notice', 'sent')).toBe(1);
+            expect(await reserved(batch.dispatchIds[0], 'delivery-maintained')).toBe(1);
+            expect(await reserved(batch.dispatchIds[0], 'reminder')).toBe(0);
+        });
+    });
+
+    describe('abandoned reservations and the reconciliation task', () => {
+        /** A risk notice reserved `minutesAgo` minutes ago that never got a result (events are append-only, so it is born old). */
+        const reserveRiskNotice = (batch: { id: number; dispatchIds: number[] }, minutesAgo: number) =>
+            db.query(
+                `INSERT INTO dispatch_events (dispatch_id, event_type, actor_type, reason, metadata, created_at)
+                 VALUES ($1, 'notice_reserved', 'system', 'test', $2::jsonb, NOW() - make_interval(mins => $3::int))`,
+                [batch.dispatchIds[0], JSON.stringify({ template: 'risk-notice', routeBatchId: batch.id }), minutesAgo],
+            );
+        const followUps = async (batchId: number, template: string): Promise<number> =>
+            Number((await db.query(
+                `SELECT COUNT(*) AS n FROM route_batch_events WHERE route_batch_id = $1 AND event_type = 'contact_management_required' AND metadata->>'template' = $2`,
+                [batchId, template],
+            ))[0].n);
+
+        it('a reservation past its lease no longer blocks: the late approval sends the reminder and the sweep closes it once, with one follow-up', async () => {
+            const batch = await makeBatch('confirmed', [{ status: 'assigned' }]);
+            await reserveRiskNotice(batch, 30); // lease is 15 minutes
+
+            await lateApproval.handleRouteAssigned(routeAssigned(batch), AFTER_RISK);
+            expect(mailsTo(batch.emails).map((mail) => mail.template)).toEqual(['reminder']);
+
+            await reconciliation.run(context(AFTER_RISK));
+            await reconciliation.run(context(AFTER_RISK));
+
+            expect(await results(batch.dispatchIds[0], 'risk-notice', 'abandoned')).toBe(1);
+            expect(await followUps(batch.id, 'risk-notice')).toBe(1);
+            expect(mailsTo(batch.emails).map((mail) => mail.template)).toEqual(['reminder']); // never resent, never duplicated
+            expect(await reserved(batch.dispatchIds[0], 'delivery-maintained')).toBe(0);
+        });
+
+        it('a reservation still inside its lease is in flight: the approval defers and the sweep leaves it alone', async () => {
+            const batch = await makeBatch('confirmed', [{ status: 'assigned' }]);
+            await reserveRiskNotice(batch, 1);
+
+            await lateApproval.handleRouteAssigned(routeAssigned(batch), AFTER_RISK);
+            await reconciliation.run(context(AFTER_RISK));
+
+            expect(mailsTo(batch.emails)).toHaveLength(0);
+            expect(await results(batch.dispatchIds[0], 'risk-notice', 'abandoned')).toBe(0);
+            expect(await followUps(batch.id, 'risk-notice')).toBe(0);
+        });
+
+        it('a reminder tick that was lost is sent by the sweep once the hour has come, and only once', async () => {
+            const batch = await makeBatch('confirmed', [{ status: 'assigned' }]);
+
+            await reconciliation.run(context(REVIEW_END)); // 16:00: too early
+            expect(mailsTo(batch.emails)).toHaveLength(0);
+            await reconciliation.run(context(REMINDER));
+            await reconciliation.run(context(REMINDER));
+
+            expect(mailsTo(batch.emails).map((mail) => mail.template)).toEqual(['reminder']);
+            expect(await reserved(batch.dispatchIds[0], 'reminder')).toBe(1);
+        });
+
+        it('the sweep sends nothing for a batch that was never approved', async () => {
+            const pending = await makeBatch('pending_final_review', [{ status: 'scheduled' }]);
+
+            await reconciliation.run(context(REMINDER));
+
+            expect(mailsTo(pending.emails)).toHaveLength(0);
+        });
+    });
+
+    describe('guards found by the mutations', () => {
+        it('abandonNotice re-checks the lease under the lock: a fresh reservation is not closed, an expired one is, once', async () => {
+            const fresh = await makeBatch('confirmed', [{ status: 'assigned' }]);
+            const expired = await makeBatch('confirmed', [{ status: 'assigned' }]);
+            const reserve = (batch: { id: number; dispatchIds: number[] }, minutesAgo: number) => db.query(
+                `INSERT INTO dispatch_events (dispatch_id, event_type, actor_type, reason, metadata, created_at)
+                 VALUES ($1, 'notice_reserved', 'system', 'test', $2::jsonb, NOW() - make_interval(mins => $3::int))`,
+                [batch.dispatchIds[0], JSON.stringify({ template: 'reminder', routeBatchId: batch.id }), minutesAgo],
+            );
+            await reserve(fresh, 1);
+            await reserve(expired, 30);
+
+            const freshClosed = await repository.inBatchLock(fresh.id, (scope) => scope.abandonNotice(fresh.dispatchIds[0], 'reminder'));
+            const expiredClosed = await repository.inBatchLock(expired.id, (scope) => scope.abandonNotice(expired.dispatchIds[0], 'reminder'));
+            const expiredAgain = await repository.inBatchLock(expired.id, (scope) => scope.abandonNotice(expired.dispatchIds[0], 'reminder'));
+
+            expect(freshClosed).toBe(false);
+            expect(expiredClosed).toBe(true);
+            expect(expiredAgain).toBe(false);
+            expect(await results(fresh.dispatchIds[0], 'reminder', 'abandoned')).toBe(0);
+            expect(await results(expired.dispatchIds[0], 'reminder', 'abandoned')).toBe(1);
+        });
+
+        it('an order escalated in one batch is escalated again, with its own incident and notice, when it enters another unapproved batch', async () => {
+            const first = await makeBatch('pending_final_review', [{ status: 'scheduled' }]);
+            await escalation.run(context(ESCALATION));
+            const incidents = async () => Number((await db.query(`SELECT COUNT(*) AS n FROM dispatch_incidents WHERE dispatch_id = $1`, [first.dispatchIds[0]]))[0].n);
+            expect(await incidents()).toBe(1);
+            expect(await reserved(first.dispatchIds[0], 'risk-notice')).toBe(1);
+            const second = await makeBatch('pending_final_review', [{ status: 'in_planning', promised: false }]);
+            await db.query(`DELETE FROM dispatches WHERE dispatch_id = $1`, [second.dispatchIds[0]]);
+            await db.query(`UPDATE dispatches SET route_batch_id = $1 WHERE dispatch_id = $2`, [second.id, first.dispatchIds[0]]);
+
+            await escalation.run(context(ESCALATION));
+
+            expect(await incidents()).toBe(2);
+            expect(await reserved(first.dispatchIds[0], 'risk-notice')).toBe(2);
         });
     });
 });

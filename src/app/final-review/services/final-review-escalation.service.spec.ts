@@ -92,6 +92,16 @@ describe('FinalReviewEscalationService', () => {
         expect(calls.filter((call) => call === 'deliver' || call === 'reconcile')).toEqual(['deliver', 'reconcile', 'deliver', 'reconcile']);
     });
 
+    it('decides again with the real clock, but never with an instant earlier than the one the run started at', async () => {
+        const { service, notices } = build({ batches: [batch(11)], ids: { 11: [1] }, states: { 1: state(1) } });
+        const startedAt = new Date('2031-03-12T11:00:00Z'); // in the future of the real clock, as in the simulated e2e
+
+        await service.run({ ...AT_ESCALATION, startedAt });
+
+        const [, , , now] = notices.reconcileOrder.mock.calls[0] as unknown as [number, number, string, Date];
+        expect(now.getTime()).toBeGreaterThanOrEqual(startedAt.getTime());
+    });
+
     it('does not reconcile an order whose risk notice was not sent by this run', async () => {
         const { service, notices } = build({ batches: [batch(11)], ids: { 11: [1] }, states: { 1: state(1) }, riskClaim: [false] });
 

@@ -90,7 +90,7 @@ export class FinalReviewEscalationService {
 
         for (const batch of await this.repository.findBatches(shiftDate, ESCALATABLE)) {
             try {
-                await this.escalateBatch(batch.routeBatchId, batch.status, shiftDate, settings, reasonId, summary);
+                await this.escalateBatch(batch.routeBatchId, batch.status, shiftDate, settings, reasonId, summary, context.startedAt);
             } catch (error) {
                 summary.failedBatchIds.push(batch.routeBatchId);
                 this.logger.error(`Escalation of batch ${batch.routeBatchId} failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -106,6 +106,7 @@ export class FinalReviewEscalationService {
         settings: FinalReviewSettings,
         reasonId: number | null,
         summary: FinalReviewEscalationSummary,
+        startedAt: Date,
     ): Promise<void> {
         const dispatchIds = await this.repository.findDispatchIds(routeBatchId, 'scheduled', true);
         if (dispatchIds.length === 0) {
@@ -161,8 +162,10 @@ export class FinalReviewEscalationService {
                 const outcome = await this.notices.deliver(routeBatchId, step.send, 'send-risk-notice');
                 if (outcome === 'sent') noticesSent += 1; else noticesFailed += 1;
                 // The result is known now. If the batch was approved while this notice was in flight, the late
-                // approval deferred this order: decide it again with the real clock (never throws).
-                await this.notices.reconcileOrder(routeBatchId, dispatchId, shiftDate, new Date(), settings);
+                // approval deferred this order: decide it again (never throws). Time has passed since the run
+                // started, so the clock is the real one, and never earlier than the run's own instant.
+                const now = new Date(Math.max(Date.now(), startedAt.getTime()));
+                await this.notices.reconcileOrder(routeBatchId, dispatchId, shiftDate, now, settings);
             }
         }
         summary.incidentsRegistered += incidents;
