@@ -20,7 +20,7 @@ const RAW = {
 };
 
 const settings = parseFinalReviewSettings(RAW).values as FinalReviewSettings;
-const none: CustomerNoticeState = { reminderSent: false, riskNoticeSent: false, maintainedSent: false };
+const none: CustomerNoticeState = { reminder: 'none', risk: 'none', maintained: 'none' };
 
 describe('parseFinalReviewSettings', () => {
     it('reads the calendar and the three times', () => {
@@ -85,24 +85,42 @@ describe('MILESTONE_BATCH_STATUSES', () => {
 
 describe('customerNoticeAction', () => {
     const shift = '2026-10-14';
+    const BEFORE = new Date('2026-10-13T20:29:00Z'); // Tue 16:29 La Paz
+    const AT = new Date('2026-10-13T20:30:00Z'); // Tue 16:30
+    const AFTER = new Date('2026-10-14T13:00:00Z'); // Wed 09:00
+    const state = (overrides: Partial<CustomerNoticeState> = {}): CustomerNoticeState => ({ ...none, ...overrides });
 
     it('waits before route_reminder_time: the 16:30 task will send it', () => {
-        expect(customerNoticeAction(new Date('2026-10-13T20:29:00Z'), shift, settings, none)).toBe('wait');
+        expect(customerNoticeAction(BEFORE, shift, settings, none)).toBe('wait');
     });
 
-    it('sends the reminder at 16:30 and also when the batch is approved later (before the risk notice)', () => {
-        expect(customerNoticeAction(new Date('2026-10-13T20:30:00Z'), shift, settings, none)).toBe('send-reminder');
+    it('sends the reminder at 16:30 and also when the batch is approved later (before any risk notice)', () => {
+        expect(customerNoticeAction(AT, shift, settings, none)).toBe('send-reminder');
         expect(customerNoticeAction(new Date('2026-10-14T09:00:00Z'), shift, settings, none)).toBe('send-reminder');
     });
 
-    it('after the risk notice a late approval sends «tu entrega se mantiene», not the reminder', () => {
-        const state = { ...none, riskNoticeSent: true };
-        expect(customerNoticeAction(new Date('2026-10-14T13:00:00Z'), shift, settings, state)).toBe('send-delivery-maintained');
+    it('«tu entrega se mantiene» is only owed to a customer who really got the risk notice', () => {
+        expect(customerNoticeAction(AFTER, shift, settings, state({ risk: 'sent' }))).toBe('send-delivery-maintained');
     });
 
-    it('never repeats a notice already sent', () => {
-        const now = new Date('2026-10-14T13:00:00Z');
-        expect(customerNoticeAction(now, shift, settings, { ...none, reminderSent: true })).toBe('none');
-        expect(customerNoticeAction(now, shift, settings, { reminderSent: false, riskNoticeSent: true, maintainedSent: true })).toBe('none');
+    it.each(['failed'] as const)('a risk notice that %s (bounced, failed or abandoned) owes the reminder, never «se mantiene»', (risk) => {
+        expect(customerNoticeAction(AFTER, shift, settings, state({ risk }))).toBe('send-reminder');
+    });
+
+    it('a risk notice still in flight is not decided around: it is deferred until its result is known', () => {
+        expect(customerNoticeAction(AFTER, shift, settings, state({ risk: 'in_flight' }))).toBe('defer');
+        expect(customerNoticeAction(BEFORE, shift, settings, state({ risk: 'in_flight' }))).toBe('defer');
+    });
+
+    it('a failed risk notice before the reminder hour waits for the 16:30 reminder', () => {
+        expect(customerNoticeAction(BEFORE, shift, settings, state({ risk: 'failed' }))).toBe('wait');
+    });
+
+    it.each(['in_flight', 'sent', 'failed'] as const)('never reserves again a reminder that is %s', (reminder) => {
+        expect(customerNoticeAction(AFTER, shift, settings, state({ reminder }))).toBe('none');
+    });
+
+    it.each(['in_flight', 'sent', 'failed'] as const)('never reserves again a «se mantiene» that is %s', (maintained) => {
+        expect(customerNoticeAction(AFTER, shift, settings, state({ risk: 'sent', maintained }))).toBe('none');
     });
 });

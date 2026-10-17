@@ -16,28 +16,28 @@ const AFTER_RISK = new Date('2026-10-14T13:00:00Z'); // Wed 09:00
 const state = (overrides: Partial<DispatchNoticeState> = {}): DispatchNoticeState => ({
     dispatchId: 1, status: 'assigned', contactEmail: 'ana@example.com', trackingToken: 'tok-1',
     windowStart: new Date('2026-10-14T12:00:00Z'), windowEnd: new Date('2026-10-14T16:00:00Z'), promiseNotifiedAt: new Date(),
-    reminderSent: false, riskNoticeSent: false, maintainedSent: false, escalated: false, ...overrides,
+    reminder: 'none', risk: 'none', maintained: 'none', escalated: false, ...overrides,
 });
 
 function build(options: {
-    states?: Record<number, DispatchNoticeState | null>; batchStatus?: string; claim?: boolean[];
-    mail?: 'sent' | 'bounced' | 'throw'; failureRecordThrows?: boolean; claimThrowsFor?: number;
+    states?: Record<number, DispatchNoticeState | null>; batchStatus?: string; reserve?: boolean[];
+    mail?: 'sent' | 'bounced' | 'throw'; resultRecordThrows?: boolean; reserveThrowsFor?: number;
 } = {}) {
     const states = options.states ?? { 1: state() };
-    const claims = [...(options.claim ?? [])];
+    const reservations = [...(options.reserve ?? [])];
     const scope = {
         status: options.batchStatus ?? 'confirmed',
         dispatchState: vi.fn(async (id: number) => states[id] ?? null),
-        claimDispatchEvent: vi.fn(async (id: number) => {
-            if (options.claimThrowsFor === id) throw new Error('db down');
-            return claims.length > 0 ? claims.shift()! : true;
+        reserveNotice: vi.fn(async (id: number) => {
+            if (options.reserveThrowsFor === id) throw new Error('db down');
+            return reservations.length > 0 ? reservations.shift()! : true;
         }),
         recordContactManagementOnce: vi.fn(async () => undefined),
     };
     const repository = {
         findDispatchIds: vi.fn(async () => Object.keys(states).map(Number)),
         inBatchLock: vi.fn(async (_id: number, work: (s: typeof scope) => Promise<unknown>) => await work(scope)),
-        recordSendFailure: vi.fn(async () => { if (options.failureRecordThrows) throw new Error('db down'); }),
+        recordNoticeResult: vi.fn(async () => { if (options.resultRecordThrows) throw new Error('db down'); }),
     };
     const mailer = {
         send: vi.fn(async () => {
@@ -50,8 +50,8 @@ function build(options: {
 }
 
 describe('CustomerNoticeService.sendDueNotices', () => {
-    it('sends the reminder with date, window and tracking link at route_reminder_time', async () => {
-        const { service, mailer, scope } = build();
+    it('reserves and sends the reminder with date, window and tracking link at route_reminder_time, then records the result', async () => {
+        const { service, mailer, scope, repository } = build();
 
         const summary = await service.sendDueNotices(5, SHIFT, AT_REMINDER, settings);
 
@@ -61,7 +61,8 @@ describe('CustomerNoticeService.sendDueNotices', () => {
             template: 'reminder',
             context: expect.objectContaining({ trackingUrl: 'http://web.test/seguimiento/tok-1', deliveryDate: expect.any(String), deliveryWindow: expect.stringContaining('–') }),
         }));
-        expect(scope.claimDispatchEvent).toHaveBeenCalledWith(1, 'route_reminder_sent', expect.any(String), expect.anything());
+        expect(scope.reserveNotice).toHaveBeenCalledWith(1, 'reminder', expect.any(String));
+        expect(repository.recordNoticeResult).toHaveBeenCalledWith(5, 1, 'reminder', 'sent', expect.any(String));
     });
 
     it('decides and reserves under the lock of the batch, and sends after it is released', async () => {
@@ -71,7 +72,7 @@ describe('CustomerNoticeService.sendDueNotices', () => {
             const result = await work({
                 status: 'confirmed',
                 dispatchState: async () => state(),
-                claimDispatchEvent: async () => true,
+                reserveNotice: async () => true,
                 recordContactManagementOnce: async () => undefined,
             });
             mailedInsideLock = mailer.send.mock.calls.length > 0;
@@ -91,7 +92,7 @@ describe('CustomerNoticeService.sendDueNotices', () => {
 
         expect(summary.waiting).toBe(1);
         expect(mailer.send).not.toHaveBeenCalled();
-        expect(scope.claimDispatchEvent).not.toHaveBeenCalled();
+        expect(scope.reserveNotice).not.toHaveBeenCalled();
     });
 
     it('a late approval after the reminder hour sends the normal reminder, before any risk notice', async () => {
@@ -102,33 +103,52 @@ describe('CustomerNoticeService.sendDueNotices', () => {
         expect(mailer.send).toHaveBeenCalledWith(expect.objectContaining({ template: 'reminder' }));
     });
 
-    it('a late approval after the risk notice sends «tu entrega se mantiene», not the reminder', async () => {
-        const { service, mailer, scope } = build({ states: { 1: state({ riskNoticeSent: true }) } });
+    it('a late approval after a risk notice that really arrived sends «tu entrega se mantiene», not the reminder', async () => {
+        const { service, mailer, scope } = build({ states: { 1: state({ risk: 'sent' }) } });
 
         const summary = await service.sendDueNotices(5, SHIFT, AFTER_RISK, settings);
 
         expect(summary).toMatchObject({ reminders: 0, maintained: 1 });
         expect(mailer.send).toHaveBeenCalledWith(expect.objectContaining({ template: 'delivery-maintained' }));
-        expect(scope.claimDispatchEvent).toHaveBeenCalledWith(1, 'delivery_maintained_sent', expect.any(String), expect.anything());
+        expect(scope.reserveNotice).toHaveBeenCalledWith(1, 'delivery-maintained', expect.any(String));
     });
 
-    it('never sends what was already sent for this batch', async () => {
-        const { service, mailer } = build({
-            states: { 1: state({ reminderSent: true }), 2: state({ dispatchId: 2, riskNoticeSent: true, maintainedSent: true }) },
-        });
+    it('a late approval after a risk notice that failed or was abandoned sends the reminder, never «se mantiene»', async () => {
+        const { service, mailer } = build({ states: { 1: state({ risk: 'failed' }) } });
+
+        await service.sendDueNotices(5, SHIFT, AFTER_RISK, settings);
+
+        expect(mailer.send).toHaveBeenCalledTimes(1);
+        expect(mailer.send).toHaveBeenCalledWith(expect.objectContaining({ template: 'reminder' }));
+    });
+
+    it('a late approval while the risk notice is still being sent decides nothing: it is deferred', async () => {
+        const { service, mailer, scope, repository } = build({ states: { 1: state({ risk: 'in_flight' }) } });
+
+        const summary = await service.sendDueNotices(5, SHIFT, AFTER_RISK, settings);
+
+        expect(summary).toMatchObject({ deferred: 1, reminders: 0, maintained: 0 });
+        expect(scope.reserveNotice).not.toHaveBeenCalled();
+        expect(mailer.send).not.toHaveBeenCalled();
+        expect(repository.recordNoticeResult).not.toHaveBeenCalled();
+    });
+
+    it.each(['in_flight', 'sent', 'failed'] as const)('never sends again a reminder that is %s for this batch', async (reminder) => {
+        const { service, mailer } = build({ states: { 1: state({ reminder }) } });
 
         await service.sendDueNotices(5, SHIFT, AFTER_RISK, settings);
 
         expect(mailer.send).not.toHaveBeenCalled();
     });
 
-    it('does not send when another caller reserved the event first', async () => {
-        const { service, mailer } = build({ claim: [false] });
+    it('does not send when another caller reserved the email first', async () => {
+        const { service, mailer, repository } = build({ reserve: [false] });
 
         const summary = await service.sendDueNotices(5, SHIFT, AT_REMINDER, settings);
 
         expect(summary).toMatchObject({ reminders: 0, failed: 0 });
         expect(mailer.send).not.toHaveBeenCalled();
+        expect(repository.recordNoticeResult).not.toHaveBeenCalled();
     });
 
     it('does nothing for a batch that is no longer confirmed, or an order that is no longer assigned', async () => {
@@ -139,7 +159,7 @@ describe('CustomerNoticeService.sendDueNotices', () => {
 
         const moved = build({ states: { 1: state({ status: 'scheduled' }) } });
         await moved.service.sendDueNotices(5, SHIFT, AT_REMINDER, settings);
-        expect(moved.scope.claimDispatchEvent).not.toHaveBeenCalled();
+        expect(moved.scope.reserveNotice).not.toHaveBeenCalled();
         expect(moved.mailer.send).not.toHaveBeenCalled();
     });
 
@@ -153,21 +173,21 @@ describe('CustomerNoticeService.sendDueNotices', () => {
 
         expect(summary.skipped).toBe(1);
         expect(scope.recordContactManagementOnce).toHaveBeenCalledWith(1, 'reminder', expect.stringContaining('coordinator'), expect.objectContaining({ deliveryResult: 'no_contact' }));
-        expect(scope.claimDispatchEvent).not.toHaveBeenCalled();
+        expect(scope.reserveNotice).not.toHaveBeenCalled();
         expect(mailer.send).not.toHaveBeenCalled();
     });
 
-    it.each(['bounced', 'throw'] as const)('a %s email opens a coordinator follow-up and counts as failed', async (mail) => {
+    it.each(['bounced', 'throw'] as const)('a %s email records that result (and the follow-up) and counts as failed', async (mail) => {
         const { service, repository } = build({ mail });
 
         const summary = await service.sendDueNotices(5, SHIFT, AT_REMINDER, settings);
 
         expect(summary).toMatchObject({ reminders: 0, failed: 1 });
-        expect(repository.recordSendFailure).toHaveBeenCalledWith(5, 1, 'reminder', mail === 'throw' ? 'failed' : 'bounced', expect.stringContaining('coordinator'), undefined);
+        expect(repository.recordNoticeResult).toHaveBeenCalledWith(5, 1, 'reminder', mail === 'throw' ? 'failed' : 'bounced', expect.stringContaining('coordinator'));
     });
 
     it('one bad order does not stop the rest: its database error is counted and the next one is sent', async () => {
-        const { service, mailer } = build({ states: { 1: state(), 2: state({ dispatchId: 2, contactEmail: 'b@example.com' }) }, claimThrowsFor: 1 });
+        const { service, mailer } = build({ states: { 1: state(), 2: state({ dispatchId: 2, contactEmail: 'b@example.com' }) }, reserveThrowsFor: 1 });
 
         const summary = await service.sendDueNotices(5, SHIFT, AT_REMINDER, settings);
 
@@ -175,27 +195,28 @@ describe('CustomerNoticeService.sendDueNotices', () => {
         expect(mailer.send).toHaveBeenCalledWith(expect.objectContaining({ to: 'b@example.com' }));
     });
 
-    it('a failure while recording the follow-up never throws', async () => {
-        const { service } = build({ mail: 'bounced', failureRecordThrows: true });
+    it('a failure while recording the result never throws (the reservation runs out its lease)', async () => {
+        const { service } = build({ mail: 'bounced', resultRecordThrows: true });
 
         await expect(service.sendDueNotices(5, SHIFT, AT_REMINDER, settings)).resolves.toMatchObject({ failed: 1, errors: 0 });
     });
 });
 
 describe('CustomerNoticeService.deliver (risk notice)', () => {
-    it('sends the risk notice and does not need a tracking link', async () => {
-        const { service, mailer } = build();
+    it('sends the risk notice, does not need a tracking link and records the result', async () => {
+        const { service, mailer, repository } = build();
 
         const outcome = await service.deliver(5, state({ trackingToken: null }), 'send-risk-notice');
 
         expect(outcome).toBe('sent');
         expect(mailer.send).toHaveBeenCalledWith(expect.objectContaining({ template: 'risk-notice', context: expect.objectContaining({ trackingUrl: '' }) }));
+        expect(repository.recordNoticeResult).toHaveBeenCalledWith(5, 1, 'risk-notice', 'sent', expect.any(String));
     });
 
-    it('a bounced risk notice records that the customer was NOT warned', async () => {
+    it('a bounced risk notice is recorded as bounced, so the customer counts as NOT warned', async () => {
         const { service, repository } = build({ mail: 'bounced' });
 
         await expect(service.deliver(5, state(), 'send-risk-notice')).resolves.toBe('failed');
-        expect(repository.recordSendFailure).toHaveBeenCalledWith(5, 1, 'risk-notice', 'bounced', expect.any(String), 'risk_notice_failed');
+        expect(repository.recordNoticeResult).toHaveBeenCalledWith(5, 1, 'risk-notice', 'bounced', expect.stringContaining('coordinator'));
     });
 });

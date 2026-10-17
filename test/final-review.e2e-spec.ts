@@ -122,8 +122,16 @@ describe('Final review timeline (e2e, ST-51.4)', () => {
     const mailsTo = (emails: string[]) => sent.filter((mail) => emails.includes(mail.to));
     const batchEvents = async (batchId: number, type: string): Promise<number> =>
         Number((await db.query(`SELECT COUNT(*) AS n FROM route_batch_events WHERE route_batch_id = $1 AND event_type = $2`, [batchId, type]))[0].n);
-    const dispatchEvents = async (dispatchId: number, type: string): Promise<number> =>
-        Number((await db.query(`SELECT COUNT(*) AS n FROM dispatch_events WHERE dispatch_id = $1 AND event_type = $2`, [dispatchId, type]))[0].n);
+    /** Reservations of a customer email (`notice_reserved`) of an order, in any batch. */
+    const reserved = async (dispatchId: number, template: string): Promise<number> =>
+        Number((await db.query(
+            `SELECT COUNT(*) AS n FROM dispatch_events WHERE dispatch_id = $1 AND event_type = 'notice_reserved' AND metadata->>'template' = $2`, [dispatchId, template],
+        ))[0].n);
+    /** Results (`notice_result`) of one kind recorded for a customer email of an order. */
+    const results = async (dispatchId: number, template: string, result: string): Promise<number> =>
+        Number((await db.query(
+            `SELECT COUNT(*) AS n FROM dispatch_events WHERE dispatch_id = $1 AND event_type = 'notice_result' AND metadata->>'template' = $2 AND metadata->>'result' = $3`, [dispatchId, template, result],
+        ))[0].n);
 
     describe('final_review_end_time (16:00 of D-1)', () => {
         it('alerts once about a batch still pending, not about a confirmed one, and never approves', async () => {
@@ -169,7 +177,7 @@ describe('Final review timeline (e2e, ST-51.4)', () => {
             expect(mailsTo(confirmed.emails)).toEqual([{ to: confirmed.emails[0], template: 'reminder' }]);
             expect(mailsTo(pending.emails)).toHaveLength(0);
             expect(mailsTo(remnant.emails)).toHaveLength(0);
-            expect(await dispatchEvents(confirmed.dispatchIds[0], 'route_reminder_sent')).toBe(1);
+            expect(await reserved(confirmed.dispatchIds[0], 'reminder')).toBe(1);
         });
     });
 
@@ -256,10 +264,10 @@ describe('Final review timeline (e2e, ST-51.4)', () => {
             const batch = await makeBatch('confirmed', [{ status: 'assigned' }]);
 
             const results = await Promise.all(Array.from({ length: 20 }, () =>
-                repository.inBatchLock(batch.id, (scope) => scope.claimDispatchEvent(batch.dispatchIds[0], 'route_reminder_sent', 'race', {}))));
+                repository.inBatchLock(batch.id, (scope) => scope.reserveNotice(batch.dispatchIds[0], 'reminder', 'race'))));
 
             expect(results.filter(Boolean)).toHaveLength(1);
-            expect(await dispatchEvents(batch.dispatchIds[0], 'route_reminder_sent')).toBe(1);
+            expect(await reserved(batch.dispatchIds[0], 'reminder')).toBe(1);
         });
 
         it('the lock is held until the transaction ends: a second caller waits for the first', async () => {
@@ -298,7 +306,7 @@ describe('Final review timeline (e2e, ST-51.4)', () => {
             await reminder.run(context(REMINDER));
 
             expect(mailsTo(first.emails).map((mail) => mail.template)).toEqual(['reminder', 'reminder']);
-            expect(await dispatchEvents(first.dispatchIds[0], 'route_reminder_sent')).toBe(2);
+            expect(await reserved(first.dispatchIds[0], 'reminder')).toBe(2);
         });
     });
 
@@ -321,14 +329,14 @@ describe('Final review timeline (e2e, ST-51.4)', () => {
                 `SELECT 1 FROM route_batch_events WHERE route_batch_id = $1 AND event_type = 'contact_management_required'`, [batch.id],
             );
             expect(events).toHaveLength(1);
-            expect(await dispatchEvents(batch.dispatchIds[0], 'route_reminder_sent')).toBe(0);
+            expect(await reserved(batch.dispatchIds[0], 'reminder')).toBe(0);
         });
 
         it('a bounced risk notice is recorded as NOT delivered: a late approval then sends the reminder, not «se mantiene»', async () => {
             const batch = await makeBatch('pending_final_review', [{ status: 'scheduled', contact: 'bounce' }]);
 
             await escalation.run(context(ESCALATION));
-            expect(await dispatchEvents(batch.dispatchIds[0], 'risk_notice_failed')).toBe(1);
+            expect(await results(batch.dispatchIds[0], 'risk-notice', 'bounced')).toBe(1);
             const followUps = await db.query(
                 `SELECT 1 FROM route_batch_events WHERE route_batch_id = $1 AND event_type = 'contact_management_required'`, [batch.id],
             );
@@ -389,8 +397,8 @@ describe('Final review timeline (e2e, ST-51.4)', () => {
             await reminder.run(context(new Date('2031-03-12T20:30:00Z')));
 
             expect(mailsTo(batch.emails).map((mail) => mail.template)).toEqual(['risk-notice', 'delivery-maintained']);
-            expect(await dispatchEvents(batch.dispatchIds[0], 'delivery_maintained_sent')).toBe(1);
-            expect(await dispatchEvents(batch.dispatchIds[0], 'route_reminder_sent')).toBe(0);
+            expect(await reserved(batch.dispatchIds[0], 'delivery-maintained')).toBe(1);
+            expect(await reserved(batch.dispatchIds[0], 'reminder')).toBe(0);
         });
     });
 });

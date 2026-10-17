@@ -12,7 +12,6 @@ import {
 import {
     COORDINATOR_TASK_REQUIRED_EVENT,
     FINAL_REVIEW_ESCALATED_EVENT,
-    RISK_NOTICE_SENT_EVENT,
 } from '../final-review-events.js';
 import { CustomerNoticeService } from './customer-notice.service.js';
 import { FinalReviewRepository, type DispatchNoticeState } from './final-review.repository.js';
@@ -135,12 +134,12 @@ export class FinalReviewEscalationService {
                 }
 
                 let send: DispatchNoticeState | null = null;
-                if (!state.riskNoticeSent && !state.maintainedSent) {
+                if (state.risk === 'none' && state.maintained === 'none') {
                     if (!state.contactEmail) {
                         await scope.recordContactManagementOnce(dispatchId, 'risk-notice', 'Risk notice: the order has no email; coordinator must contact the customer', {
                             category: 'customer_contact', deliveryResult: 'no_contact',
                         });
-                    } else if (await scope.claimDispatchEvent(dispatchId, RISK_NOTICE_SENT_EVENT, 'Risk notice: email handed to the mail transport', { template: 'risk-notice' })) {
+                    } else if (await scope.reserveNotice(dispatchId, 'risk-notice', 'Risk notice: email handed to the mail transport')) {
                         send = state;
                     }
                 }

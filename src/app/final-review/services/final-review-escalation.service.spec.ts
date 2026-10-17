@@ -13,8 +13,8 @@ const EVENT = { kind: 'final_review_escalated', severity: 'exception', detail: {
 const batch = (routeBatchId: number, status = 'pending_final_review') => ({ routeBatchId, status, shiftDate: '2026-10-14', reviewerUserId: 3, dispatchCount: 2 });
 const state = (dispatchId: number, overrides: Partial<DispatchNoticeState> = {}): DispatchNoticeState => ({
     dispatchId, status: 'scheduled', contactEmail: `c${dispatchId}@example.com`, trackingToken: `tok-${dispatchId}`,
-    windowStart: null, windowEnd: null, promiseNotifiedAt: new Date(), reminderSent: false, riskNoticeSent: false,
-    maintainedSent: false, escalated: false, ...overrides,
+    windowStart: null, windowEnd: null, promiseNotifiedAt: new Date(), reminder: 'none', risk: 'none',
+    maintained: 'none', escalated: false, ...overrides,
 });
 
 interface Options {
@@ -39,8 +39,11 @@ function build(options: Options = {}) {
         dispatchState: vi.fn(async (id: number) => (options.states ?? {})[id] ?? null),
         claimDispatchEvent: vi.fn(async (_id: number, type: string) => {
             calls.push(`claim:${type}`);
-            if (type === 'risk_notice_sent') return riskClaims.length > 0 ? riskClaims.shift()! : true;
             return true;
+        }),
+        reserveNotice: vi.fn(async (_id: number, template: string) => {
+            calls.push('reserve:' + template);
+            return riskClaims.length > 0 ? riskClaims.shift()! : true;
         }),
         registerIncident: vi.fn(async () => { calls.push('incident'); return 'inc'; }),
         recordBatchEventOnce: vi.fn(async (type: string) => {
@@ -99,7 +102,7 @@ describe('FinalReviewEscalationService', () => {
 
         // order: the order's own transaction first (claims + incident + notice reservation), then the closing one.
         expect(calls).toEqual([
-            'claim:final_review_escalated', 'incident', 'claim:risk_notice_sent', 'commit',
+            'claim:final_review_escalated', 'incident', 'reserve:risk-notice', 'commit',
             'batch:final_review_escalated', 'batch:coordinator_task_required', 'store', 'commit', 'announce',
         ]);
         expect((alerts.store.mock.calls[0] as unknown[])[2]).toBe(manager);
@@ -161,7 +164,7 @@ describe('FinalReviewEscalationService', () => {
 
     it('does not register a second incident for an order already escalated, nor repeat its notice', async () => {
         const { service, notices, scopes } = build({
-            batches: [batch(11)], ids: { 11: [1] }, states: { 1: state(1, { escalated: true, riskNoticeSent: true }) },
+            batches: [batch(11)], ids: { 11: [1] }, states: { 1: state(1, { escalated: true, risk: 'in_flight' }) },
         });
 
         await service.run(AT_ESCALATION);
@@ -172,7 +175,7 @@ describe('FinalReviewEscalationService', () => {
     });
 
     it('does not warn an order whose «tu entrega se mantiene» already went out', async () => {
-        const { service, notices } = build({ batches: [batch(11)], ids: { 11: [1] }, states: { 1: state(1, { maintainedSent: true }) } });
+        const { service, notices } = build({ batches: [batch(11)], ids: { 11: [1] }, states: { 1: state(1, { maintained: 'sent' }) } });
 
         await service.run(AT_ESCALATION);
 
@@ -199,7 +202,7 @@ describe('FinalReviewEscalationService', () => {
     });
 
     it('a second run does not escalate the batch again: no new alert, no new task', async () => {
-        const { service, alerts, calls } = build({ batches: [batch(11)], ids: { 11: [1] }, states: { 1: state(1, { escalated: true, riskNoticeSent: true }) }, batchEvents: [false] });
+        const { service, alerts, calls } = build({ batches: [batch(11)], ids: { 11: [1] }, states: { 1: state(1, { escalated: true, risk: 'in_flight' }) }, batchEvents: [false] });
 
         const summary = await service.run(AT_ESCALATION);
 
@@ -233,7 +236,7 @@ describe('FinalReviewEscalationService', () => {
             return built;
         })();
 
-        expect(calls.filter((call) => !call.startsWith('claim:') && !call.startsWith('batch:') && !['incident', 'store', 'commit', 'announce'].includes(call))).toEqual([]);
+        expect(calls.filter((call) => !call.startsWith('claim:') && !call.startsWith('reserve:') && !call.startsWith('batch:') && !['incident', 'store', 'commit', 'announce'].includes(call))).toEqual([]);
     });
 
     it('does nothing on a day the company does not operate', async () => {

@@ -3,13 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import { MailerPort } from '../../../plugins/mailer/mailer.port.js';
 import { customerNoticeAction, type FinalReviewSettings } from '../domain/final-review-timeline.js';
 import { formatNoticeDate, formatNoticeWindow } from '../domain/notice-format.js';
-import {
-    DELIVERY_MAINTAINED_SENT_EVENT,
-    RISK_NOTICE_FAILED_EVENT,
-    RISK_NOTICE_SENT_EVENT,
-    ROUTE_REMINDER_SENT_EVENT,
-} from '../final-review-events.js';
-import { FinalReviewRepository, type DispatchNoticeState } from './final-review.repository.js';
+import type { NoticeResult } from '../final-review-events.js';
+import { FinalReviewRepository, type DispatchNoticeState, type NoticeTemplate } from './final-review.repository.js';
 
 export interface CustomerNoticeSummary {
     reminders: number;
@@ -18,6 +13,8 @@ export interface CustomerNoticeSummary {
     skipped: number;
     /** Before `route_reminder_time`: the 16:30 task will send it. */
     waiting: number;
+    /** The risk notice is still being sent: whoever records its result decides again. */
+    deferred: number;
     /** The mail transport bounced or failed; a coordinator follow-up was opened. */
     failed: number;
     /** Orders whose database step failed; the rest of the batch went on. */
@@ -26,25 +23,30 @@ export interface CustomerNoticeSummary {
 
 export type NoticeAction = 'send-reminder' | 'send-delivery-maintained' | 'send-risk-notice';
 
-export const NOTICE_TEMPLATES: Record<NoticeAction, { template: string; subject: string; event: string }> = {
-    'send-reminder': { template: 'reminder', subject: 'Recordatorio de tu entrega', event: ROUTE_REMINDER_SENT_EVENT },
-    'send-delivery-maintained': { template: 'delivery-maintained', subject: 'Tu entrega se mantiene', event: DELIVERY_MAINTAINED_SENT_EVENT },
-    'send-risk-notice': { template: 'risk-notice', subject: 'Estamos gestionando tu entrega', event: RISK_NOTICE_SENT_EVENT },
+export const NOTICE_TEMPLATES: Record<NoticeAction, { template: NoticeTemplate; subject: string }> = {
+    'send-reminder': { template: 'reminder', subject: 'Recordatorio de tu entrega' },
+    'send-delivery-maintained': { template: 'delivery-maintained', subject: 'Tu entrega se mantiene' },
+    'send-risk-notice': { template: 'risk-notice', subject: 'Estamos gestionando tu entrega' },
 };
 
-type Claim = { kind: 'none' | 'wait' | 'skipped' } | { kind: 'send'; action: NoticeAction; state: DispatchNoticeState };
+type Claim =
+    | { kind: 'none' | 'wait' | 'deferred' | 'skipped' }
+    | { kind: 'send'; action: NoticeAction; state: DispatchNoticeState };
 
-export const emptyNoticeSummary = (): CustomerNoticeSummary => ({ reminders: 0, maintained: 0, skipped: 0, waiting: 0, failed: 0, errors: 0 });
+export const emptyNoticeSummary = (): CustomerNoticeSummary =>
+    ({ reminders: 0, maintained: 0, skipped: 0, waiting: 0, deferred: 0, failed: 0, errors: 0 });
 
 /**
  * The emails the customers of a `confirmed` batch are owed (ST-51.4, D-46): the normal reminder or, when
- * a risk notice already went out, «tu entrega se mantiene». One rule for the 16:30 task and for the late
- * approval (`customerNoticeAction`), so each customer gets each email once per batch.
+ * the customer really got the risk notice, «tu entrega se mantiene». One rule for the 16:30 task, the late
+ * approval and the reconciliation task (`customerNoticeAction`), so each customer gets each email once per batch.
  *
- * Deciding and reserving happen together, under the lock of the batch (`inBatchLock`): the state is read
- * and the event is written while nobody can approve or escalate it, so the task and a late approval in the
- * same minute cannot both send. The email goes out after the lock is released. A bounce or failure is not
- * retried: it opens a coordinator follow-up (`contact_management_required`).
+ * Every email has two moments. Deciding and **reserving** happen together under the lock of the batch
+ * (`inBatchLock`): nobody can approve or escalate meanwhile, and a second caller sees the reservation and
+ * does not send. The email goes out after the lock is released, and **its result is recorded** afterwards, so
+ * a reservation is "in flight" until then. A risk notice in flight is not decided around (`deferred`): the
+ * result decides whether the customer is owed «se mantiene» (it arrived) or the reminder (it did not).
+ * A bounce or failure is never retried: it opens a coordinator follow-up (`contact_management_required`).
  */
 @Injectable()
 export class CustomerNoticeService {
@@ -65,6 +67,7 @@ export class CustomerNoticeService {
             try {
                 const claim = await this.claimDue(routeBatchId, dispatchId, shiftDate, now, settings);
                 if (claim.kind === 'wait') summary.waiting += 1;
+                else if (claim.kind === 'deferred') summary.deferred += 1;
                 else if (claim.kind === 'skipped') summary.skipped += 1;
                 else if (claim.kind === 'send') {
                     const outcome = await this.deliver(routeBatchId, claim.state, claim.action);
@@ -87,35 +90,34 @@ export class CustomerNoticeService {
             if (!state || state.status !== 'assigned') return { kind: 'none' };
 
             const decision = customerNoticeAction(now, shiftDate, settings, {
-                reminderSent: state.reminderSent,
-                riskNoticeSent: state.riskNoticeSent,
-                maintainedSent: state.maintainedSent,
+                reminder: state.reminder, risk: state.risk, maintained: state.maintained,
             });
             if (decision === 'wait') return { kind: 'wait' };
+            if (decision === 'defer') return { kind: 'deferred' };
             if (decision === 'none') return { kind: 'none' };
 
             const action: NoticeAction = decision;
-            const { template, subject, event } = NOTICE_TEMPLATES[action];
+            const { template, subject } = NOTICE_TEMPLATES[action];
             if (!state.contactEmail || !state.trackingToken) {
                 await scope.recordContactManagementOnce(dispatchId, template, `${subject}: the order has no email or tracking link; coordinator must contact the customer`, {
                     category: 'customer_contact', deliveryResult: 'no_contact',
                 });
                 return { kind: 'skipped' };
             }
-            const claimed = await scope.claimDispatchEvent(dispatchId, event, `${subject}: email handed to the mail transport`, { template });
-            return claimed ? { kind: 'send', action, state } : { kind: 'none' };
+            const reserved = await scope.reserveNotice(dispatchId, template, `${subject}: email handed to the mail transport`);
+            return reserved ? { kind: 'send', action, state } : { kind: 'none' };
         });
         return claim ?? { kind: 'none' };
     }
 
     /**
-     * Sends an email whose event was already reserved. On a bounce or failure it opens the coordinator
-     * follow-up (and, for the risk notice, records that the customer was not warned); that bookkeeping
-     * never throws, so one bad order cannot stop the rest.
+     * Sends an email that was already reserved and records its result: `sent`, or `bounced` / `failed` plus the
+     * coordinator follow-up. The bookkeeping never throws, so one bad order cannot stop the rest: if the
+     * result cannot be written the reservation simply runs out its lease and counts as failed.
      */
     async deliver(routeBatchId: number, state: DispatchNoticeState, action: NoticeAction): Promise<'sent' | 'failed'> {
         const { template, subject } = NOTICE_TEMPLATES[action];
-        let result: 'sent' | 'bounced' | 'failed' = 'failed';
+        let result: NoticeResult = 'failed';
         try {
             const delivery = await this.mailer.send({
                 to: state.contactEmail!,
@@ -132,17 +134,15 @@ export class CustomerNoticeService {
         } catch (error) {
             this.logger.warn(`Email "${template}" for dispatch ${state.dispatchId} failed: ${error instanceof Error ? error.message : String(error)}`);
         }
-        if (result === 'sent') return 'sent';
 
         try {
-            await this.repository.recordSendFailure(
+            await this.repository.recordNoticeResult(
                 routeBatchId, state.dispatchId, template, result,
-                `${subject}: email ${result}; coordinator must contact the customer`,
-                action === 'send-risk-notice' ? RISK_NOTICE_FAILED_EVENT : undefined,
+                result === 'sent' ? `${subject}: accepted by the mail transport` : `${subject}: email ${result}; coordinator must contact the customer`,
             );
         } catch (error) {
             this.logger.error(`Could not record the ${result} "${template}" of dispatch ${state.dispatchId}: ${error instanceof Error ? error.message : String(error)}`);
         }
-        return 'failed';
+        return result === 'sent' ? 'sent' : 'failed';
     }
 }

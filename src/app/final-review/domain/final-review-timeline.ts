@@ -136,23 +136,36 @@ export function escalationInstant(shiftDate: string, settings: FinalReviewSettin
     return localInstant(shiftDate, settings.finalReviewEscalationTime);
 }
 
+/**
+ * Where one customer email stands for one order and batch:
+ * - `none`: never reserved;
+ * - `in_flight`: reserved, no result yet, and the lease has not run out (it may still be delivered);
+ * - `sent`: the transport accepted it;
+ * - `failed`: it bounced, failed or was abandoned (the reservation outlived its lease). Never retried.
+ */
+export type NoticeStatus = 'none' | 'in_flight' | 'sent' | 'failed';
+
 export interface CustomerNoticeState {
-    /** The normal reminder already went out for this dispatch. */
-    reminderSent: boolean;
-    /** The risk notice already went out (the batch was escalated as case 5.2). */
-    riskNoticeSent: boolean;
-    /** «Tu entrega se mantiene» already went out. */
-    maintainedSent: boolean;
+    /** The normal reminder. */
+    reminder: NoticeStatus;
+    /** The risk notice of the escalation (case 5.2). */
+    risk: NoticeStatus;
+    /** «Tu entrega se mantiene». */
+    maintained: NoticeStatus;
 }
 
-export type CustomerNoticeAction = 'send-reminder' | 'send-delivery-maintained' | 'wait' | 'none';
+export type CustomerNoticeAction = 'send-reminder' | 'send-delivery-maintained' | 'wait' | 'defer' | 'none';
 
 /**
- * What a customer of a `confirmed` batch is owed at `now`. One rule serves the 16:30 task and the
- * late approval, so the reminder goes out exactly once and never twice:
- * - a risk notice is outstanding → «tu entrega se mantiene» (late approval after the risk notice);
- * - otherwise, from `route_reminder_time` on → the normal reminder (also when the batch is approved after 16:30);
+ * What a customer of a `confirmed` batch is owed at `now`. One rule serves the 16:30 task, the late
+ * approval and the reconciliation task, so each email is reserved exactly once:
+ * - «tu entrega se mantiene» is only owed to a customer who really got the risk notice (`sent`);
+ * - a risk notice still in flight is not decided yet (`defer`): if it bounces the customer is owed the normal
+ *   reminder instead, and saying «se mantiene» now would be wrong; whoever records the result decides again;
+ * - otherwise, from `route_reminder_time` on → the normal reminder (also when the batch is approved after
+ *   16:30, and also when the risk notice failed or was abandoned);
  * - before that hour → `wait`: the 16:30 task will send it.
+ * An email already reserved, in any state, is never reserved again.
  */
 export function customerNoticeAction(
     now: Date,
@@ -160,8 +173,9 @@ export function customerNoticeAction(
     settings: FinalReviewSettings,
     state: CustomerNoticeState,
 ): CustomerNoticeAction {
-    if (state.maintainedSent) return 'none';
-    if (state.riskNoticeSent) return 'send-delivery-maintained';
-    if (state.reminderSent) return 'none';
+    if (state.maintained !== 'none') return 'none';
+    if (state.risk === 'in_flight') return 'defer';
+    if (state.risk === 'sent') return 'send-delivery-maintained';
+    if (state.reminder !== 'none') return 'none';
     return now.getTime() >= reminderInstant(shiftDate, settings).getTime() ? 'send-reminder' : 'wait';
 }
