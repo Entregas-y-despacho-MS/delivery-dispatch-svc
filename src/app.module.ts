@@ -40,6 +40,7 @@ import { SchedulerModule } from './app/scheduler/scheduler.module.js';
 import { PlanningModule } from './app/planning/planning.module.js';
 import { PromiseFirmingModule } from './app/promise-firming/promise-firming.module.js';
 import { FinalReviewModule } from './app/final-review/final-review.module.js';
+import { RouteBatchCorrectionModule } from './app/route-batch-correction/route-batch-correction.module.js';
 import { RouteCutoffModule } from './app/route-cutoff/route-cutoff.module.js';
 
 @Module({
@@ -62,6 +63,7 @@ import { RouteCutoffModule } from './app/route-cutoff/route-cutoff.module.js';
     PlanningModule,
     PromiseFirmingModule,
     RouteCutoffModule,
+    RouteBatchCorrectionModule,
     FinalReviewModule,
     UsersModule,
     RolesModule,
