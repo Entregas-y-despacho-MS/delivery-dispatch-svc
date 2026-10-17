@@ -222,4 +222,91 @@ describe('Procurement pickup messaging integration', () => {
     expect(pickups.records).toHaveLength(1);
   });
 });
+
+const SCHEDULE_NOW = new Date('2026-10-19T00:00:00Z');
+
+function scheduleCircuit() {
+  const log = new MemoryInboundMessageLogAdapter();
+  const validator = MessageValidator.fromDirectory(CONTRACTS_DIR);
+  const bus = new MemoryMessageBusAdapter(validator, log);
+  const savedEvents: Array<Record<string, unknown>> = [];
+  const row: Record<string, unknown> = {
+    dispatch_id: 7,
+    type: 'supplier_pickup',
+    status: 'pending',
+    source_order_ref: ORDER_ID,
+    delivery_address: 'Av. Industrial 123',
+    destination_warehouse_id: 1,
+    warehouse_id: 1,
+    scheduled_window_start: new Date('2026-10-20T13:00:00Z'),
+    scheduled_window_end: new Date('2026-10-20T20:00:00Z'),
+    estimated_weight_kg: '400.00',
+    estimated_volume_m3: '3.000',
+    tracking_code: null,
+    reception_start_time: '08:00:00',
+    reception_end_time: '12:00:00',
+  };
+  const manager = {
+    query: vi.fn(async (sql: string, params: unknown[]) => {
+      if (sql.includes('FOR UPDATE OF d')) return [{ ...row }];
+      if (sql.includes('FROM vehicles')) return [{ capacity_kg: '1000', capacity_m3: '8' }];
+      if (sql.includes('FROM dispatch_events')) {
+        return savedEvents
+          .filter((event) => ['pickup_scheduled', 'pickup_rescheduled'].includes(String(event.eventType)))
+          .map((event) => ({ version: String((event.metadata as Record<string, unknown>).recordVersion) }));
+      }
+      if (sql.includes('INSERT INTO dispatch_events')) {
+        savedEvents.push({ eventType: params[1], metadata: JSON.parse(params[5] as string) });
+        return [];
+      }
+      if (sql.includes('FROM incident_reasons')) return [{ code: 'INC-COMP-FAILURE' }];
+      if (sql.includes('FROM reschedule_reasons')) return [{ code: 'RES-OPS-SUPPLIER' }];
+      if (sql.includes('INSERT INTO dispatch_incidents') || sql.includes('INSERT INTO dispatch_reschedules')) return [];
+      if (sql.includes('UPDATE dispatches')) {
+        if (typeof params[0] === 'string') {
+          row.status = params[0];
+          row.scheduled_window_start = params[1];
+          row.scheduled_window_end = params[2];
+        } else {
+          row.scheduled_window_start = params[0];
+          row.scheduled_window_end = params[1];
+        }
+        row.tracking_code = 'DSP-2026-00051';
+        return [{ tracking_code: 'DSP-2026-00051' }];
+      }
+      throw new Error(`Unexpected scheduling query: ${sql}`);
+    }),
+  };
+  const dataSource = { transaction: async (callback: (manager: unknown) => unknown) => await callback(manager) };
+  const settings = {
+    getString: vi.fn(async (_key: string, fallback: string) => fallback),
+    getNumber: vi.fn(async () => 2),
+  };
+  const outbox = {
+    enqueue: vi.fn(async (envelope: MessageEnvelope) => {
+      expect(validator.validate(envelope.type, envelope)).toEqual({ valid: true });
+      await bus.publish(envelope.type, envelope);
+      return true;
+    }),
+  };
+  const service = new PickupSchedulingService(dataSource as never, settings as never, outbox as never);
+  return { service, bus, outbox, savedEvents, manager, row };
+}
+
+describe('supplier pickup scheduling message integration', () => {
+  it('publishes the scheduled pickup over the validated memory bus', async () => {
+    const { service, bus, outbox } = scheduleCircuit();
+
+    const result = await service.schedule(7, { vehicleId: 3 }, 9, SCHEDULE_NOW);
+
+    expect(result.recordVersion).toBe(1);
+    expect(outbox.enqueue).toHaveBeenCalledOnce();
+    expect(bus.publishedTo('dispatch.pickup.scheduled')[0]).toMatchObject({
+      type: 'dispatch.pickup.scheduled',
+      source: 'dispatch',
+      data: { purchaseOrderId: ORDER_ID, recordVersion: 1 },
+    });
+  });
+
+
 });
