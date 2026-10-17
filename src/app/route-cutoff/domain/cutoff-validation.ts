@@ -34,7 +34,9 @@ export type CutoffFailureCode =
     | 'driver_inactive'
     | 'driver_conflict'
     | 'slot_not_met'
-    | 'reoptimization_incomplete';
+    | 'reoptimization_incomplete'
+    /** The batch cannot be simulated at all: no dispatches, no origin warehouse, or stops without a sequence or a point on the map. */
+    | 'batch_not_validatable';
 
 export type CutoffWarningCode = 'driver_missing';
 

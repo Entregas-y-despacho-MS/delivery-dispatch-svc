@@ -4,6 +4,7 @@ import { localInstant } from '../../planning/domain/operating-calendar.js';
 import { RAW_SETTINGS, vehicle, WAREHOUSE } from '../../planning/domain/plan-fixtures.helper-spec.js';
 import { OsrmUnavailableException } from '../../../plugins/osrm/exceptions/index.js';
 import { batch, NOTIFIED_TODAY, SHIFT_DATE, stop } from '../domain/cutoff-fixtures.helper-spec.js';
+import { CutoffMatricesService } from './cutoff-matrices.service.js';
 import { RouteCutoffService } from './route-cutoff.service.js';
 
 // 2026-10-13 is a Tuesday: its next operating day is Wednesday 2026-10-14 (SHIFT_DATE).
@@ -42,7 +43,7 @@ function build(over: { settings?: Record<string, string>; batches?: ReturnType<t
     };
     const alerts = { raise: vi.fn(async () => undefined) };
     const service = new RouteCutoffService(
-        settings as any, batches as any, candidates as any, osrm as any, writer as any, alerts as any,
+        settings as any, batches as any, candidates as any, osrm as any, new CutoffMatricesService(osrm as any), writer as any, alerts as any,
     );
     return { service, batches, osrm, writer, alerts };
 }

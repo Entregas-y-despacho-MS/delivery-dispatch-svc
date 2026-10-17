@@ -6,9 +6,9 @@ import { RouteBatchesController } from './controllers/route-batches.controller.j
 import { RouteBatchReviewerListener } from './services/route-batch-reviewer.listener.js';
 import { RouteBatchReviewerService } from './services/route-batch-reviewer.service.js';
 import { RouteCapacityService } from './services/route-capacity.service.js';
-import { RouteBatchVehicleService } from './services/route-batch-vehicle.service.js';
 import { RouteBatchPromiseApprovalService } from './services/route-batch-promise-approval.service.js';
 import { RouteBatchFinalApprovalService } from './services/route-batch-final-approval.service.js';
+import { RouteBatchResourcesService } from './services/route-batch-resources.service.js';
 import { RouteBatchQueryService } from './services/route-batch-query.service.js';
 
 // Reviewer assignment (ST-50.4, D-42). The batch planner (ST-50.2) calls RouteBatchReviewerService.assignReviewer.
@@ -19,11 +19,11 @@ import { RouteBatchQueryService } from './services/route-batch-query.service.js'
     RouteBatchReviewerService,
     RouteBatchReviewerListener,
     RouteCapacityService,
-    RouteBatchVehicleService,
     RouteBatchPromiseApprovalService,
     RouteBatchFinalApprovalService,
+    RouteBatchResourcesService,
     RouteBatchQueryService,
   ],
-  exports: [RouteBatchReviewerService],
+  exports: [RouteBatchReviewerService, RouteCapacityService, RouteBatchResourcesService],
 })
 export class RouteBatchesModule {}

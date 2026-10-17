@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { SettingsService } from '../../../modules/settings/services/settings.service.js';
-import { OsrmPort, type Coordinate } from '../../../plugins/osrm/osrm.port.js';
+import { OsrmPort } from '../../../plugins/osrm/osrm.port.js';
 import { PlanningSettingsMissingException } from '../../planning/exceptions/index.js';
 import { localDate, nextOperatingDay, previousOperatingDay } from '../../planning/domain/operating-calendar.js';
 import { loadPlanningSettings } from '../../planning/domain/planning-settings.js';
@@ -11,10 +11,10 @@ import type { ScheduledTaskContext } from '../../scheduler/ports/scheduled-task.
 import { buildSimParams } from '../domain/cutoff-sim-params.js';
 import { splitPlanByGroup } from '../domain/cutoff-groups.js';
 import { reoptimizeCutoff } from '../domain/cutoff-reoptimization.js';
-import type { CutoffBatch, CutoffInput, CutoffStop } from '../domain/cutoff-types.js';
-import type { TravelSeconds } from '../../planning/domain/route-simulation.js';
+import type { CutoffStop } from '../domain/cutoff-types.js';
 import type { RouteCutoffSummaryDto } from '../dto/route-cutoff-summary.dto.js';
 import { CutoffBatchesRepository } from './cutoff-batches.repository.js';
+import { CutoffMatricesService } from './cutoff-matrices.service.js';
 import { RouteCutoffWriterService } from './route-cutoff-writer.service.js';
 
 /**
@@ -33,6 +33,7 @@ export class RouteCutoffService {
         private readonly batches: CutoffBatchesRepository,
         private readonly candidates: PlanCandidatesRepository,
         private readonly osrm: OsrmPort,
+        private readonly matrices: CutoffMatricesService,
         private readonly writer: RouteCutoffWriterService,
         private readonly alerts: PlanningAlertsService,
     ) {}
@@ -82,12 +83,7 @@ export class RouteCutoffService {
         ]);
 
         // Every matrix is asked for before anything is written: if OSRM is down, nothing changed.
-        const matrices = await this.loadMatrices(read.batches, warehouses);
-        const travelFor: CutoffInput['travelFor'] = (warehouseId, zoneId) => {
-            const matrix = matrices.get(`${warehouseId}|${zoneId}`);
-            if (!matrix) throw new Error(`No time matrix for warehouse ${warehouseId} and zone ${zoneId}.`);
-            return matrix;
-        };
+        const travelFor = this.matrices.travelFor(await this.matrices.load(read.batches, warehouses));
 
         const plan = reoptimizeCutoff({
             now,
@@ -178,37 +174,6 @@ export class RouteCutoffService {
                 this.logger.warn(`Cutoff of group ${group.key} was a deadlock victim; attempt ${attempt + 1} of ${MAX_GROUP_ATTEMPTS}.`);
             }
         }
-    }
-
-    private async loadMatrices(
-        batches: CutoffBatch[],
-        warehouses: Array<{ warehouseId: number; latitude: number; longitude: number }>,
-    ): Promise<Map<string, TravelSeconds>> {
-        const depots = new Map(warehouses.map((warehouse) => [warehouse.warehouseId, warehouse]));
-        const members = new Map<string, Map<number, Coordinate>>();
-        const depotOf = new Map<string, number>();
-        for (const batch of batches) {
-            const key = `${batch.warehouseId}|${batch.zoneId}`;
-            depotOf.set(key, batch.warehouseId);
-            if (!members.has(key)) members.set(key, new Map());
-            for (const stop of batch.stops) {
-                members.get(key)!.set(stop.dispatch.dispatchId, { lat: stop.dispatch.latitude, lon: stop.dispatch.longitude });
-            }
-        }
-
-        const matrices = new Map<string, TravelSeconds>();
-        for (const [key, stops] of members) {
-            const depot = depots.get(depotOf.get(key)!);
-            if (!depot) throw new Error(`Warehouse ${depotOf.get(key)} is not available for planning.`);
-            const ids = [...stops.keys()];
-            const { durations } = await this.osrm.getDurationMatrix([
-                { lat: depot.latitude, lon: depot.longitude },
-                ...ids.map((id) => stops.get(id)!),
-            ]);
-            const indexOf = new Map(ids.map((id, i) => [id, i + 1]));
-            matrices.set(key, (from, to) => durations[from === null ? 0 : indexOf.get(from)!][indexOf.get(to)!]);
-        }
-        return matrices;
     }
 }
 

@@ -12,7 +12,7 @@ interface StopRow {
     zone_code: string;
     zone_name: string;
     zone_deleted: boolean;
-    origin_warehouse_id: number;
+    origin_warehouse_id: number | null;
     vehicle_id: number | null;
     proposed_driver_id: number | null;
     reviewer_user_id: number | null;
@@ -46,6 +46,15 @@ export interface CutoffBatchesRead {
     skippedBatchIds: number[];
 }
 
+/** One batch read for the validation that follows a correction (ST-51.6). */
+export interface SingleBatchRead {
+    batch: CutoffBatch;
+    /** Dispatches of the batch the simulation cannot place (no sequence or no point on the map). */
+    incompleteDispatchIds: number[];
+    /** `false` when the batch has no origin warehouse, so there is no depot to route from. */
+    hasWarehouse: boolean;
+}
+
 /** What the cutoff reads before it decides anything. Read-only: nothing here writes. */
 @Injectable()
 export class CutoffBatchesRepository {
@@ -53,7 +62,46 @@ export class CutoffBatchesRepository {
 
     /** The `provisional` batches of `shiftDate` with their stops in visiting order. */
     async findProvisionalBatches(shiftDate: string): Promise<CutoffBatchesRead> {
-        const rows: StopRow[] = await this.dataSource.query(
+        const rows = await this.readRows(
+            `b.status = 'provisional' AND b.shift_date = $1::date AND b.origin_warehouse_id IS NOT NULL`,
+            [shiftDate],
+        );
+        if (rows.length === 0) return { batches: [], skippedBatchIds: [] };
+
+        const batches: CutoffBatch[] = [];
+        const skippedBatchIds: number[] = [];
+        for (const { batch, incompleteDispatchIds } of await this.assemble(rows)) {
+            if (incompleteDispatchIds.length === 0 && batch.stops.length > 0) batches.push(batch);
+            else skippedBatchIds.push(batch.routeBatchId);
+        }
+        return { batches, skippedBatchIds };
+    }
+
+    /**
+     * One batch in any status. Stops the simulation cannot use are listed apart instead of silently dropped.
+     * `null` when the batch does not exist or has no dispatches at all.
+     */
+    async findBatch(routeBatchId: number): Promise<SingleBatchRead | null> {
+        const rows = await this.readRows('b.route_batch_id = $1', [routeBatchId]);
+        if (rows.length === 0) return null;
+        const [{ batch, incompleteDispatchIds }] = await this.assemble(rows);
+        return { batch, incompleteDispatchIds, hasWarehouse: rows[0].origin_warehouse_id !== null };
+    }
+
+    /** Vehicles held on `shiftDate` by batches the cutoff is not processing (any status but `cancelled`). */
+    async findOccupiedVehicleIds(shiftDate: string, processedBatchIds: number[]): Promise<number[]> {
+        const rows: { vehicle_id: number }[] = await this.dataSource.query(
+            `SELECT DISTINCT vehicle_id
+               FROM route_batches
+              WHERE shift_date = $1::date AND status <> 'cancelled' AND vehicle_id IS NOT NULL
+                AND route_batch_id <> ALL($2::int[])`,
+            [shiftDate, processedBatchIds],
+        );
+        return rows.map((row) => row.vehicle_id);
+    }
+
+    private async readRows(where: string, params: unknown[]): Promise<StopRow[]> {
+        return await this.dataSource.query(
             `SELECT b.route_batch_id, b.version AS batch_version, b.shift_date::text AS shift_date,
                     b.delivery_zone_id, z.code AS zone_code, z.name AS zone_name,
                     (z.deleted_at IS NOT NULL) AS zone_deleted, b.origin_warehouse_id,
@@ -67,19 +115,19 @@ export class CutoffBatchesRepository {
                JOIN delivery_zones z ON z.delivery_zone_id = b.delivery_zone_id
                JOIN dispatches d ON d.route_batch_id = b.route_batch_id
                JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
-              WHERE b.status = 'provisional' AND b.shift_date = $1::date
-                AND b.origin_warehouse_id IS NOT NULL
+              WHERE ${where}
               ORDER BY b.route_batch_id, d.sequence_order, d.dispatch_id`,
-            [shiftDate],
+            params,
         );
-        if (rows.length === 0) return { batches: [], skippedBatchIds: [] };
+    }
 
+    private async assemble(rows: StopRow[]): Promise<Array<{ batch: CutoffBatch; incompleteDispatchIds: number[] }>> {
         const packages = await this.findPackages(rows.map((row) => row.dispatch_id));
-        const byBatch = new Map<number, { batch: CutoffBatch; complete: boolean }>();
+        const byBatch = new Map<number, { batch: CutoffBatch; incompleteDispatchIds: number[] }>();
         for (const row of rows) {
             if (!byBatch.has(row.route_batch_id)) {
                 byBatch.set(row.route_batch_id, {
-                    complete: true,
+                    incompleteDispatchIds: [],
                     batch: {
                         routeBatchId: row.route_batch_id,
                         version: row.batch_version,
@@ -87,7 +135,7 @@ export class CutoffBatchesRepository {
                         zoneId: row.delivery_zone_id,
                         zoneCode: row.zone_code,
                         zoneName: row.zone_name,
-                        warehouseId: row.origin_warehouse_id,
+                        warehouseId: row.origin_warehouse_id as number,
                         vehicleId: row.vehicle_id,
                         proposedDriverId: row.proposed_driver_id,
                         reviewerUserId: row.reviewer_user_id,
@@ -97,7 +145,7 @@ export class CutoffBatchesRepository {
             }
             const entry = byBatch.get(row.route_batch_id)!;
             if (row.sequence_order === null || row.delivery_latitude === null || row.delivery_longitude === null) {
-                entry.complete = false;
+                entry.incompleteDispatchIds.push(row.dispatch_id);
                 continue;
             }
             const dispatch: PlanDispatch = {
@@ -106,7 +154,7 @@ export class CutoffBatchesRepository {
                 zoneCode: row.zone_code,
                 zoneName: row.zone_name,
                 zoneDeleted: row.zone_deleted,
-                warehouseId: row.origin_warehouse_id,
+                warehouseId: row.origin_warehouse_id as number,
                 latitude: Number(row.delivery_latitude),
                 longitude: Number(row.delivery_longitude),
                 priority: row.priority,
@@ -129,26 +177,7 @@ export class CutoffBatchesRepository {
             };
             entry.batch.stops.push(stop);
         }
-
-        const batches: CutoffBatch[] = [];
-        const skippedBatchIds: number[] = [];
-        for (const { batch, complete } of byBatch.values()) {
-            if (complete && batch.stops.length > 0) batches.push(batch);
-            else skippedBatchIds.push(batch.routeBatchId);
-        }
-        return { batches, skippedBatchIds };
-    }
-
-    /** Vehicles held on `shiftDate` by batches the cutoff is not processing (any status but `cancelled`). */
-    async findOccupiedVehicleIds(shiftDate: string, processedBatchIds: number[]): Promise<number[]> {
-        const rows: { vehicle_id: number }[] = await this.dataSource.query(
-            `SELECT DISTINCT vehicle_id
-               FROM route_batches
-              WHERE shift_date = $1::date AND status <> 'cancelled' AND vehicle_id IS NOT NULL
-                AND route_batch_id <> ALL($2::int[])`,
-            [shiftDate, processedBatchIds],
-        );
-        return rows.map((row) => row.vehicle_id);
+        return [...byBatch.values()];
     }
 
     private async findPackages(dispatchIds: number[]): Promise<Map<number, PlanDispatch['packages']>> {

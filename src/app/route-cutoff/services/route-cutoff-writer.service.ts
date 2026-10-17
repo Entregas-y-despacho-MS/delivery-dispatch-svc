@@ -18,6 +18,7 @@ import {
     type CutoffWarningCode,
     type StopFacts,
 } from '../domain/cutoff-validation.js';
+import { findDriverFacts, findVehicleConflict } from './cutoff-facts.queries.js';
 
 export interface CutoffWriteContext {
     trigger: 'scheduled' | 'manual';
@@ -391,36 +392,14 @@ export class RouteCutoffWriterService {
             : context.fleet.find((candidate) => candidate.vehicleId === batchPlan.vehicleId) ?? null;
         const others = group.batchIds;
 
-        let vehicleConflictBatchId: number | null = null;
-        if (batchPlan.vehicleId !== null) {
-            const [row]: { route_batch_id: number }[] = await manager.query(
-                `SELECT route_batch_id FROM route_batches
-                  WHERE vehicle_id = $1 AND shift_date = $2::date AND status <> 'cancelled'
-                    AND route_batch_id <> ALL($3::int[])
-                  LIMIT 1`,
-                [batchPlan.vehicleId, batchPlan.shiftDate, others],
-            );
-            vehicleConflictBatchId = row?.route_batch_id ?? null;
-        }
-
-        let driverActive = true;
-        let driverConflictBatchId: number | null = null;
-        if (batchPlan.proposedDriverId !== null) {
-            const [driver]: { user_id: number }[] = await manager.query(
-                `SELECT u.user_id FROM users u JOIN roles r ON r.role_id = u.role_id
-                  WHERE u.user_id = $1 AND u.active = TRUE AND u.deleted_at IS NULL AND r.name = 'driver'`,
-                [batchPlan.proposedDriverId],
-            );
-            driverActive = driver !== undefined;
-            const [row]: { route_batch_id: number }[] = await manager.query(
-                `SELECT route_batch_id FROM route_batches
-                  WHERE (driver_id = $1 OR proposed_driver_id = $1) AND shift_date = $2::date
-                    AND status <> 'cancelled' AND route_batch_id <> ALL($3::int[])
-                  LIMIT 1`,
-                [batchPlan.proposedDriverId, batchPlan.shiftDate, others],
-            );
-            driverConflictBatchId = row?.route_batch_id ?? null;
-        }
+        const vehicleConflictBatchId = batchPlan.vehicleId === null
+            ? null
+            : await findVehicleConflict(manager, batchPlan.vehicleId, batchPlan.shiftDate, others);
+        const driver = batchPlan.proposedDriverId === null
+            ? { active: true, conflictBatchId: null }
+            : await findDriverFacts(manager, batchPlan.proposedDriverId, batchPlan.shiftDate, others);
+        const driverActive = driver.active;
+        const driverConflictBatchId = driver.conflictBatchId;
 
         return {
             routeBatchId: batchPlan.routeBatchId,

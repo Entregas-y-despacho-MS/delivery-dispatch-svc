@@ -8,9 +8,6 @@ import {
 import { RouteBatchReviewerService } from '../services/route-batch-reviewer.service.js';
 import { UpdateRouteBatchReviewerDto } from '../dto/update-route-batch-reviewer.dto.js';
 import { RouteBatchReviewerDto } from '../dto/route-batch-reviewer.dto.js';
-import { AssignRouteBatchVehicleDto } from '../dto/assign-route-batch-vehicle.dto.js';
-import { RouteBatchVehicleAssignmentDto } from '../dto/route-batch-vehicle-assignment.dto.js';
-import { RouteBatchVehicleService } from '../services/route-batch-vehicle.service.js';
 import { RouteBatchPromiseApprovalService } from '../services/route-batch-promise-approval.service.js';
 import { ApproveRouteBatchPromisesDto } from '../dto/approve-route-batch-promises.dto.js';
 import { ApproveRouteBatchPromisesResponseDto } from '../dto/approve-route-batch-promises-response.dto.js';
@@ -35,11 +32,17 @@ import {
 } from '../../../../shared/utils/swagger/index.js';
 
 /**
- * ST-50.1 — vehicle capacity validation; ST-50.4 — reviewer of a provisional route batch (D-42);
+ * ST-50.4 — reviewer of a provisional route batch (D-42);
  * ST-215.5 — list and detail of the batches for the review screens.
  *
  * Error dictionary: VALIDATION_FAILED 400 | INVALID_TOKEN 401 | INSUFFICIENT_PERMISSIONS 403 |
- * ROUTE_BATCH_NOT_FOUND 404 | ROUTE_BATCH_NOT_PROVISIONAL 409 | ROUTE_BATCH_REVIEWER_NOT_ELIGIBLE 409.
+ * ROUTE_BATCH_REVIEWER_MISMATCH 403 | ROUTE_BATCH_NOT_FOUND 404 | ROUTE_BATCH_NOT_PROVISIONAL 409 |
+ * ROUTE_BATCH_REVIEWER_NOT_ELIGIBLE 409 | ROUTE_BATCH_VERSION_CONFLICT 409 | DISPATCH_VERSION_CONFLICT 409 |
+ * ROUTE_BATCH_VEHICLE_REQUIRED 409 | ROUTE_BATCH_HAS_NO_APPROVALS 409 | ROUTE_CAPACITY_EXCEEDED 409 |
+ * ROUTE_BATCH_NOT_PENDING_FINAL_REVIEW 409 | ROUTE_BATCH_DRIVER_REQUIRED 409 | ROUTE_BATCH_DRIVER_NOT_AVAILABLE 409 |
+ * ROUTE_BATCH_VEHICLE_NOT_ACTIVE 409 | ROUTE_BATCH_RESOURCE_CONFLICT 409 | DISPATCH_NOT_READY_FOR_FINAL_APPROVAL 409 |
+ * DISPATCH_PACKAGES_REQUIRED 409 | DISPATCH_ORDER_IN_MULTIPLE_BATCHES 409.
+ * The driver and vehicle corrections (ST-50.1, ST-51.6) live in `app/route-batch-correction`.
  */
 @ApiTags('Route batches')
 @ApiBearerAuth('access-token')
@@ -47,7 +50,6 @@ import {
 export class RouteBatchesController {
   constructor(
     private readonly reviewerService: RouteBatchReviewerService,
-    private readonly vehicleService: RouteBatchVehicleService,
     private readonly promiseApprovalService: RouteBatchPromiseApprovalService,
     private readonly finalApprovalService: RouteBatchFinalApprovalService,
     private readonly queryService: RouteBatchQueryService,
@@ -107,7 +109,7 @@ export class RouteBatchesController {
     { code: 'DISPATCH_VERSION_CONFLICT', message: 'One or more dispatches changed. Reload the route batch.' },
     { code: 'ROUTE_BATCH_VEHICLE_REQUIRED', message: 'Assign a vehicle before approving promises.' },
     { code: 'ROUTE_BATCH_HAS_NO_APPROVALS', message: 'At least one dispatch must remain in the batch.' },
-    { code: 'ROUTE_CAPACITY_EXCEEDED', message: 'The route exceeds the selected vehicle capacity or package dimensions.' },
+    { code: 'ROUTE_CAPACITY_EXCEEDED', message: 'The route cannot be assigned to this vehicle because its cargo exceeds the vehicle capacity or package dimensions.' },
   )
   async approvePromises(
     @Param('id', ParseIdPipe) id: number,
@@ -139,7 +141,7 @@ export class RouteBatchesController {
     { code: 'ROUTE_BATCH_VEHICLE_REQUIRED', message: 'Assign a vehicle before final approval.' },
     { code: 'ROUTE_BATCH_VEHICLE_NOT_ACTIVE', message: 'The assigned vehicle must be active.' },
     { code: 'ROUTE_BATCH_RESOURCE_CONFLICT', message: 'The assigned vehicle is unavailable for this date.' },
-    { code: 'ROUTE_CAPACITY_EXCEEDED', message: 'The route exceeds vehicle capacity.' },
+    { code: 'ROUTE_CAPACITY_EXCEEDED', message: 'The route cannot be assigned to this vehicle because its cargo exceeds the vehicle capacity or package dimensions.' },
     { code: 'DISPATCH_NOT_READY_FOR_FINAL_APPROVAL', message: 'A dispatch has an incomplete destination, invalid promise window or unsupported pickup type.' },
     { code: 'DISPATCH_PACKAGES_REQUIRED', message: 'Every dispatch must have registered packages.' },
     { code: 'DISPATCH_ORDER_IN_MULTIPLE_BATCHES', message: 'An order already belongs to another active batch.' },
@@ -151,54 +153,6 @@ export class RouteBatchesController {
     @CurrentUser('id') actorUserId: number,
   ): Promise<ApproveFinalRouteBatchResponseDto> {
     return await this.finalApprovalService.approve(id, dto, actorUserId);
-  }
-
-  @Patch(':id/vehicle')
-  @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
-  @ApiOperation({
-    summary: 'Assign a vehicle after validating route capacity',
-    description:
-      'Assigns a vehicle to a provisional route batch only when total package weight and volume fit its capacity and every configured per-package dimension limit is met. Dispatches without package records use their estimated weight, marked as estimated in the returned report.',
-  })
-  @ApiIdParam('Route batch')
-  @ApiOkResponse({ type: RouteBatchVehicleAssignmentDto })
-  @ApiBadRequests({
-    validation: true,
-    id: true,
-    example: ['vehicleId must be an integer number.'],
-  })
-  @ApiUnauthorized({
-    code: 'INVALID_TOKEN',
-    message: 'Invalid or expired token.',
-  })
-  @ApiForbidden({
-    code: 'INSUFFICIENT_PERMISSIONS',
-    message: 'You do not have permission to perform this action.',
-  })
-  @ApiNotFound(
-    {
-      code: 'ROUTE_BATCH_NOT_FOUND',
-      message: 'Route batch not found.',
-    },
-    { code: 'VEHICLE_NOT_FOUND', message: 'Vehicle not found.' },
-  )
-  @ApiConflict(
-    {
-      code: 'ROUTE_BATCH_NOT_PROVISIONAL',
-      message:
-        'A vehicle can only be assigned while the route batch is provisional.',
-    },
-    {
-      code: 'ROUTE_CAPACITY_EXCEEDED',
-      message:
-        'The route exceeds the selected vehicle capacity or package dimensions.',
-    },
-  )
-  async assignVehicle(
-    @Param('id', ParseIdPipe) id: number,
-    @Body() dto: AssignRouteBatchVehicleDto,
-  ): Promise<RouteBatchVehicleAssignmentDto> {
-    return await this.vehicleService.assign(id, dto.vehicleId);
   }
 
   @Patch(':id/reviewer')
