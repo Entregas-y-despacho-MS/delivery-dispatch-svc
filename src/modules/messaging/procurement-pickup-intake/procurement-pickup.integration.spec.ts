@@ -199,4 +199,27 @@ describe('Procurement pickup messaging integration', () => {
     expect(await syncStates.find(ORDER_ID, 'procurement')).toMatchObject({ lastRecordVersion: 3, cancelledAt });
   });
 
+
+  it('dead-letters an invalid request without creating a pickup', async () => {
+    const { bus, pickups, consumer } = buildConsumerCircuit();
+    await consumer.onModuleInit();
+    const invalid = message('procurement.pickup.requested', { purchaseOrderId: ORDER_ID, recordVersion: 1 });
+
+    const outcome = await bus.publishRaw(invalid.type, invalid);
+
+    expect(outcome).toBe('rejected');
+    expect(bus.deadLettersOf(invalid.type)).toHaveLength(1);
+    expect(pickups.records).toHaveLength(0);
+  });
+
+  it('does not create a second pickup when Pub/Sub redelivers the same messageId', async () => {
+    const { bus, pickups, consumer } = buildConsumerCircuit();
+    await consumer.onModuleInit();
+    const envelope = message('procurement.pickup.requested', pickupRequest());
+
+    expect(await bus.publishRaw(envelope.type, envelope)).toBe('processed');
+    expect(await bus.publishRaw(envelope.type, envelope)).toBe('duplicate');
+    expect(pickups.records).toHaveLength(1);
+  });
+});
 });
