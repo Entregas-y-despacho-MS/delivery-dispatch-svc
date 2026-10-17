@@ -3,10 +3,11 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, QueryRunner } from 'typeorm';
 import { isUniqueViolation } from '../../../../shared/orm/unique-violation.js';
-import { DispatchStatusEnum, RouteBatchStatusEnum, RoleEnum, VehicleStatusEnum } from '../../../../shared/enums/index.js';
+import { DispatchStatusEnum, RouteBatchStatusEnum } from '../../../../shared/enums/index.js';
 import { RouteBatchApprovalConflictException } from '../exceptions/route-batch-approval-conflict.exception.js';
 import { RouteBatchNotFoundException } from '../exceptions/route-batch-not-found.exception.js';
 import { RouteCapacityService } from './route-capacity.service.js';
+import { RouteBatchResourcesService } from './route-batch-resources.service.js';
 import { ApproveFinalRouteBatchDto } from '../dto/approve-final-route-batch.dto.js';
 import { ApproveFinalRouteBatchResponseDto } from '../dto/approve-final-route-batch-response.dto.js';
 import { ROUTE_ASSIGNED_EVENT, type RouteAssignedEvent } from '../events/route-assigned.event.js';
@@ -45,6 +46,7 @@ export class RouteBatchFinalApprovalService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly capacity: RouteCapacityService,
     private readonly events: EventEmitter2,
+    private readonly resources: RouteBatchResourcesService,
   ) {}
 
   async approve(routeBatchId: number, dto: ApproveFinalRouteBatchDto, actorUserId: number): Promise<ApproveFinalRouteBatchResponseDto> {
@@ -141,9 +143,9 @@ export class RouteBatchFinalApprovalService {
       throw new RouteBatchApprovalConflictException('ROUTE_BATCH_DRIVER_REQUIRED', 'Assign a proposed driver before final approval.');
     }
 
-    await this.assertVehicleActive(manager, vehicleId);
-    await this.assertDriverAvailable(manager, driverId, batch.shift_date, batch.id);
-    await this.assertResourcesAvailable(manager, driverId, vehicleId, batch.shift_date, batch.id);
+    await this.resources.assertVehicleActive(manager, vehicleId);
+    await this.resources.assertDriverAvailable(manager, driverId, batch.shift_date, batch.id);
+    await this.resources.assertResourcesAvailable(manager, driverId, vehicleId, batch.shift_date, batch.id);
     await this.capacity.assertAssignable(batch.id, vehicleId, manager);
 
     const updatedBatch: { route_batch_id: number }[] = await manager.query(
@@ -198,63 +200,6 @@ export class RouteBatchFinalApprovalService {
     if (expected.size !== dispatches.length || dispatches.some(({ id, version }) => expected.get(id) !== version)) {
       const stale = dispatches.filter(({ id, version }) => expected.get(id) !== version).map(({ id }) => id);
       throw new RouteBatchApprovalConflictException('DISPATCH_VERSION_CONFLICT', `Dispatches ${stale.join(', ') || 'in the batch'} changed or are missing from approval request for route batch ${routeBatchId}.`);
-    }
-  }
-
-  private async assertVehicleActive(manager: QueryRunner['manager'], vehicleId: number): Promise<void> {
-    const [vehicle]: { id: number }[] = await manager.query(
-      `SELECT v.vehicle_id AS id
-         FROM vehicles v JOIN vehicle_statuses s ON s.vehicle_status_id = v.vehicle_status_id
-        WHERE v.vehicle_id = $1 AND v.deleted_at IS NULL AND s.name = $2
-        FOR UPDATE OF v`,
-      [vehicleId, VehicleStatusEnum.ACTIVE],
-    );
-    if (!vehicle) {
-      throw new RouteBatchApprovalConflictException('ROUTE_BATCH_VEHICLE_NOT_ACTIVE', `Vehicle ${vehicleId} is not active.`);
-    }
-  }
-
-  private async assertDriverAvailable(manager: QueryRunner['manager'], driverId: number, shiftDate: string, routeBatchId: number): Promise<void> {
-    const [driver]: { id: number }[] = await manager.query(
-      `SELECT u.user_id AS id
-         FROM users u JOIN roles r ON r.role_id = u.role_id
-        WHERE u.user_id = $1 AND u.active = TRUE AND u.deleted_at IS NULL AND r.name = $2
-        FOR UPDATE OF u`,
-      [driverId, RoleEnum.DRIVER],
-    );
-    if (!driver) {
-      throw new RouteBatchApprovalConflictException('ROUTE_BATCH_DRIVER_NOT_AVAILABLE', `Driver ${driverId} is inactive or is not a driver.`);
-    }
-    const conflicts: { route_batch_id: number }[] = await manager.query(
-      `SELECT route_batch_id
-         FROM route_batches
-        WHERE route_batch_id <> $1 AND shift_date = $2 AND status NOT IN ($3, $4)
-          AND (driver_id = $5 OR proposed_driver_id = $5)
-        ORDER BY route_batch_id
-        FOR UPDATE`,
-      [routeBatchId, shiftDate, RouteBatchStatusEnum.CANCELLED, RouteBatchStatusEnum.CLOSED, driverId],
-    );
-    if (conflicts.length > 0) {
-      throw new RouteBatchApprovalConflictException('ROUTE_BATCH_DRIVER_NOT_AVAILABLE', `Driver ${driverId} is already assigned or proposed for route batch ${conflicts[0].route_batch_id} on ${shiftDate}.`);
-    }
-  }
-
-  private async assertResourcesAvailable(manager: QueryRunner['manager'], driverId: number, vehicleId: number, shiftDate: string, routeBatchId: number): Promise<void> {
-    const conflicts: { route_batch_id: number; driver_id: number | null; vehicle_id: number | null }[] = await manager.query(
-      `SELECT route_batch_id, driver_id, vehicle_id
-         FROM route_batches
-        WHERE route_batch_id <> $1 AND shift_date = $2 AND status NOT IN ($3, $4)
-          AND (driver_id = $5 OR vehicle_id = $6)
-        ORDER BY route_batch_id
-        FOR UPDATE`,
-      [routeBatchId, shiftDate, RouteBatchStatusEnum.CANCELLED, RouteBatchStatusEnum.CLOSED, driverId, vehicleId],
-    );
-    const conflict = conflicts[0];
-    if (conflict?.vehicle_id === vehicleId) {
-      throw new RouteBatchApprovalConflictException('ROUTE_BATCH_RESOURCE_CONFLICT', `Vehicle ${vehicleId} is already assigned to route batch ${conflict.route_batch_id} on ${shiftDate}.`);
-    }
-    if (conflict?.driver_id === driverId) {
-      throw new RouteBatchApprovalConflictException('ROUTE_BATCH_DRIVER_NOT_AVAILABLE', `Driver ${driverId} is already assigned to route batch ${conflict.route_batch_id} on ${shiftDate}.`);
     }
   }
 

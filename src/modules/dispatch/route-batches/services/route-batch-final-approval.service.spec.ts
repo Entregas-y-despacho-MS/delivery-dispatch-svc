@@ -2,6 +2,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { describe, expect, it, vi } from 'vitest';
 import { RouteBatchApprovalConflictException } from '../exceptions/route-batch-approval-conflict.exception.js';
 import { RouteBatchFinalApprovalService } from './route-batch-final-approval.service.js';
+import { RouteBatchResourcesService } from './route-batch-resources.service.js';
 
 function createHarness(options: { batchVersion?: number; batchStatus?: string; dispatches?: any[]; packageCount?: number } = {}) {
   const batch = {
@@ -51,7 +52,7 @@ function createHarness(options: { batchVersion?: number; batchStatus?: string; d
   const dataSource = { createQueryRunner: vi.fn(() => runner) };
   const capacity = { assertAssignable: vi.fn().mockResolvedValue({ assignable: true }) };
   const events = { emit: vi.fn() };
-  const service = new RouteBatchFinalApprovalService(dataSource as any, capacity as any, events as unknown as EventEmitter2);
+  const service = new RouteBatchFinalApprovalService(dataSource as any, capacity as any, events as unknown as EventEmitter2, new RouteBatchResourcesService());
   return { service, runner, manager, capacity, events };
 }
 

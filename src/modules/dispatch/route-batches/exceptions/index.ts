@@ -6,3 +6,4 @@ export * from './route-capacity-exceeded.exception.js';
 export * from './route-batch-vehicle-assignment-not-allowed.exception.js';
 export * from './route-batch-approval-conflict.exception.js';
 export * from './route-batch-reviewer-mismatch.exception.js';
+export * from './route-batch-not-correctable.exception.js';
