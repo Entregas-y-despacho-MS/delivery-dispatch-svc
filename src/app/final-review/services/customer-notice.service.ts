@@ -61,9 +61,22 @@ export class CustomerNoticeService {
         this.webUrl = config.get<string>('PUBLIC_WEB_URL', 'http://localhost:5173')!.replace(/\/$/, '');
     }
 
-    async sendDueNotices(routeBatchId: number, shiftDate: string, now: Date, settings: FinalReviewSettings): Promise<CustomerNoticeSummary> {
+    /**
+     * Every `assigned` order of the batch is decided; with `onlyPending` only those that have no reminder and no
+     * «se mantiene» reserved yet (what the reconciliation task needs: it runs often and must not lock every order).
+     */
+    async sendDueNotices(
+        routeBatchId: number,
+        shiftDate: string,
+        now: Date,
+        settings: FinalReviewSettings,
+        options: { onlyPending?: boolean } = {},
+    ): Promise<CustomerNoticeSummary> {
         const summary = emptyNoticeSummary();
-        for (const dispatchId of await this.repository.findDispatchIds(routeBatchId, 'assigned', false)) {
+        const dispatchIds = options.onlyPending
+            ? await this.repository.findAssignedWithoutNotice(routeBatchId)
+            : await this.repository.findDispatchIds(routeBatchId, 'assigned', false);
+        for (const dispatchId of dispatchIds) {
             await this.processDispatch(routeBatchId, dispatchId, shiftDate, now, settings, summary);
         }
         return summary;

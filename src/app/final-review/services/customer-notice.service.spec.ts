@@ -202,6 +202,26 @@ describe('CustomerNoticeService.sendDueNotices', () => {
     });
 });
 
+describe('CustomerNoticeService.sendDueNotices with onlyPending', () => {
+    it('reads only the orders that have no reminder or «se mantiene» reserved, not every assigned order', async () => {
+        const { service, repository } = build();
+        (repository as any).findAssignedWithoutNotice = vi.fn(async () => [1]);
+
+        await service.sendDueNotices(5, SHIFT, AT_REMINDER, settings, { onlyPending: true });
+
+        expect((repository as any).findAssignedWithoutNotice).toHaveBeenCalledWith(5);
+        expect(repository.findDispatchIds).not.toHaveBeenCalled();
+    });
+
+    it('without the option it keeps reading every assigned order', async () => {
+        const { service, repository } = build();
+
+        await service.sendDueNotices(5, SHIFT, AT_REMINDER, settings);
+
+        expect(repository.findDispatchIds).toHaveBeenCalledWith(5, 'assigned', false);
+    });
+});
+
 describe('CustomerNoticeService.reconcileOrder', () => {
     it('after the risk notice arrived, the deferred order is owed «tu entrega se mantiene»', async () => {
         const { service, mailer, scope } = build({ states: { 1: state({ risk: 'sent' }) } });

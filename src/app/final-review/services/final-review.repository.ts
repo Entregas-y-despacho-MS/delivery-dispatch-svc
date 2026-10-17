@@ -155,6 +155,39 @@ export class BatchScope {
         );
     }
 
+    /**
+     * Closes a reservation that never got a result and whose lease ran out (the process died or the transport
+     * hung): writes the result `abandoned` and opens the coordinator follow-up. Re-checks both conditions under
+     * the lock, so a late real result or another sweep cannot be doubled; true when this call closed it.
+     * It does not resend: the email may have left before the crash, so a person decides.
+     */
+    async abandonNotice(dispatchId: number, template: NoticeTemplate): Promise<boolean> {
+        const rows: unknown[] = await this.manager.query(
+            `INSERT INTO dispatch_events (dispatch_id, event_type, actor_type, reason, metadata)
+             SELECT $1::int, $2::varchar, 'system', $3::text, $4::jsonb
+              WHERE EXISTS (
+                    SELECT 1 FROM dispatch_events r
+                     WHERE r.dispatch_id = $1::int AND r.event_type = $5::varchar
+                       AND r.metadata->>'routeBatchId' = $6::text AND r.metadata->>'template' = $7::text
+                       AND r.created_at <= NOW() - make_interval(mins => $8::int))
+                AND NOT EXISTS (
+                    SELECT 1 FROM dispatch_events x
+                     WHERE x.dispatch_id = $1::int AND x.event_type = $2::varchar
+                       AND x.metadata->>'routeBatchId' = $6::text AND x.metadata->>'template' = $7::text)
+             RETURNING dispatch_event_id`,
+            [
+                dispatchId, NOTICE_RESULT_EVENT, 'Email reservation outlived its lease without a result; coordinator must contact the customer',
+                JSON.stringify({ template, result: 'abandoned', routeBatchId: this.routeBatchId }),
+                NOTICE_RESERVED_EVENT, String(this.routeBatchId), template, NOTICE_LEASE_MINUTES,
+            ],
+        );
+        if (rows.length === 0) return false;
+        await this.recordContactManagementOnce(dispatchId, template, 'Email reservation outlived its lease without a result; coordinator must contact the customer', {
+            category: 'customer_contact', deliveryResult: 'abandoned',
+        });
+        return true;
+    }
+
     /** Writes an order event for this batch unless it already has one; true when this call wrote it. */
     async claimDispatchEvent(dispatchId: number, eventType: string, reason: string, metadata: Record<string, unknown>): Promise<boolean> {
         const rows: unknown[] = await this.manager.query(
@@ -235,6 +268,62 @@ export class FinalReviewRepository {
             reviewerUserId: row.reviewer_user_id,
             dispatchCount: Number(row.dispatch_count),
         }));
+    }
+
+    /** Batches whose route day is between two dates (both included), in any of `statuses`. */
+    async findBatchesInRange(from: string, to: string, statuses: readonly string[]): Promise<FinalReviewBatchRow[]> {
+        const rows: Array<{ id: number; status: string; shift_date: string; reviewer_user_id: number | null }> =
+            await this.dataSource.query(
+                `SELECT route_batch_id AS id, status, to_char(shift_date, 'YYYY-MM-DD') AS shift_date, reviewer_user_id
+                   FROM route_batches
+                  WHERE shift_date BETWEEN $1 AND $2 AND status = ANY($3::text[])
+                  ORDER BY shift_date, route_batch_id`,
+                [from, to, [...statuses]],
+            );
+        return rows.map((row) => ({
+            routeBatchId: row.id, status: row.status, shiftDate: row.shift_date, reviewerUserId: row.reviewer_user_id, dispatchCount: 0,
+        }));
+    }
+
+    /**
+     * Reservations of this batch with no result whose lease ran out. A pre-filter: each one is re-checked under the
+     * lock by `BatchScope.abandonNotice`. Looked up through the orders of the batch (indexed), not by event type.
+     */
+    async findAbandonedNotices(routeBatchId: number): Promise<AbandonedNotice[]> {
+        const rows: Array<{ dispatch_id: number; template: NoticeTemplate }> = await this.dataSource.query(
+            `SELECT r.dispatch_id, r.metadata->>'template' AS template
+               FROM dispatch_events r
+              WHERE r.dispatch_id IN (SELECT dispatch_id FROM dispatches WHERE route_batch_id = $1)
+                AND r.event_type = $2 AND r.metadata->>'routeBatchId' = $3
+                AND r.created_at <= NOW() - make_interval(mins => $4::int)
+                AND NOT EXISTS (
+                    SELECT 1 FROM dispatch_events x
+                     WHERE x.dispatch_id = r.dispatch_id AND x.event_type = $5
+                       AND x.metadata->>'routeBatchId' = $3 AND x.metadata->>'template' = r.metadata->>'template')
+              ORDER BY r.dispatch_id`,
+            [routeBatchId, NOTICE_RESERVED_EVENT, String(routeBatchId), NOTICE_LEASE_MINUTES, NOTICE_RESULT_EVENT],
+        );
+        return rows.map((row) => ({ routeBatchId, dispatchId: row.dispatch_id, template: row.template }));
+    }
+
+    /**
+     * Orders of a batch that are `assigned` and have no reminder and no «se mantiene» reserved yet: the only ones
+     * that can still be owed a notice, so the reconciliation does not take a lock for every order every time.
+     */
+    async findAssignedWithoutNotice(routeBatchId: number): Promise<number[]> {
+        const rows: Array<{ id: number }> = await this.dataSource.query(
+            `SELECT d.dispatch_id AS id
+               FROM dispatches d
+               JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
+              WHERE d.route_batch_id = $1 AND s.name = 'assigned'
+                AND NOT EXISTS (
+                    SELECT 1 FROM dispatch_events e
+                     WHERE e.dispatch_id = d.dispatch_id AND e.event_type = $2 AND e.metadata->>'routeBatchId' = $3
+                       AND e.metadata->>'template' IN ('reminder', 'delivery-maintained'))
+              ORDER BY d.dispatch_id`,
+            [routeBatchId, NOTICE_RESERVED_EVENT, String(routeBatchId)],
+        );
+        return rows.map((row) => row.id);
     }
 
     /** Route day and status of one batch, or `null` when it does not exist. */
