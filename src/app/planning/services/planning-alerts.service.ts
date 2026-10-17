@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { DataSource } from 'typeorm';
+import { DataSource, EntityManager } from 'typeorm';
 
 /** `audit_logs.action` of an alert of the generator (`user_id` NULL: the system raised it). */
 export const PLAN_ALERT_ACTION = 'plan_generation_alert';
@@ -27,7 +27,9 @@ export type PlanAlertKind =
     | 'cutoff_window_open'
     | 'cutoff_batch_failed'
     | 'cutoff_group_stale'
-    | 'cutoff_batch_skipped';
+    | 'cutoff_batch_skipped'
+    | 'final_review_overdue'
+    | 'final_review_escalated';
 
 export interface PlanningAlertEvent {
     kind: PlanAlertKind;
@@ -53,6 +55,8 @@ const SEVERITY: Record<PlanAlertKind, PlanAlertSeverity> = {
     cutoff_batch_failed: 'exception',
     cutoff_group_stale: 'warning',
     cutoff_batch_skipped: 'warning',
+    final_review_overdue: 'exception',
+    final_review_escalated: 'exception',
 };
 
 /**
@@ -74,18 +78,33 @@ export class PlanningAlertsService {
     }
 
     async raise(kind: PlanAlertKind, detail: Record<string, unknown>): Promise<void> {
-        const severity = SEVERITY[kind];
-        const occurredAt = new Date().toISOString();
+        let event: PlanningAlertEvent;
         try {
-            await this.dataSource.query('INSERT INTO audit_logs (user_id, action, detail) VALUES (NULL, $1, $2)', [
-                PLAN_ALERT_ACTION,
-                JSON.stringify({ kind, severity, ...detail }),
-            ]);
+            event = await this.store(kind, detail);
         } catch (error) {
             this.logger.error(`Alert "${kind}" could not be stored: ${error instanceof Error ? error.message : String(error)}`);
             return;
         }
-        const event: PlanningAlertEvent = { kind, severity, detail, occurredAt };
+        this.announce(event);
+    }
+
+    /**
+     * Stores the alert in `audit_logs` and **throws** if it cannot. With `manager` the row joins that
+     * transaction, so a caller can commit it together with the marker that says "this was already alerted"
+     * (a crash then loses neither). Call `announce` with the result **after** the commit.
+     */
+    async store(kind: PlanAlertKind, detail: Record<string, unknown>, manager?: EntityManager): Promise<PlanningAlertEvent> {
+        const severity = SEVERITY[kind];
+        const occurredAt = new Date().toISOString();
+        await (manager ?? this.dataSource).query('INSERT INTO audit_logs (user_id, action, detail) VALUES (NULL, $1, $2)', [
+            PLAN_ALERT_ACTION,
+            JSON.stringify({ kind, severity, ...detail }),
+        ]);
+        return { kind, severity, detail, occurredAt };
+    }
+
+    /** Announces a stored alert as the internal event `planning.alert` (ST-53.2 forwards it to the coordinators). */
+    announce(event: PlanningAlertEvent): void {
         this.events.emit(PLANNING_ALERT_EVENT, event);
     }
 }
