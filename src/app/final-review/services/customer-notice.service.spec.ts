@@ -202,6 +202,61 @@ describe('CustomerNoticeService.sendDueNotices', () => {
     });
 });
 
+describe('CustomerNoticeService.reconcileOrder', () => {
+    it('after the risk notice arrived, the deferred order is owed «tu entrega se mantiene»', async () => {
+        const { service, mailer, scope } = build({ states: { 1: state({ risk: 'sent' }) } });
+
+        const summary = await service.reconcileOrder(5, 1, SHIFT, AFTER_RISK, settings);
+
+        expect(summary).toMatchObject({ maintained: 1, reminders: 0, deferred: 0 });
+        expect(mailer.send).toHaveBeenCalledWith(expect.objectContaining({ template: 'delivery-maintained' }));
+        expect(scope.reserveNotice).toHaveBeenCalledWith(1, 'delivery-maintained', expect.any(String));
+    });
+
+    it('after the risk notice bounced, the deferred order is owed the reminder, never «se mantiene»', async () => {
+        const { service, mailer } = build({ states: { 1: state({ risk: 'failed' }) } });
+
+        const summary = await service.reconcileOrder(5, 1, SHIFT, AFTER_RISK, settings);
+
+        expect(summary).toMatchObject({ reminders: 1, maintained: 0 });
+        expect(mailer.send).toHaveBeenCalledTimes(1);
+        expect(mailer.send).toHaveBeenCalledWith(expect.objectContaining({ template: 'reminder' }));
+    });
+
+    it('stays deferred while the risk notice is still in flight', async () => {
+        const { service, mailer } = build({ states: { 1: state({ risk: 'in_flight' }) } });
+
+        const summary = await service.reconcileOrder(5, 1, SHIFT, AFTER_RISK, settings);
+
+        expect(summary.deferred).toBe(1);
+        expect(mailer.send).not.toHaveBeenCalled();
+    });
+
+    it('does nothing while the batch is not confirmed (the common case: nobody approved it)', async () => {
+        const { service, mailer, scope } = build({ batchStatus: 'pending_final_review', states: { 1: state({ risk: 'sent' }) } });
+
+        const summary = await service.reconcileOrder(5, 1, SHIFT, AFTER_RISK, settings);
+
+        expect(summary).toMatchObject({ reminders: 0, maintained: 0, deferred: 0, errors: 0 });
+        expect(scope.dispatchState).not.toHaveBeenCalled();
+        expect(mailer.send).not.toHaveBeenCalled();
+    });
+
+    it('does not send twice what the late approval already reserved', async () => {
+        const { service, mailer } = build({ states: { 1: state({ risk: 'sent', maintained: 'in_flight' }) } });
+
+        await service.reconcileOrder(5, 1, SHIFT, AFTER_RISK, settings);
+
+        expect(mailer.send).not.toHaveBeenCalled();
+    });
+
+    it('never throws: a database error is counted', async () => {
+        const { service } = build({ states: { 1: state({ risk: 'sent' }) }, reserveThrowsFor: 1 });
+
+        await expect(service.reconcileOrder(5, 1, SHIFT, AFTER_RISK, settings)).resolves.toMatchObject({ errors: 1 });
+    });
+});
+
 describe('CustomerNoticeService.deliver (risk notice)', () => {
     it('sends the risk notice, does not need a tracking link and records the result', async () => {
         const { service, mailer, repository } = build();

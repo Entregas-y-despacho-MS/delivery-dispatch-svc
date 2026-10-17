@@ -64,23 +64,46 @@ export class CustomerNoticeService {
     async sendDueNotices(routeBatchId: number, shiftDate: string, now: Date, settings: FinalReviewSettings): Promise<CustomerNoticeSummary> {
         const summary = emptyNoticeSummary();
         for (const dispatchId of await this.repository.findDispatchIds(routeBatchId, 'assigned', false)) {
-            try {
-                const claim = await this.claimDue(routeBatchId, dispatchId, shiftDate, now, settings);
-                if (claim.kind === 'wait') summary.waiting += 1;
-                else if (claim.kind === 'deferred') summary.deferred += 1;
-                else if (claim.kind === 'skipped') summary.skipped += 1;
-                else if (claim.kind === 'send') {
-                    const outcome = await this.deliver(routeBatchId, claim.state, claim.action);
-                    if (outcome === 'failed') summary.failed += 1;
-                    else if (claim.action === 'send-reminder') summary.reminders += 1;
-                    else summary.maintained += 1;
-                }
-            } catch (error) {
-                summary.errors += 1;
-                this.logger.error(`Notice for dispatch ${dispatchId} of batch ${routeBatchId} failed: ${error instanceof Error ? error.message : String(error)}`);
-            }
+            await this.processDispatch(routeBatchId, dispatchId, shiftDate, now, settings, summary);
         }
         return summary;
+    }
+
+    /**
+     * Decides again, for one order, what it is owed. Whoever records the result of a risk notice calls this: if the
+     * batch was approved while the notice was in flight, the late approval deferred the order, and this is the
+     * moment it can be decided («se mantiene» if the notice arrived, the reminder if it did not). It does nothing
+     * while the batch is not `confirmed`, and it never throws.
+     */
+    async reconcileOrder(routeBatchId: number, dispatchId: number, shiftDate: string, now: Date, settings: FinalReviewSettings): Promise<CustomerNoticeSummary> {
+        const summary = emptyNoticeSummary();
+        await this.processDispatch(routeBatchId, dispatchId, shiftDate, now, settings, summary);
+        return summary;
+    }
+
+    private async processDispatch(
+        routeBatchId: number,
+        dispatchId: number,
+        shiftDate: string,
+        now: Date,
+        settings: FinalReviewSettings,
+        summary: CustomerNoticeSummary,
+    ): Promise<void> {
+        try {
+            const claim = await this.claimDue(routeBatchId, dispatchId, shiftDate, now, settings);
+            if (claim.kind === 'wait') summary.waiting += 1;
+            else if (claim.kind === 'deferred') summary.deferred += 1;
+            else if (claim.kind === 'skipped') summary.skipped += 1;
+            else if (claim.kind === 'send') {
+                const outcome = await this.deliver(routeBatchId, claim.state, claim.action);
+                if (outcome === 'failed') summary.failed += 1;
+                else if (claim.action === 'send-reminder') summary.reminders += 1;
+                else summary.maintained += 1;
+            }
+        } catch (error) {
+            summary.errors += 1;
+            this.logger.error(`Notice for dispatch ${dispatchId} of batch ${routeBatchId} failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
     }
 
     private async claimDue(routeBatchId: number, dispatchId: number, shiftDate: string, now: Date, settings: FinalReviewSettings): Promise<Claim> {

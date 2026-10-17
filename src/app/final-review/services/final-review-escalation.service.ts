@@ -8,6 +8,7 @@ import {
     loadFinalReviewSettings,
     MILESTONE_BATCH_STATUSES,
     shiftDateOfMilestone,
+    type FinalReviewSettings,
 } from '../domain/final-review-timeline.js';
 import {
     COORDINATOR_TASK_REQUIRED_EVENT,
@@ -89,7 +90,7 @@ export class FinalReviewEscalationService {
 
         for (const batch of await this.repository.findBatches(shiftDate, ESCALATABLE)) {
             try {
-                await this.escalateBatch(batch.routeBatchId, batch.status, shiftDate, settings.finalReviewEscalationTime, reasonId, summary);
+                await this.escalateBatch(batch.routeBatchId, batch.status, shiftDate, settings, reasonId, summary);
             } catch (error) {
                 summary.failedBatchIds.push(batch.routeBatchId);
                 this.logger.error(`Escalation of batch ${batch.routeBatchId} failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -102,7 +103,7 @@ export class FinalReviewEscalationService {
         routeBatchId: number,
         batchStatus: string,
         shiftDate: string,
-        escalationTime: string,
+        settings: FinalReviewSettings,
         reasonId: number | null,
         summary: FinalReviewEscalationSummary,
     ): Promise<void> {
@@ -159,6 +160,9 @@ export class FinalReviewEscalationService {
             if (step.send) {
                 const outcome = await this.notices.deliver(routeBatchId, step.send, 'send-risk-notice');
                 if (outcome === 'sent') noticesSent += 1; else noticesFailed += 1;
+                // The result is known now. If the batch was approved while this notice was in flight, the late
+                // approval deferred this order: decide it again with the real clock (never throws).
+                await this.notices.reconcileOrder(routeBatchId, dispatchId, shiftDate, new Date(), settings);
             }
         }
         summary.incidentsRegistered += incidents;
@@ -174,7 +178,7 @@ export class FinalReviewEscalationService {
             incidentsRegistered: incidents,
             riskNoticesSent: noticesSent,
             riskNoticesFailed: noticesFailed,
-            finalReviewEscalationTime: escalationTime,
+            finalReviewEscalationTime: settings.finalReviewEscalationTime,
         };
         const closing = await this.repository.inBatchLock<Closing>(routeBatchId, async (scope) => {
             if (!ESCALATABLE.includes(scope.status)) return { kind: 'not_pending' };

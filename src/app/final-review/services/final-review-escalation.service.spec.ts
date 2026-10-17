@@ -66,7 +66,10 @@ function build(options: Options = {}) {
             return result;
         }),
     };
-    const notices = { deliver: vi.fn(async () => (delivery.length > 0 ? delivery.shift()! : 'sent')) };
+    const notices = {
+        deliver: vi.fn(async () => { calls.push('deliver'); return delivery.length > 0 ? delivery.shift()! : 'sent'; }),
+        reconcileOrder: vi.fn(async () => { calls.push('reconcile'); return {}; }),
+    };
     const alerts = {
         raise: vi.fn(async () => undefined),
         store: vi.fn(async () => { calls.push('store'); if (options.storeThrows) throw new Error('db down'); return EVENT; }),
@@ -77,6 +80,27 @@ function build(options: Options = {}) {
 }
 
 describe('FinalReviewEscalationService', () => {
+    it('after each risk notice result it decides the order again, with the real clock, so a late approval that was deferred is completed', async () => {
+        const { service, notices, calls } = build({ batches: [batch(11)], ids: { 11: [1, 2] }, states: { 1: state(1), 2: state(2) } });
+
+        await service.run(AT_ESCALATION);
+
+        expect(notices.reconcileOrder).toHaveBeenCalledTimes(2);
+        expect(notices.reconcileOrder).toHaveBeenNthCalledWith(1, 11, 1, '2026-10-14', expect.any(Date), expect.objectContaining({ finalReviewEscalationTime: '07:00' }));
+        expect(notices.reconcileOrder).toHaveBeenNthCalledWith(2, 11, 2, '2026-10-14', expect.any(Date), expect.anything());
+        // reconcile follows its own delivery, before the next order is reserved
+        expect(calls.filter((call) => call === 'deliver' || call === 'reconcile')).toEqual(['deliver', 'reconcile', 'deliver', 'reconcile']);
+    });
+
+    it('does not reconcile an order whose risk notice was not sent by this run', async () => {
+        const { service, notices } = build({ batches: [batch(11)], ids: { 11: [1] }, states: { 1: state(1) }, riskClaim: [false] });
+
+        await service.run(AT_ESCALATION);
+
+        expect(notices.deliver).not.toHaveBeenCalled();
+        expect(notices.reconcileOrder).not.toHaveBeenCalled();
+    });
+
     it('treats a batch still pending at final_review_escalation_time as case 5.2', async () => {
         const { service, repository, notices, alerts, scopes } = build({
             batches: [batch(11)], ids: { 11: [1, 2] }, states: { 1: state(1), 2: state(2) },
@@ -100,9 +124,10 @@ describe('FinalReviewEscalationService', () => {
 
         await service.run(AT_ESCALATION);
 
-        // order: the order's own transaction first (claims + incident + notice reservation), then the closing one.
+        // order: the order's own transaction first (claims + incident + notice reservation), then its email and
+        // the decision again, and only then the closing transaction of the batch.
         expect(calls).toEqual([
-            'claim:final_review_escalated', 'incident', 'reserve:risk-notice', 'commit',
+            'claim:final_review_escalated', 'incident', 'reserve:risk-notice', 'commit', 'deliver', 'reconcile',
             'batch:final_review_escalated', 'batch:coordinator_task_required', 'store', 'commit', 'announce',
         ]);
         expect((alerts.store.mock.calls[0] as unknown[])[2]).toBe(manager);
@@ -236,7 +261,7 @@ describe('FinalReviewEscalationService', () => {
             return built;
         })();
 
-        expect(calls.filter((call) => !call.startsWith('claim:') && !call.startsWith('reserve:') && !call.startsWith('batch:') && !['incident', 'store', 'commit', 'announce'].includes(call))).toEqual([]);
+        expect(calls.filter((call) => !call.startsWith('claim:') && !call.startsWith('reserve:') && !call.startsWith('batch:') && !['incident', 'store', 'commit', 'announce', 'deliver', 'reconcile'].includes(call))).toEqual([]);
     });
 
     it('does nothing on a day the company does not operate', async () => {
