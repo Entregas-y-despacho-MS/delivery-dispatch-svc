@@ -32,9 +32,12 @@ export class RouteCapacityService {
     routeBatchId: number,
     vehicleId: number,
     manager?: EntityManager,
+    // Writers lock the rows they measure; a read-only caller (ST-215.5) passes its manager with lock: false.
+    options: { lock?: boolean } = {},
   ): Promise<RouteCapacityReport> {
     const executor = manager ?? this.dataSource.manager;
-    if (manager) {
+    const lock = manager !== undefined && options.lock !== false;
+    if (lock && manager) {
       // Package consumers lock their dispatch row before changing its package set. Taking the
       // same lock keeps the measured load stable until the vehicle assignment commits.
       await manager.query(
@@ -42,7 +45,7 @@ export class RouteCapacityService {
         [routeBatchId],
       );
     }
-    const vehicleLock = manager ? ' FOR UPDATE' : '';
+    const vehicleLock = lock ? ' FOR UPDATE' : '';
     const [vehicle]: VehicleRow[] = await executor.query(
       `SELECT vehicle_id AS id, capacity_kg AS "capacityKg", capacity_m3 AS "capacityM3",
                     max_package_length_cm AS "maxPackageLengthCm", max_package_width_cm AS "maxPackageWidthCm",
