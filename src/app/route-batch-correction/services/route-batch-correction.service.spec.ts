@@ -231,6 +231,18 @@ describe('RouteBatchCorrectionService — concurrency and state', () => {
         expect(h.dataSource.transaction).not.toHaveBeenCalled();
     });
 
+    it('maps a unique violation on the vehicle of the day to a 409 and leaves any other unique violation untouched', async () => {
+        const unique = (constraint: string) => new QueryFailedError('UPDATE route_batches', [], Object.assign(new Error('duplicate'), { code: '23505', constraint }));
+        const h = build();
+        h.dataSource.transaction.mockRejectedValueOnce(unique('uq_route_batches_vehicle_shift_date'));
+        const vehicle = await catchError(h.service.changeVehicle(12, 60, 4, 9));
+        expect((vehicle as RouteBatchApprovalConflictException).getResponse()).toMatchObject({ error: 'ROUTE_BATCH_RESOURCE_CONFLICT' });
+
+        const other = unique('uq_something_else');
+        h.dataSource.transaction.mockRejectedValueOnce(other);
+        expect(await catchError(h.service.changeVehicle(12, 60, 4, 9))).toBe(other);
+    });
+
     it('answers 409 (try again) when Postgres picks the correction as a deadlock victim', async () => {
         const h = build();
         const victim = new QueryFailedError('SELECT', [], Object.assign(new Error('deadlock detected'), { code: '40P01' }));

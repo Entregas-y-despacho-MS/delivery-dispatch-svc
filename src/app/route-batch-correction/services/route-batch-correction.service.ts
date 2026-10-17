@@ -253,6 +253,10 @@ export class RouteBatchCorrectionService {
         if (constraint === 'uq_route_batches_driver_shift_date') {
             return new RouteBatchApprovalConflictException('ROUTE_BATCH_DRIVER_NOT_AVAILABLE', 'The selected driver was assigned to another route batch for this day. Reload and review the batch.');
         }
-        return new RouteBatchApprovalConflictException('ROUTE_BATCH_RESOURCE_CONFLICT', 'The selected vehicle was assigned to another route batch for this day. Reload and review the batch.');
+        if (constraint === 'uq_route_batches_vehicle_shift_date') {
+            return new RouteBatchApprovalConflictException('ROUTE_BATCH_RESOURCE_CONFLICT', 'The selected vehicle was assigned to another route batch for this day. Reload and review the batch.');
+        }
+        // Any other unique index is not a resource conflict: do not blame the vehicle, let it surface as it is.
+        return error;
     }
 }
