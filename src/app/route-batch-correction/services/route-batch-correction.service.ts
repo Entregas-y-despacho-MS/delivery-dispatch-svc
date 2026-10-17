@@ -141,7 +141,8 @@ export class RouteBatchCorrectionService {
         }
 
         const status = validation !== null && !validation.passed ? RouteBatchStatusEnum.PROVISIONAL : batch.status;
-        const updated: { version: number }[] = await manager.query(
+        // TypeORM answers an UPDATE ... RETURNING with `[rows, affectedCount]`, not with the rows.
+        const [updated]: [{ version: number }[], number] = await manager.query(
             `UPDATE route_batches
                 SET vehicle_id = $3, proposed_driver_id = $4, status = $5, version = version + 1, updated_at = NOW()
               WHERE route_batch_id = $1 AND version = $2

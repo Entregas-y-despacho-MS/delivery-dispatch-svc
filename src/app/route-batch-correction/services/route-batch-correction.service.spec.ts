@@ -40,7 +40,11 @@ function build(over: {
     const manager = {
         query: vi.fn(async (sql: string) => {
             if (sql.includes('FOR UPDATE')) { order.push('lock'); return over.missing ? [] : [batch]; }
-            if (sql.includes('UPDATE route_batches')) { order.push('update'); return over.updateRows ?? [{ version: batch.version + 1 }]; }
+            if (sql.includes('UPDATE route_batches')) {
+                order.push('update');
+                const rows = over.updateRows ?? [{ version: batch.version + 1 }];
+                return [rows, rows.length]; // the shape TypeORM gives an UPDATE ... RETURNING
+            }
             if (sql.includes('INSERT INTO route_batch_events')) { order.push('event'); return []; }
             return [];
         }),
