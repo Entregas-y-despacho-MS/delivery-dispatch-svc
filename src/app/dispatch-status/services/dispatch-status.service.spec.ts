@@ -26,6 +26,8 @@ function setup(options: {
     active?: { dispatch_id: number }[];
     target?: { dispatch_status_id: number }[];
     updated?: { updated_at: Date }[];
+    remaining?: { dispatch_id: number }[];
+    closed?: { closed_at: Date }[];
     previous?: { dispatchId: number; eventType: string; createdAt: Date; metadata: Record<string, unknown> } | null;
     evidence?: boolean;
 } = {}) {
@@ -35,16 +37,67 @@ function setup(options: {
         batch: options.batch ?? [{ id: 55, driver_id: options.driverId ?? 7, status: options.batchStatus ?? 'in_execution' }],
         dispatch: [{ id: 12, route_batch_id: 55, status: options.current ?? DispatchStatusEnum.OUT_FOR_DELIVERY, evidence_policy: 'hand_delivery_standard', version: 4, updated_at: saved }],
         latest: options.latest ?? [], active: options.active ?? [], target: options.target ?? [{ dispatch_status_id: 3 }], updated: options.updated ?? [{ updated_at: saved }],
+        remaining: options.remaining ?? [{ dispatch_id: 12 }], closed: options.closed ?? [{ closed_at: saved }],
     };
+    const queryResults = [
+        {
+            name: 'dispatch identity',
+            matches: (sql: string) => sql.startsWith('SELECT route_batch_id FROM dispatches'),
+            rows: state.identity,
+        },
+        {
+            name: 'active route dispatch',
+            matches: (sql: string) => sql.startsWith('SELECT d.dispatch_id FROM dispatches') && sql.includes('ds.name = $3'),
+            rows: state.active,
+        },
+        {
+            name: 'open route dispatch',
+            matches: (sql: string) => sql.startsWith('SELECT d.dispatch_id FROM dispatches') && sql.includes('ds.name = ANY'),
+            rows: state.remaining,
+        },
+        {
+            name: 'route batch lock',
+            matches: (sql: string) => sql.startsWith('SELECT route_batch_id AS id, driver_id, status FROM route_batches'),
+            rows: state.batch,
+        },
+        {
+            name: 'dispatch state',
+            matches: (sql: string) => sql.startsWith('SELECT d.dispatch_id AS id, d.route_batch_id'),
+            rows: state.dispatch,
+        },
+        {
+            name: 'latest status event',
+            matches: (sql: string) => sql.includes("event_type = 'status_changed'"),
+            rows: state.latest,
+        },
+        {
+            name: 'target status',
+            matches: (sql: string) => sql.startsWith('SELECT dispatch_status_id FROM dispatch_statuses'),
+            rows: state.target,
+        },
+        {
+            name: 'dispatch update',
+            matches: (sql: string) => sql.startsWith('WITH updated AS') && sql.includes('UPDATE dispatches'),
+            rows: state.updated,
+        },
+        {
+            name: 'route batch close',
+            matches: (sql: string) => sql.startsWith('UPDATE route_batches'),
+            rows: state.closed,
+        },
+        {
+            name: 'closed route event',
+            matches: (sql: string) => sql.startsWith('INSERT INTO route_batch_events'),
+            rows: [],
+        },
+    ];
     const manager = { query: vi.fn(async (sql: string) => {
-        if (sql.includes('SELECT route_batch_id FROM dispatches')) return state.identity;
-        if (sql.includes('FROM route_batches')) return state.batch;
-        if (sql.includes('AND ds.name = $3')) return state.active;
-        if (sql.includes('JOIN dispatch_statuses ds')) return state.dispatch;
-        if (sql.includes("event_type = 'status_changed'")) return state.latest;
-        if (sql.includes('SELECT dispatch_status_id FROM dispatch_statuses')) return state.target;
-        if (sql.includes('UPDATE dispatches')) return state.updated;
-        throw new Error(`Unexpected SQL: ${sql}`);
+        const normalizedSql = sql.replace(/\s+/g, ' ').trim();
+        const matches = queryResults.filter((query) => query.matches(normalizedSql));
+        if (matches.length !== 1) {
+            throw new Error(`Expected one SQL fixture match, found ${matches.length}: ${normalizedSql}`);
+        }
+        return matches[0].rows;
     }) };
     const dataSource = { transaction: vi.fn(async (work: (manager: unknown) => unknown) => work(manager)) };
     const dispatchEvents = {
@@ -87,6 +140,43 @@ describe('DispatchStatusService.update', () => {
         expect(updateSql).toContain('SET dispatch_status_id = $1, updated_at = now()');
         expect(updateSql).not.toMatch(/version|latitude|longitude|gps/i);
         expect(ctx.events.emit).toHaveBeenCalledWith(DISPATCH_STATUS_CHANGED_EVENT, expect.objectContaining({ status: 'in_transit', previousStatus: 'out_for_delivery' }));
+    });
+
+    it('closes the batch and records a system event in the same transaction when no open dispatch remains', async () => {
+        const ctx = setup({
+            current: DispatchStatusEnum.IN_TRANSIT,
+            remaining: [],
+        });
+        ctx.dataSource.transaction.mockImplementationOnce(async (work: (manager: unknown) => unknown) => {
+            const result = await work(ctx.manager);
+            expect(ctx.events.emit).not.toHaveBeenCalled();
+            return result;
+        });
+
+        await ctx.service.update(12, dto(DispatchStatusEnum.DELIVERED), 7);
+
+        const closeIndex = ctx.manager.query.mock.calls.findIndex(([sql]) => String(sql).includes('UPDATE route_batches'));
+        const routeEventIndex = ctx.manager.query.mock.calls.findIndex(([sql]) => String(sql).includes("INSERT INTO route_batch_events"));
+        expect(closeIndex).toBeGreaterThan(-1);
+        expect(routeEventIndex).toBeGreaterThan(closeIndex);
+        expect(ctx.manager.query.mock.calls[routeEventIndex]).toMatchObject([
+            expect.stringContaining("'closed', NULL, 'system'"),
+            [55, 'All route dispatches are outside active states.', JSON.stringify({ dispatchId: 12, dispatchStatus: DispatchStatusEnum.DELIVERED })],
+        ]);
+        expect(ctx.events.emit).toHaveBeenCalledWith(DISPATCH_STATUS_CHANGED_EVENT, expect.objectContaining({ status: DispatchStatusEnum.DELIVERED }));
+    });
+
+    it('keeps the batch in execution while an assigned, out_for_delivery or in_transit dispatch remains', async () => {
+        const ctx = setup({ remaining: [{ dispatch_id: 99 }] });
+
+        await ctx.service.update(12, dto(DispatchStatusEnum.IN_TRANSIT), 7);
+
+        expect(ctx.manager.query).toHaveBeenCalledWith(
+            expect.stringContaining('ds.name = ANY($2::varchar[])'),
+            [55, ['assigned', 'out_for_delivery', 'in_transit']],
+        );
+        expect(ctx.manager.query.mock.calls.some(([sql]) => String(sql).includes('UPDATE route_batches'))).toBe(false);
+        expect(ctx.manager.query.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO route_batch_events'))).toBe(false);
     });
 
     it('rejects illegal transitions without writing or publishing', async () => {

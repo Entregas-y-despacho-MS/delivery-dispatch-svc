@@ -1,4 +1,4 @@
-// ST-30.3 — Real HTTP/PostgreSQL acceptance checks for driver dispatch status transitions.
+// ST-30.3 / ST-30.4 — Real HTTP/PostgreSQL acceptance checks for driver dispatch status transitions and batch closure.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
@@ -79,6 +79,14 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
         `SELECT ds.name AS status, d.version, d.last_latitude, d.last_longitude, d.last_location_at
            FROM dispatches d JOIN dispatch_statuses ds USING (dispatch_status_id)
           WHERE d.dispatch_id = $1`, [id]))[0];
+
+    const batchRow = async (id: number) => (await dataSource.query(
+        `SELECT status, closed_at FROM route_batches WHERE route_batch_id = $1`, [id]))[0];
+
+    const closedEventsFor = async (id: number) => dataSource.query(
+        `SELECT event_type, actor_user_id, actor_type, reason, metadata
+           FROM route_batch_events WHERE route_batch_id = $1 AND event_type = 'closed'
+          ORDER BY route_batch_event_id`, [id]);
 
     const eventsFor = async (id: number) => dataSource.query(
         `SELECT event_type, actor_user_id, actor_type, client_event_id, metadata
@@ -364,5 +372,49 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
         expect(response.status).toBe(422);
         expect(response.body.error).toBe('DISPATCH_EVIDENCE_REQUIRED');
         expect(await dispatchRow(id)).toMatchObject({ status: 'in_transit' });
+    });
+
+    it('cierra el lote y registra closed como system al entregar la última parada', async () => {
+        const batch = await newBatch('driver1');
+        const id = await newDispatch(batch, 'in_transit');
+        await addEvidence(id, 'signature');
+
+        const response = await patch(id, body('delivered'));
+
+        expect(response.status).toBe(200);
+        expect(await batchRow(batch)).toMatchObject({ status: 'closed' });
+        expect((await batchRow(batch)).closed_at).toBeTruthy();
+        expect(await closedEventsFor(batch)).toMatchObject([{
+            event_type: 'closed', actor_user_id: null, actor_type: 'system',
+            reason: 'All route dispatches are outside active states.',
+            metadata: { dispatchId: id, dispatchStatus: 'delivered' },
+        }]);
+    });
+
+    it.each(['incident', 'not_delivered'])('no deja abierto el lote por un despacho en %s', async (inactiveStatus) => {
+        const batch = await newBatch('driver1');
+        const inactive = await newDispatch(batch, inactiveStatus);
+        const lastOpen = await newDispatch(batch, 'in_transit');
+        await addEvidence(lastOpen, 'signature');
+
+        const response = await patch(lastOpen, body('delivered'));
+
+        expect(response.status).toBe(200);
+        expect(await dispatchRow(inactive)).toMatchObject({ status: inactiveStatus });
+        expect(await batchRow(batch)).toMatchObject({ status: 'closed' });
+        expect(await closedEventsFor(batch)).toHaveLength(1);
+    });
+
+    it('mantiene el lote en ejecución mientras queda otra parada en tránsito', async () => {
+        const batch = await newBatch('driver1');
+        const stillInTransit = await newDispatch(batch, 'in_transit');
+        const finalStop = await newDispatch(batch, 'in_transit');
+
+        const response = await patch(finalStop, body('not_delivered'));
+
+        expect(response.status).toBe(200);
+        expect(await dispatchRow(stillInTransit)).toMatchObject({ status: 'in_transit' });
+        expect(await batchRow(batch)).toMatchObject({ status: 'in_execution', closed_at: null });
+        expect(await closedEventsFor(batch)).toHaveLength(0);
     });
 });
