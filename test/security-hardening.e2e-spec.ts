@@ -589,9 +589,14 @@ describe('Security hardening (e2e)', () => {
         beforeAll(async () => {
             driverA = await mkUser('driver', 'drvA'); driverB = await mkUser('driver', 'drvB');
             tokenA = (await login(driverA.username)).body.accessToken; tokenB = (await login(driverB.username)).body.accessToken;
-            const [{ route_batch_id }] = await ds.query(`INSERT INTO route_batches (driver_id, shift_date, status) VALUES ($1, current_date, 'confirmed') RETURNING route_batch_id`, [driverA.id]);
+            const [{ route_batch_id }] = await ds.query(`INSERT INTO route_batches (driver_id, shift_date, status) VALUES ($1, current_date, 'in_execution') RETURNING route_batch_id`, [driverA.id]);
+            await ds.query(
+                `INSERT INTO route_batch_events (route_batch_id, event_type, actor_type, metadata)
+                 VALUES ($1, 'route_started', 'system', $2::jsonb)`,
+                [route_batch_id, JSON.stringify({ startedAt: new Date(Date.now() - 5 * 60_000).toISOString() })],
+            );
             const [{ dispatch_id }] = await ds.query(
-                `INSERT INTO dispatches (dispatch_type_id, dispatch_status_id, route_batch_id, source_order_ref, delivery_address) VALUES (1, 1, $1, $2, 'Av. Test 1') RETURNING dispatch_id`,
+                `INSERT INTO dispatches (dispatch_type_id, dispatch_status_id, route_batch_id, source_order_ref, tracking_code, delivery_address) VALUES (1, 1, $1, $2, 'DSP-2026-00001', 'Av. Test 1') RETURNING dispatch_id`,
                 [route_batch_id, `hd-${run}-1`],
             );
             dispatchId = dispatch_id;
@@ -602,7 +607,7 @@ describe('Security hardening (e2e)', () => {
             const res = await events(tokenA, [status(), { type: 'incident', clientEventId: uuid(), dispatchId, occurredAt: new Date(Date.now() - 30_000).toISOString(), incidentReasonId: reasonId, detail: 'Client absent' }]);
             expect(res.status).toBe(201);
             expect(res.body.results.map((r: any) => r.outcome)).toEqual(['applied', 'applied']);
-            expect((await ds.query(`SELECT dispatch_status_id FROM dispatches WHERE dispatch_id = $1`, [dispatchId]))[0].dispatch_status_id).toBe(2);
+            expect((await ds.query(`SELECT s.name FROM dispatches d JOIN dispatch_statuses s USING (dispatch_status_id) WHERE d.dispatch_id = $1`, [dispatchId]))[0].name).toBe('incident');
         });
 
         it('another driver cannot: failed "Dispatch not found." and the dispatch is untouched', async () => {
@@ -690,6 +695,11 @@ describe('Security hardening (e2e)', () => {
                 expect(noCode.body).toMatchObject({ outcome: 'failed', error: 'An otp evidence needs its otpCode.' });
                 const otp = await evidence(tokenA, { clientEventId: uuid(), dispatchId: String(dispatchId), type: 'otp', otpCode: '123456' });
                 expect(otp.body.outcome).toBe('applied');
+                const [stored] = await ds.query(
+                    `SELECT otp_code FROM delivery_evidences WHERE delivery_evidence_id = $1`,
+                    [otp.body.clientEventId],
+                );
+                expect(stored.otp_code).toBeNull();
             });
 
             it('another driver\'s dispatch: failed, and nothing is uploaded or stored', async () => {

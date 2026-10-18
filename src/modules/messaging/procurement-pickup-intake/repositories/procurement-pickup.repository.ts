@@ -7,6 +7,7 @@ import type {
   ProcurementPickupRequestedData,
   ProcurementPickupUpdatedData,
 } from '../domain/procurement-pickup-message.types.js';
+import { DispatchStatusPublicationService } from '../../../dispatch/dispatch-status-publication/dispatch-status-publication.service.js';
 
 interface DispatchRow {
   dispatch_id: number;
@@ -44,6 +45,8 @@ const ADDRESS_REVIEW_PLACEHOLDER = 'Pendiente de corrección';
 
 @Injectable()
 export class ProcurementPickupRepository {
+  constructor(private readonly statusPublication: DispatchStatusPublicationService) {}
+
   async applyRequested(
     data: ProcurementPickupRequestedData,
     options: TransactionOptions,
@@ -341,10 +344,18 @@ export class ProcurementPickupRepository {
     await manager.query(
       `UPDATE dispatches
              SET dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = 'cancelled'),
+                 tracking_code = COALESCE(tracking_code, next_tracking_code()),
                  updated_at = NOW()
              WHERE dispatch_id = $1`,
       [current.dispatch_id],
     );
+    const outboundRecordVersion = await this.statusPublication.publish(manager, {
+      dispatchId: current.dispatch_id,
+      status: 'cancelled',
+      previousStatus: current.status,
+      occurredAt: new Date(data.cancelledAt),
+      reasonCode: 'ORDER-CANCELLED',
+    });
     await this.recordEvent(
       current.dispatch_id,
       'status_changed',
@@ -352,7 +363,10 @@ export class ProcurementPickupRepository {
         source: 'procurement',
         purchaseOrderId: data.purchaseOrderId,
         recordVersion: data.recordVersion,
+        previousStatus: current.status,
         status: 'cancelled',
+        reasonCode: 'ORDER-CANCELLED',
+        ...(outboundRecordVersion !== null && { outboundRecordVersion }),
         cancelledAt: data.cancelledAt,
         reason: data.reason ?? null,
       },

@@ -76,6 +76,12 @@ export class DispatchesService {
         return (await repo.findOne({ where: { id: statusId }, select: { id: true, name: true } }))?.name ?? null;
     }
 
+    /** Status ID for a configured status name, or null when it is not configured. */
+    async getStatusIdByName(name: string, options?: MutationOptions): Promise<number | null> {
+        const repo = options?.manager?.getRepository(DispatchStatus) ?? this.rawRepo.manager.getRepository(DispatchStatus);
+        return (await repo.findOne({ where: { name }, select: { id: true, name: true } }))?.id ?? null;
+    }
+
     /** Whether the dispatch belongs to a route batch assigned to this driver (a driver may only report on their own). */
     async isAssignedToDriver(dispatchId: number, driverId: number, options?: MutationOptions): Promise<boolean> {
         const repo = options?.manager?.getRepository(Dispatch) ?? this.rawRepo;

@@ -1,7 +1,7 @@
 /// <reference types="multer" />
 import { BadRequestException, HttpException, Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource, QueryFailedError } from 'typeorm';
+import { DataSource, EntityManager, QueryFailedError } from 'typeorm';
 import { DispatchEventsService } from '../../../modules/dispatch/dispatch-events/services/dispatch-events.service.js';
 import { DispatchIncidentsService } from '../../../modules/dispatch/dispatch-incidents/services/dispatch-incidents.service.js';
 import { DeliveryEvidencesService } from '../../../modules/dispatch/delivery-evidences/services/delivery-evidences.service.js';
@@ -13,11 +13,17 @@ import { SyncEventDto } from '../dto/sync-event.dto.js';
 import { SyncEventType } from '../dto/sync-event-type.enum.js';
 import { SyncEventOutcome, SyncEventResultDto, SyncEventsBatchResultDto } from '../dto/sync-event-result.dto.js';
 import { SyncEvidenceDto } from '../dto/sync-evidence.dto.js';
+import { DispatchStatusPublicationService } from '../../../modules/dispatch/dispatch-status-publication/dispatch-status-publication.service.js';
+import { PUBLISHED_DELIVERY_OUTCOME_STATUSES } from '../../../modules/dispatch/dispatch-status-publication/dispatch-status-message.js';
+
+const DRIVER_SYNC_STATUSES = new Set(['in_transit', 'delivered', 'not_delivered']);
 
 // A device clock is never exact, but an event from 2099 or from last year is not a real one: it would
 // corrupt the history (and every report built on it).
 const MAX_FUTURE_MS = 60 * 60 * 1000;
 const MAX_AGE_MS    = 30 * 24 * 60 * 60 * 1000;
+// Tolerate device/server clock drift without accepting events far outside the route's lifetime.
+const ROUTE_EXECUTION_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 // RF-U13 — orquesta la sincronización offline: idempotencia por clientEventId + orden estricto
 // del lote. Las operaciones genéricas (create/exists) viven en cada módulo de dominio; acá solo
@@ -34,6 +40,7 @@ export class SyncService {
         private readonly deliveryEvidencesService: DeliveryEvidencesService,
         private readonly dispatchesService: DispatchesService,
         private readonly storage: StoragePort,
+        private readonly statusPublication: DispatchStatusPublicationService,
     ) {}
 
     /**
@@ -70,7 +77,8 @@ export class SyncService {
                 dispatchId: dto.dispatchId,
                 type:       dto.type,
                 fileUrl,
-                otpCode:    dto.otpCode ?? null,
+                // The code proves the driver's local verification step; never persist it in plaintext.
+                otpCode:    null,
             });
             return { clientEventId: dto.clientEventId, outcome: SyncEventOutcome.APPLIED };
         } catch (err) {
@@ -98,21 +106,47 @@ export class SyncService {
                 this.assertPlausibleTime(event.occurredAt);
 
                 // Unknown dispatch and someone else's dispatch answer the same: a driver cannot probe other routes.
+                const [lockedDispatch] = await manager.query(
+                    'SELECT dispatch_id FROM dispatches WHERE dispatch_id = $1 FOR UPDATE',
+                    [event.dispatchId],
+                );
+                if (!lockedDispatch) throw new DispatchNotFoundException();
                 if (!(await this.dispatchesService.isAssignedToDriver(event.dispatchId, driverId, options))) throw new DispatchNotFoundException();
+                await this.assertWithinRouteExecution(manager, event.dispatchId, driverId, new Date(event.occurredAt));
                 // A finished order (delivered / returned) cannot go back: a late or duplicated event from the
                 // device must not reopen it.
                 const current = await this.dispatchesService.getStatusName(event.dispatchId, options);
                 const target  = await this.dispatchesService.getStatusNameById(event.dispatchStatusId!, options);
+                if (!target) throw new BadRequestException('The given dispatch status does not exist.');
                 if (current && FINAL_STATUSES.includes(current) && target !== current) {
                     throw new BadRequestException(`The dispatch is already ${current}: its status cannot change.`);
                 }
+                if (!current) throw new BadRequestException('The dispatch has no configured current status.');
+                if (!DRIVER_SYNC_STATUSES.has(target)) {
+                    throw new BadRequestException(`The driver cannot set dispatch status ${target}.`);
+                }
+                const occurredAt = new Date(event.occurredAt);
+                const outboundRecordVersion = current !== target && PUBLISHED_DELIVERY_OUTCOME_STATUSES.includes(target)
+                    ? await this.statusPublication.publish(manager, {
+                        dispatchId: event.dispatchId,
+                        status: target,
+                        previousStatus: current,
+                        occurredAt,
+                    })
+                    : null;
                 await this.dispatchesService.updateStatus(event.dispatchId, event.dispatchStatusId!, options);
                 await this.dispatchEventsService.create({
                     dispatchId:    event.dispatchId,
                     eventType:     'status_changed',
                     detail:        event.detail ?? null,
                     clientEventId: event.clientEventId,
-                    occurredAt:    new Date(event.occurredAt),
+                    occurredAt,
+                    metadata: {
+                        previousStatus: current,
+                        status: target,
+                        occurredAt: event.occurredAt,
+                        ...(outboundRecordVersion !== null && { outboundRecordVersion }),
+                    },
                 }, options);
                 return SyncEventOutcome.APPLIED;
             }
@@ -122,7 +156,38 @@ export class SyncService {
                 return SyncEventOutcome.ALREADY_PROCESSED;
             }
             this.assertPlausibleTime(event.occurredAt);
+            const [lockedDispatch] = await manager.query(
+                'SELECT dispatch_id FROM dispatches WHERE dispatch_id = $1 FOR UPDATE',
+                [event.dispatchId],
+            );
+            if (!lockedDispatch) throw new DispatchNotFoundException();
             if (!(await this.dispatchesService.isAssignedToDriver(event.dispatchId, driverId, options))) throw new DispatchNotFoundException();
+            await this.assertWithinRouteExecution(manager, event.dispatchId, driverId, new Date(event.occurredAt));
+
+            const current = await this.dispatchesService.getStatusName(event.dispatchId, options);
+            if (current && FINAL_STATUSES.includes(current) && current !== 'incident') {
+                throw new BadRequestException(`The dispatch is already ${current}: its status cannot change.`);
+            }
+            const [reason]: { code: string }[] = await manager.query(
+                'SELECT code FROM incident_reasons WHERE incident_reason_id = $1 AND deleted_at IS NULL',
+                [event.incidentReasonId],
+            );
+            if (!reason) throw new BadRequestException('The given incident reason does not exist.');
+            const incidentStatusId = await this.dispatchesService.getStatusIdByName('incident', options);
+            if (!incidentStatusId) throw new BadRequestException('The incident dispatch status is not configured.');
+
+            let outboundRecordVersion: number | null = null;
+            if (!current) throw new BadRequestException('The dispatch has no configured current status.');
+            if (current !== 'incident') {
+                outboundRecordVersion = await this.statusPublication.publish(manager, {
+                    dispatchId: event.dispatchId,
+                    status: 'incident',
+                    previousStatus: current,
+                    occurredAt: new Date(event.occurredAt),
+                    reasonCode: reason.code,
+                });
+                await this.dispatchesService.updateStatus(event.dispatchId, incidentStatusId, options);
+            }
 
             await this.dispatchIncidentsService.create({
                 id:               event.clientEventId,
@@ -130,6 +195,21 @@ export class SyncService {
                 incidentReasonId: event.incidentReasonId!,
                 description:      event.detail ?? null,
                 occurredAt:       new Date(event.occurredAt),
+            }, options);
+            await this.dispatchEventsService.create({
+                dispatchId: event.dispatchId,
+                eventType: 'status_changed',
+                detail: event.detail ?? null,
+                clientEventId: event.clientEventId,
+                occurredAt: new Date(event.occurredAt),
+                reason: reason?.code ?? null,
+                metadata: {
+                    previousStatus: current,
+                    status: 'incident',
+                    occurredAt: event.occurredAt,
+                    reasonCode: reason.code,
+                    ...(outboundRecordVersion !== null && { outboundRecordVersion }),
+                },
             }, options);
             return SyncEventOutcome.APPLIED;
         });
@@ -157,6 +237,46 @@ export class SyncService {
         const now = Date.now();
         if (at > now + MAX_FUTURE_MS || at < now - MAX_AGE_MS) {
             throw new BadRequestException('occurredAt is not plausible: it is in the future or more than 30 days old. Check the device clock.');
+        }
+    }
+
+    /**
+     * Offline events can arrive after the route closes, but the action must have happened while it
+     * was running. This is a read-only check after locking the dispatch; never lock the batch here,
+     * because the online status endpoint locks batch first and dispatch second.
+     */
+    private async assertWithinRouteExecution(manager: EntityManager, dispatchId: number, driverId: number, occurredAt: Date): Promise<void> {
+        const [route]: { status: string; started_at: string | null; closed_at: Date | string | null }[] = await manager.query(
+            `SELECT rb.status,
+                    rb.closed_at,
+                    started.metadata->>'startedAt' AS started_at
+               FROM dispatches d
+               JOIN route_batches rb ON rb.route_batch_id = d.route_batch_id
+               LEFT JOIN LATERAL (
+                   SELECT metadata
+                     FROM route_batch_events
+                    WHERE route_batch_id = rb.route_batch_id AND event_type = 'route_started'
+                    ORDER BY route_batch_event_id DESC
+                    LIMIT 1
+               ) started ON TRUE
+              WHERE d.dispatch_id = $1 AND rb.driver_id = $2`,
+            [dispatchId, driverId],
+        );
+        const startedAt = route?.started_at ? new Date(route.started_at).getTime() : Number.NaN;
+        const closedAt = route?.closed_at ? new Date(route.closed_at).getTime() : null;
+        if (
+            !route ||
+            !['in_execution', 'closed'].includes(route.status) ||
+            !Number.isFinite(startedAt) ||
+            (route.status === 'closed' && (closedAt === null || !Number.isFinite(closedAt)))
+        ) {
+            throw new BadRequestException('The dispatch event is outside the route execution window.');
+        }
+        if (occurredAt.getTime() < startedAt - ROUTE_EXECUTION_CLOCK_SKEW_MS) {
+            throw new BadRequestException('The dispatch event is outside the route execution window.');
+        }
+        if (closedAt !== null && occurredAt.getTime() > closedAt + ROUTE_EXECUTION_CLOCK_SKEW_MS) {
+            throw new BadRequestException('The dispatch event is outside the route execution window.');
         }
     }
 

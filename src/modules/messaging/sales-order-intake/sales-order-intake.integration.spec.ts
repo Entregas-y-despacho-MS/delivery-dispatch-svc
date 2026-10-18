@@ -6,6 +6,7 @@ import { PendingSalesOrder } from './entities/pending-sales-order.entity.js';
 import { TypeOrmConsolidationRecord } from './repositories/typeorm-consolidation-record.js';
 import { TypeOrmExistingDispatchChanges } from './repositories/typeorm-existing-dispatch-changes.js';
 import { TypeOrmPendingSalesOrderStore } from './repositories/typeorm-pending-sales-order.store.js';
+import { createDispatchStatusPublication } from '../../../../test/helpers/dispatch-status-publication.js';
 
 /**
  * Against a real PostgreSQL with the delivery-dispatch-db schema loaded **including migrations 013
@@ -215,7 +216,7 @@ describe.skipIf(!PORT)('sales-order intake against PostgreSQL', () => {
     });
 
     describe('TypeOrmExistingDispatchChanges', () => {
-        const changes = () => new TypeOrmExistingDispatchChanges(dataSource);
+        const changes = () => new TypeOrmExistingDispatchChanges(dataSource, createDispatchStatusPublication(dataSource));
         const change = (salesOrderId: string, blocks: Record<string, unknown>) => ({
             salesOrderId,
             source: 'marketplace' as const,
@@ -346,9 +347,25 @@ describe.skipIf(!PORT)('sales-order intake against PostgreSQL', () => {
 
             expect(outcome).toMatchObject({ status: 'applied', statusAfter: 'cancelled' });
             expect((await dispatchRow(dispatch.id)).status).toBe('cancelled');
+            const cancelled = await dispatchRow(dispatch.id);
+            expect(cancelled.tracking_code).toMatch(/^DSP-\d{4}-\d{5}$/);
             const [event] = await eventsOf(dispatch.id);
             expect(event).toMatchObject({ event_type: 'status_changed' });
-            expect(event.metadata).toMatchObject({ from: 'pending', to: 'cancelled' });
+            expect(event.metadata).toMatchObject({ from: 'pending', to: 'cancelled', reasonCode: 'ORDER-CANCELLED', outboundRecordVersion: 1 });
+            const [message] = await manager().query(
+                `SELECT payload FROM outbound_messages
+                  WHERE type = 'dispatch.transfer.status_changed'
+                    AND payload->'data'->>'salesOrderId' = $1`,
+                [dispatch.ref],
+            );
+            expect(message.payload.data).toMatchObject({
+                salesOrderId: dispatch.ref,
+                trackingCode: cancelled.tracking_code,
+                status: 'cancelled',
+                previousStatus: 'pending',
+                reasonCode: 'ORDER-CANCELLED',
+                recordVersion: 1,
+            });
         });
 
         it('cancels an in_planning dispatch and leaves its batch', async () => {
@@ -418,7 +435,7 @@ describe.skipIf(!PORT)('sales-order intake against PostgreSQL', () => {
     });
 
     describe('TypeOrmExistingDispatchChanges.applyShipmentChange', () => {
-        const changes = () => new TypeOrmExistingDispatchChanges(dataSource);
+        const changes = () => new TypeOrmExistingDispatchChanges(dataSource, createDispatchStatusPublication(dataSource));
         const PKG_1 = { packageId: 'PKG-1', lengthCm: 40, widthCm: 30, heightCm: 25, grossWeightKg: 6.4 };
         const PKG_2 = { packageId: 'PKG-2', lengthCm: 10, widthCm: 10, heightCm: 10, grossWeightKg: 1 };
 
@@ -802,7 +819,7 @@ describe.skipIf(!PORT)('sales-order intake against PostgreSQL', () => {
             try {
                 await expect(
                     dataSource.transaction(async (tx) => {
-                        await new TypeOrmExistingDispatchChanges(dataSource).applyDeliveryChange(
+                        await new TypeOrmExistingDispatchChanges(dataSource, createDispatchStatusPublication(dataSource)).applyDeliveryChange(
                             {
                                 salesOrderId: dispatch.ref,
                                 source: 'marketplace',
@@ -835,7 +852,7 @@ describe.skipIf(!PORT)('sales-order intake against PostgreSQL', () => {
             try {
                 await expect(
                     dataSource.transaction(async (tx) => {
-                        const outcome = await new TypeOrmExistingDispatchChanges(dataSource).applyShipmentChange(
+                        const outcome = await new TypeOrmExistingDispatchChanges(dataSource, createDispatchStatusPublication(dataSource)).applyShipmentChange(
                             {
                                 salesOrderId: dispatch.ref,
                                 source: 'inventory',

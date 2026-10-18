@@ -11,6 +11,8 @@ const request = {
   products: [{ productId: 'SKU-1', quantity: 3 }],
 };
 
+const statusPublication = { publish: vi.fn().mockResolvedValue(1) };
+
 describe('ProcurementPickupRepository', () => {
   it('creates a plannable supplier pickup and persists expected products', async () => {
     const query = vi
@@ -19,7 +21,7 @@ describe('ProcurementPickupRepository', () => {
       .mockResolvedValueOnce([{ warehouse_id: 9 }]) // destination warehouse lookup
       .mockResolvedValueOnce([{ dispatch_id: 42 }]) // dispatch insert
       .mockResolvedValue([]);
-    const repository = new ProcurementPickupRepository();
+    const repository = new ProcurementPickupRepository(statusPublication as never);
     const completeRequest = {
       ...request,
       warehouseId: 'WH-LPZ-01',
@@ -68,7 +70,7 @@ describe('ProcurementPickupRepository', () => {
       .mockResolvedValueOnce([]) // destination warehouse lookup
       .mockResolvedValueOnce([{ dispatch_id: 42 }]) // dispatch insert
       .mockResolvedValue([]);
-    const repository = new ProcurementPickupRepository();
+    const repository = new ProcurementPickupRepository(statusPublication as never);
 
     await repository.applyRequested(request, {
       manager: { query } as unknown as EntityManager,
@@ -112,7 +114,7 @@ describe('ProcurementPickupRepository', () => {
         },
       ])
       .mockResolvedValue([]);
-    const repository = new ProcurementPickupRepository();
+    const repository = new ProcurementPickupRepository(statusPublication as never);
 
     await repository.applyCancelled(
       {
@@ -145,12 +147,38 @@ describe('ProcurementPickupRepository', () => {
     ).toBe(false);
   });
 
+  it('publishes cancellation with the previous state and a contract reason inside the transaction', async () => {
+    statusPublication.publish.mockClear();
+    const query = vi.fn().mockResolvedValueOnce([scheduledPickup()]).mockResolvedValue([]);
+    const manager = { query } as unknown as EntityManager;
+    const repository = new ProcurementPickupRepository(statusPublication as never);
+
+    await repository.applyCancelled(
+      {
+        purchaseOrderId: 'PO-1',
+        recordVersion: 2,
+        updatedAt: '2026-10-12T16:00:00Z',
+        cancelledAt: '2026-10-12T15:59:00Z',
+      },
+      { manager },
+    );
+
+    expect(String(query.mock.calls.find(([sql]) => String(sql).includes('UPDATE dispatches'))?.[0]))
+      .toContain('tracking_code = COALESCE(tracking_code, next_tracking_code())');
+    expect(statusPublication.publish).toHaveBeenCalledWith(manager, expect.objectContaining({
+      dispatchId: 42,
+      status: 'cancelled',
+      previousStatus: 'scheduled',
+      reasonCode: 'ORDER-CANCELLED',
+    }));
+  });
+
   it('preserves a scheduled pickup when an update changes only estimates', async () => {
     const query = vi
       .fn()
       .mockResolvedValueOnce([scheduledPickup()])
       .mockResolvedValue([]);
-    const repository = new ProcurementPickupRepository();
+    const repository = new ProcurementPickupRepository(statusPublication as never);
 
     const outcome = await repository.applyUpdated(
       {
@@ -181,7 +209,7 @@ describe('ProcurementPickupRepository', () => {
       .mockResolvedValueOnce([scheduledPickup()])
       .mockResolvedValueOnce([])
       .mockResolvedValue([]);
-    const repository = new ProcurementPickupRepository();
+    const repository = new ProcurementPickupRepository(statusPublication as never);
 
     const outcome = await repository.applyUpdated(
       {

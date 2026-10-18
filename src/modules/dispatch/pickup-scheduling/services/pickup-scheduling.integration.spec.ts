@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { MessageValidator } from '../../../../plugins/messaging/envelope/message-validator.js';
 import { OutboxService } from '../../../messaging/outbound-messages/services/outbox.service.js';
 import { ProcurementPickupRepository } from '../../../messaging/procurement-pickup-intake/repositories/procurement-pickup.repository.js';
+import { createDispatchStatusPublication } from '../../../../../test/helpers/dispatch-status-publication.js';
 import {
     DispatchNotSchedulableException,
     PickupWindowsDoNotIntersectException,
@@ -83,7 +84,7 @@ describe.skipIf(!PORT)('PickupSchedulingService against PostgreSQL', () => {
     const createPickup = async (supplierStartUtc: string, supplierEndUtc: string): Promise<{ id: number; orderId: string }> => {
         const wh = await warehouse();
         const orderId = `IT-PO-${RUN}-${++counter}`;
-        await new ProcurementPickupRepository().applyRequested(
+        await new ProcurementPickupRepository(createDispatchStatusPublication(dataSource)).applyRequested(
             {
                 purchaseOrderId: orderId,
                 recordVersion: 1,

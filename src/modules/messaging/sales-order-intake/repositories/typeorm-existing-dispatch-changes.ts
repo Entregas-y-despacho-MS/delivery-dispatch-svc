@@ -13,6 +13,7 @@ import {
     type DispatchSnapshot,
 } from '../domain/dispatch-change.rules.js';
 import { planShipmentChange, type ShipmentDispatchSnapshot } from '../domain/shipment-change.rules.js';
+import { DispatchStatusPublicationService } from '../../../dispatch/dispatch-status-publication/dispatch-status-publication.service.js';
 import {
     ExistingDispatchChanges,
     type ChangeSource,
@@ -61,7 +62,10 @@ const COLUMN_OF: Record<keyof ColumnChanges, string> = {
  */
 @Injectable()
 export class TypeOrmExistingDispatchChanges extends ExistingDispatchChanges {
-    constructor(@InjectDataSource() private readonly dataSource: DataSource) {
+    constructor(
+        @InjectDataSource() private readonly dataSource: DataSource,
+        private readonly statusPublication: DispatchStatusPublicationService,
+    ) {
         super();
     }
 
@@ -156,16 +160,25 @@ export class TypeOrmExistingDispatchChanges extends ExistingDispatchChanges {
 
         const sets = [
             `dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = 'cancelled')`,
+            'tracking_code = COALESCE(tracking_code, next_tracking_code())',
             'updated_at = NOW()',
         ];
         if (plan.removeFromProposal) await this.leaveBatch(manager, snapshot, sets);
 
         await manager.query(`UPDATE dispatches SET ${sets.join(', ')} WHERE dispatch_id = $1`, [snapshot.dispatchId]);
+        const outboundRecordVersion = await this.statusPublication.publish(manager, {
+            dispatchId: snapshot.dispatchId,
+            status: 'cancelled',
+            previousStatus: snapshot.status,
+            occurredAt: new Date(input.cancelledAt),
+            reasonCode: 'ORDER-CANCELLED',
+        });
         await this.recordEvent(manager, snapshot.dispatchId, 'status_changed', {
             source: input.source,
             from: snapshot.status,
             to: 'cancelled',
-            reasonCode: 'order_cancelled',
+            reasonCode: 'ORDER-CANCELLED',
+            ...(outboundRecordVersion !== null && { outboundRecordVersion }),
             cancelledAt: input.cancelledAt,
             reason: input.reason ?? null,
             removedFromProposal: plan.removeFromProposal,

@@ -33,8 +33,12 @@ describe('CreateIncidentReasonDto — code', () => {
     });
 
     it('rechaza más de 30 caracteres, acepta exactamente 30', async () => {
-        expect(Object.keys(await errorsOf(CreateIncidentReasonDto, { ...BASE, code: 'A'.repeat(31) }))).toEqual(['code']);
-        expect(await errorsOf(CreateIncidentReasonDto, { ...BASE, code: 'A'.repeat(30) })).toEqual({});
+        expect(Object.keys(await errorsOf(CreateIncidentReasonDto, { ...BASE, code: `INC-${'A'.repeat(27)}` }))).toEqual(['code']);
+        expect(await errorsOf(CreateIncidentReasonDto, { ...BASE, code: `INC-${'A'.repeat(26)}` })).toEqual({});
+    });
+
+    it.each(['INC', 'INC_2-CODE', 'INC--CODE', '1-INC-CODE', 'INC-CODE-'])('rechaza un código incompatible con el contrato: %s', async (code) => {
+        expect(Object.keys(await errorsOf(CreateIncidentReasonDto, { ...BASE, code }))).toEqual(['code']);
     });
 });
 
@@ -88,6 +92,11 @@ describe('UpdateIncidentReasonDto', () => {
     it('code y name vacíos también se rechazan (no solo null)', async () => {
         expect(Object.keys(await errorsOf(UpdateIncidentReasonDto, { code: '' }))).toEqual(['code']);
         expect(Object.keys(await errorsOf(UpdateIncidentReasonDto, { name: '   ' }))).toEqual(['name']);
+    });
+
+    it('un código actualizado debe seguir el formato que exige el contrato saliente', async () => {
+        expect(await errorsOf(UpdateIncidentReasonDto, { code: 'INC-CUST-ABSENT' })).toEqual({});
+        expect(Object.keys(await errorsOf(UpdateIncidentReasonDto, { code: 'INC_reason' }))).toEqual(['code']);
     });
 
     it('active debe ser un booleano de verdad, no la cadena "false"', async () => {

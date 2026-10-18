@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DispatchesModule } from '../../dispatch/dispatches/dispatches.module.js';
+import { DispatchStatusPublicationModule } from '../../dispatch/dispatch-status-publication/dispatch-status-publication.module.js';
 import { SalesOrderSyncModule } from '../sales-order-sync/sales-order-sync.module.js';
 import { ShipmentIntakeModule } from '../shipment-intake/shipment-intake.module.js';
 import { ShipmentConsolidator } from '../shipment-intake/ports/shipment-consolidator.port.js';
@@ -27,7 +28,7 @@ import { ProcurementPickupConsumer } from '../procurement-pickup-intake/services
  * (ST-72.4); this module is activated after that PR is integrated.
  */
 @Module({
-    imports:   [TypeOrmModule.forFeature([PendingSalesOrder]), SalesOrderSyncModule, ShipmentIntakeModule, DispatchesModule],
+    imports:   [TypeOrmModule.forFeature([PendingSalesOrder]), SalesOrderSyncModule, ShipmentIntakeModule, DispatchesModule, DispatchStatusPublicationModule],
     providers: [
         { provide: PendingSalesOrderStore, useClass: TypeOrmPendingSalesOrderStore },
         { provide: ConsolidationRecord, useClass: TypeOrmConsolidationRecord },

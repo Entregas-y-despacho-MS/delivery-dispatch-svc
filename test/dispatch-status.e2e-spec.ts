@@ -29,6 +29,8 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
     const auth = (driver: 'driver1' | 'driver2') => ({ Authorization: `Bearer ${tokens[driver]}` });
     const patch = (id: number, body: object, driver: 'driver1' | 'driver2' = 'driver1') =>
         request(app.getHttpServer()).patch(`/${apiPrefix}/dispatches/${id}/status`).set(auth(driver)).send(body);
+    const syncEvents = (events: object[], driver: 'driver1' | 'driver2' = 'driver1') =>
+        request(app.getHttpServer()).post(`/${apiPrefix}/sync/events`).set(auth(driver)).send({ events });
     const body = (status: string, eventId = uuidv7()) => ({
         status, eventId, occurredAt: new Date().toISOString(), lat: -16.5, lng: -68.1, accuracy: 8.4,
     });
@@ -40,6 +42,11 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
             [users[driver], batchSequence++],
         );
         batchIds.push(id);
+        await dataSource.query(
+            `INSERT INTO route_batch_events (route_batch_id, event_type, actor_type, metadata)
+             VALUES ($1, 'route_started', 'system', $2::jsonb)`,
+            [id, JSON.stringify({ startedAt: new Date(Date.now() - 5 * 60_000).toISOString() })],
+        );
         return id as number;
     };
 
@@ -53,9 +60,9 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
         dispatchRefs.push(sourceOrderRef);
         const [{ dispatch_id: id }] = await dataSource.query(
             `INSERT INTO dispatches (dispatch_type_id, dispatch_status_id, route_batch_id, sequence_order,
-                                    source_order_ref, delivery_address, evidence_policy)
-             VALUES ($1, $2, $3, $4, $5, 'Dirección E2E ST-30.3', $6) RETURNING dispatch_id`,
-            [deliveryTypeId, statusIds[status], batchId, sequenceOrder, sourceOrderRef, evidencePolicy],
+                                    source_order_ref, tracking_code, delivery_address, evidence_policy)
+             VALUES ($1, $2, $3, $4, $5, $6, 'Dirección E2E ST-30.3', $7) RETURNING dispatch_id`,
+            [deliveryTypeId, statusIds[status], batchId, sequenceOrder, sourceOrderRef, `DSP-2026-${String(sequenceOrder).padStart(5, '0')}`, evidencePolicy],
         );
         return id as number;
     };
@@ -64,7 +71,7 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
         await dataSource.query(
             `INSERT INTO delivery_evidences (delivery_evidence_id, dispatch_id, type, file_url, otp_code)
              VALUES ($1, $2, $3, $4, $5)`,
-            [uuidv7(), dispatchId, type, type === 'otp' ? null : 'https://example.test/e2e-evidence', type === 'otp' ? '123456' : null],
+            [uuidv7(), dispatchId, type, type === 'otp' ? null : 'https://example.test/e2e-evidence', null],
         );
     };
 
@@ -77,6 +84,12 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
         `SELECT event_type, actor_user_id, actor_type, client_event_id, metadata
            FROM dispatch_events WHERE dispatch_id = $1 AND event_type = 'status_changed'
           ORDER BY dispatch_event_id`, [id]);
+
+    const outboundFor = async (id: number) => dataSource.query(
+        `SELECT om.status, om.type, om.payload->'data' AS data
+           FROM outbound_messages om
+           JOIN dispatches d ON d.source_order_ref = om.payload->'data'->>'salesOrderId'
+          WHERE d.dispatch_id = $1 AND om.type = 'dispatch.transfer.status_changed'`, [id]);
 
     beforeAll(async () => {
         const moduleRef: TestingModule = await Test.createTestingModule({ imports: [AppModule] }).compile();
@@ -118,6 +131,8 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
                 routeBatchIds: batchIds,
                 userNames: [`e2e_st303_%_${run}`],
             }, async (manager) => {
+                await manager.query(`DELETE FROM outbound_messages WHERE payload->'data'->>'salesOrderId' LIKE $1`, [`${prefix}%`]);
+                await manager.query(`DELETE FROM dispatch_incidents WHERE dispatch_id IN (SELECT dispatch_id FROM dispatches WHERE source_order_ref LIKE $1)`, [`${prefix}%`]);
                 await manager.query(`DELETE FROM dispatches WHERE source_order_ref LIKE $1`, [`${prefix}%`]);
                 if (batchIds.length) await manager.query(`DELETE FROM route_batches WHERE route_batch_id = ANY($1::int[])`, [batchIds]);
                 await manager.query(`DELETE FROM users WHERE username LIKE $1`, [`e2e_st303_%_${run}`]);
@@ -171,6 +186,88 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
         const response = await patch(id, body('delivered'));
         expect(response.status).toBe(200);
         expect(response.body.status).toBe('delivered');
+    });
+
+    it('encola delivered una sola vez con payload seguro y recordVersion auditable', async () => {
+        const id = await newDispatch(await newBatch('driver1'), 'in_transit');
+        await addEvidence(id, 'signature');
+        const event = body('delivered');
+
+        expect((await patch(id, event)).status).toBe(200);
+        expect((await patch(id, event)).status).toBe(200);
+
+        const messages = await outboundFor(id);
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toMatchObject({ status: 'pending', type: 'dispatch.transfer.status_changed' });
+        expect(messages[0].data).toMatchObject({
+            salesOrderId: expect.any(String), trackingCode: expect.any(String), status: 'delivered',
+            previousStatus: 'in_transit', recordVersion: 1,
+        });
+        expect(messages[0].data).not.toHaveProperty('tracking_token');
+        expect(messages[0].data).not.toHaveProperty('trackingToken');
+        expect(await eventsFor(id)).toMatchObject([{
+            metadata: expect.objectContaining({ outboundRecordVersion: 1, status: 'delivered', previousStatus: 'in_transit' }),
+        }]);
+    });
+
+    it('publica not_delivered desde la sincronización offline y no duplica al reintentar', async () => {
+        const id = await newDispatch(await newBatch('driver1'));
+        const event = {
+            type: 'status_change', clientEventId: uuidv7(), dispatchId: id,
+            occurredAt: new Date().toISOString(), dispatchStatusId: statusIds.not_delivered,
+            detail: 'Cliente ausente',
+        };
+
+        expect((await syncEvents([event])).body.results).toMatchObject([{ clientEventId: event.clientEventId, outcome: 'applied' }]);
+        expect((await syncEvents([event])).body.results).toMatchObject([{ clientEventId: event.clientEventId, outcome: 'already_processed' }]);
+        expect(await dispatchRow(id)).toMatchObject({ status: 'not_delivered' });
+        expect(await outboundFor(id)).toMatchObject([{
+            status: 'pending', type: 'dispatch.transfer.status_changed',
+            data: expect.objectContaining({ status: 'not_delivered', previousStatus: 'out_for_delivery', recordVersion: 1 }),
+        }]);
+    });
+
+    it('no permite que el móvil sincronice returned: es una decisión del coordinador', async () => {
+        const id = await newDispatch(await newBatch('driver1'));
+        const event = {
+            type: 'status_change', clientEventId: uuidv7(), dispatchId: id,
+            occurredAt: new Date().toISOString(), dispatchStatusId: statusIds.returned,
+        };
+
+        const response = await syncEvents([event]);
+
+        expect(response.status).toBe(201);
+        expect(response.body.results).toMatchObject([{
+            clientEventId: event.clientEventId,
+            outcome: 'failed',
+            error: 'The driver cannot set dispatch status returned.',
+        }]);
+        expect(await dispatchRow(id)).toMatchObject({ status: 'out_for_delivery' });
+        expect(await eventsFor(id)).toHaveLength(0);
+        expect(await outboundFor(id)).toHaveLength(0);
+    });
+
+    it('convierte y publica un incidente offline con su reasonCode', async () => {
+        const id = await newDispatch(await newBatch('driver1'));
+        const [{ incident_reason_id: incidentReasonId, code }] = await dataSource.query(
+            `SELECT incident_reason_id, code FROM incident_reasons WHERE active = true AND deleted_at IS NULL ORDER BY incident_reason_id LIMIT 1`,
+        );
+        const event = {
+            type: 'incident', clientEventId: uuidv7(), dispatchId: id,
+            occurredAt: new Date().toISOString(), incidentReasonId,
+            detail: 'Bulto dañado',
+        };
+
+        const response = await syncEvents([event]);
+
+        expect(response.body.results).toMatchObject([{ clientEventId: event.clientEventId, outcome: 'applied' }]);
+        expect(await dispatchRow(id)).toMatchObject({ status: 'incident' });
+        expect(await outboundFor(id)).toMatchObject([{
+            status: 'pending', type: 'dispatch.transfer.status_changed',
+            data: expect.objectContaining({
+                status: 'incident', previousStatus: 'out_for_delivery', reasonCode: code, recordVersion: 1,
+            }),
+        }]);
     });
 
     it('permite reintentar el mismo eventId sin duplicar el evento', async () => {
