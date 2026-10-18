@@ -73,7 +73,8 @@ export class SyncService {
                 dispatchId: dto.dispatchId,
                 type:       dto.type,
                 fileUrl,
-                otpCode:    dto.otpCode ?? null,
+                // The code proves the driver's local verification step; never persist it in plaintext.
+                otpCode:    null,
             });
             return { clientEventId: dto.clientEventId, outcome: SyncEventOutcome.APPLIED };
         } catch (err) {
@@ -160,6 +161,7 @@ export class SyncService {
                 'SELECT code FROM incident_reasons WHERE incident_reason_id = $1 AND deleted_at IS NULL',
                 [event.incidentReasonId],
             );
+            if (!reason) throw new BadRequestException('The given incident reason does not exist.');
             const incidentStatusId = await this.dispatchesService.getStatusIdByName('incident', options);
             if (!incidentStatusId) throw new BadRequestException('The incident dispatch status is not configured.');
 

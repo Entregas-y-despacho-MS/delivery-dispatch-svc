@@ -26,6 +26,7 @@ import { OutboxService } from './services/outbox.service.js';
 const PORT = process.env.TEST_DB_PORT;
 const CONTRACTS_DIR = resolve(process.cwd(), 'contracts/messages');
 const DEPARTED = 'dispatch.shipment.departed';
+const STATUS_CHANGED = 'dispatch.transfer.status_changed';
 const READY = 'inventory.shipment.ready';
 
 const exampleData = (topic: string): Record<string, unknown> =>
@@ -55,6 +56,11 @@ describe.skipIf(!PORT)('outbox against PostgreSQL', () => {
 
     const newDeparted = (): MessageEnvelope => {
         const envelope = buildEnvelope({ type: DEPARTED, source: 'dispatch', data: exampleData(DEPARTED) });
+        created.push(envelope.messageId);
+        return envelope;
+    };
+    const newStatusChanged = (): MessageEnvelope => {
+        const envelope = buildEnvelope({ type: STATUS_CHANGED, source: 'dispatch', data: exampleData(STATUS_CHANGED) });
         created.push(envelope.messageId);
         return envelope;
     };
@@ -160,6 +166,28 @@ describe.skipIf(!PORT)('outbox against PostgreSQL', () => {
         await publisher(bus).publishPending();
 
         expect(bus.publish).toHaveBeenCalledTimes(2);
+        expect(await row(envelope.messageId)).toMatchObject({ status: 'sent', attempts: 2 });
+    });
+
+    it('keeps a delivery-result message pending during broker failure and publishes it after recovery', async () => {
+        const envelope = newStatusChanged();
+        await outbox().enqueue(envelope);
+        const bus = { publish: vi.fn().mockRejectedValue(new Error('broker down')), subscribe: vi.fn() };
+
+        const outage = await publisher(bus).publishPending();
+        expect(outage.retried).toBe(1);
+        expect(await row(envelope.messageId)).toMatchObject({ status: 'pending', attempts: 1, waiting: true });
+
+        bus.publish.mockResolvedValue(undefined);
+        await makeDue(envelope.messageId);
+        const recovered = await publisher(bus).publishPending();
+
+        expect(recovered.sent).toBe(1);
+        expect(bus.publish).toHaveBeenCalledTimes(2);
+        expect(bus.publish).toHaveBeenLastCalledWith(STATUS_CHANGED, expect.objectContaining({
+            messageId: envelope.messageId,
+            data: expect.objectContaining({ status: 'not_delivered', recordVersion: 7 }),
+        }));
         expect(await row(envelope.messageId)).toMatchObject({ status: 'sent', attempts: 2 });
     });
 

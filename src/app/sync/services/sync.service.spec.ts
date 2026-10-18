@@ -300,10 +300,11 @@ describe('SyncService.syncEvidence', () => {
     });
 
     it('an otp without its code is failed; with it, applied and no file needed', async () => {
-        const { service } = build();
+        const { service, evidences } = build();
 
         expect(await service.syncEvidence(dto({ type: 'otp' }), undefined, DRIVER)).toMatchObject({ outcome: 'failed', error: 'An otp evidence needs its otpCode.' });
         expect((await service.syncEvidence(dto({ type: 'otp', otpCode: '123456' }), undefined, DRIVER)).outcome).toBe('applied');
+        expect(evidences.create).toHaveBeenCalledWith(expect.objectContaining({ type: 'otp', otpCode: null }));
     });
 
     it('someone else\'s dispatch → failed "Dispatch not found." and nothing is uploaded', async () => {
