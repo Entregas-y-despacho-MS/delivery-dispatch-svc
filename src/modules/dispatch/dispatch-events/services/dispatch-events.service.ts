@@ -9,6 +9,10 @@ export interface CreateDispatchEventData {
     eventType:       string;
     detail?:         string | null;
     clientEventId?:  string | null;
+    actorUserId?:    number | null;
+    actorType?:      string | null;
+    reason?:         string | null;
+    metadata?:       Record<string, unknown> | null;
     /** When set, backdates createdAt to when the event actually happened on the device. */
     occurredAt?:     Date;
 }
@@ -27,6 +31,14 @@ export class DispatchEventsService {
         return repo.existsBy({ clientEventId });
     }
 
+    async findByClientEventId(clientEventId: string, options?: MutationOptions): Promise<Pick<DispatchEvent, 'dispatchId' | 'eventType' | 'createdAt' | 'metadata'> | null> {
+        const repo = options?.manager?.getRepository(DispatchEvent) ?? this.rawRepo;
+        return await repo.findOne({
+            where: { clientEventId },
+            select: { dispatchId: true, eventType: true, createdAt: true, metadata: true },
+        });
+    }
+
     async create(data: CreateDispatchEventData, options?: MutationOptions): Promise<DispatchEvent> {
         const repo = options?.manager?.getRepository(DispatchEvent) ?? this.rawRepo;
         const event = repo.create({
@@ -34,6 +46,10 @@ export class DispatchEventsService {
             eventType:      data.eventType,
             detail:         data.detail ?? null,
             clientEventId:  data.clientEventId ?? null,
+            actorUserId:    data.actorUserId ?? null,
+            actorType:      data.actorType ?? null,
+            reason:         data.reason ?? null,
+            metadata:       data.metadata ?? null,
             ...(data.occurredAt && { createdAt: data.occurredAt }),
         });
         return repo.save(event);

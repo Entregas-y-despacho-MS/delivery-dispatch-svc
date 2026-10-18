@@ -43,6 +43,7 @@ import { FinalReviewModule } from './app/final-review/final-review.module.js';
 import { RouteBatchCorrectionModule } from './app/route-batch-correction/route-batch-correction.module.js';
 import { RouteCutoffModule } from './app/route-cutoff/route-cutoff.module.js';
 import { PublicTrackingModule } from './app/public-tracking/public-tracking.module.js';
+import { DispatchStatusModule } from './app/dispatch-status/dispatch-status.module.js';
 
 @Module({
   imports: [
@@ -65,6 +66,7 @@ import { PublicTrackingModule } from './app/public-tracking/public-tracking.modu
     PromiseFirmingModule,
     PublicTrackingModule,
     RouteCutoffModule,
+    DispatchStatusModule,
     RouteBatchCorrectionModule,
     FinalReviewModule,
     UsersModule,
