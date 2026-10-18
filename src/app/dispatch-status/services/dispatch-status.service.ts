@@ -64,7 +64,6 @@ export class DispatchStatusService {
     ) {}
 
     async update(dispatchId: number, dto: UpdateDispatchStatusDto, driverId: number): Promise<DispatchStatusResponseDto> {
-        this.assertPlausibleTime(dto.occurredAt);
         const result = await this.dataSource.transaction(async (manager) => this.applyTransition(manager, dispatchId, dto, driverId));
 
         // Downstream publication, automatic batch closure and socket notifications must never
@@ -101,10 +100,9 @@ export class DispatchStatusService {
         if (!batch || batch.driver_id !== driverId || dispatch.route_batch_id !== batch.id) {
             throw new ForbiddenException({ message: 'Dispatch is not assigned to your route.', error: 'INSUFFICIENT_PERMISSIONS' });
         }
-        if (batch.status !== 'in_execution') {
-            throw new DispatchStatusConflictException('ROUTE_BATCH_NOT_IN_EXECUTION', 'The route batch must be in execution before a driver can change a dispatch status.');
-        }
 
+        // Resolve retries after authorization but before mutable workflow/time guards. A successful
+        // event may have closed the batch, and its original occurredAt may now be outside the window.
         const previous: IdempotencyRow | null = await this.dispatchEvents.findByClientEventId(dto.eventId, { manager });
         if (previous) {
             if (previous.dispatchId !== dispatchId || previous.eventType !== 'status_changed') {
@@ -119,6 +117,11 @@ export class DispatchStatusService {
                     updatedAt: dispatch.updated_at,
                 },
             };
+        }
+
+        this.assertPlausibleTime(dto.occurredAt);
+        if (batch.status !== 'in_execution') {
+            throw new DispatchStatusConflictException('ROUTE_BATCH_NOT_IN_EXECUTION', 'The route batch must be in execution before a driver can change a dispatch status.');
         }
 
         if (FINAL_STATUSES.includes(dispatch.status)) {

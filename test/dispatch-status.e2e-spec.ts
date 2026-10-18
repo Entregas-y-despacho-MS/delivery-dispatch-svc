@@ -181,6 +181,35 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
         expect(await eventsFor(id)).toHaveLength(1);
     });
 
+    it('reconoce el reintento idempotente después de que se cierra el lote', async () => {
+        const batch = await newBatch('driver1');
+        const id = await newDispatch(batch);
+        const event = body('in_transit');
+        expect((await patch(id, event)).status).toBe(200);
+        await dataSource.query(`UPDATE route_batches SET status = 'closed' WHERE route_batch_id = $1`, [batch]);
+
+        const retry = await patch(id, event);
+
+        expect(retry.status).toBe(200);
+        expect(retry.body).toMatchObject({ dispatchId: id, status: 'in_transit' });
+        expect(await eventsFor(id)).toHaveLength(1);
+    });
+
+    it('reconoce un eventId ya procesado aunque su occurredAt tenga más de 30 días', async () => {
+        const id = await newDispatch(await newBatch('driver1'));
+        const event = body('in_transit');
+        expect((await patch(id, event)).status).toBe(200);
+
+        const retry = await patch(id, {
+            ...event,
+            occurredAt: new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString(),
+        });
+
+        expect(retry.status).toBe(200);
+        expect(retry.body.status).toBe('in_transit');
+        expect(await eventsFor(id)).toHaveLength(1);
+    });
+
     it('rechaza un evento de otro repartidor con 403 y no cambia el despacho', async () => {
         const id = await newDispatch(await newBatch('driver1'));
         const response = await patch(id, body('in_transit'), 'driver2');
@@ -198,5 +227,45 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
         expect(blocked.status).toBe(409);
         expect(blocked.body.error).toBe('ANOTHER_DISPATCH_IN_TRANSIT');
         expect(await dispatchRow(second)).toMatchObject({ status: 'out_for_delivery' });
+    });
+
+    it('rechaza un evento anterior al último cambio con 409', async () => {
+        const id = await newDispatch(await newBatch('driver1'));
+        expect((await patch(id, body('in_transit'))).status).toBe(200);
+        const stale = await patch(id, {
+            ...body('not_delivered'),
+            occurredAt: new Date(Date.now() - 60_000).toISOString(),
+        });
+        expect(stale.status).toBe(409);
+        expect(stale.body.error).toBe('DISPATCH_STATUS_EVENT_OUT_OF_ORDER');
+        expect(await dispatchRow(id)).toMatchObject({ status: 'in_transit' });
+    });
+
+    it('rechaza una transición desde un despacho terminal con 409', async () => {
+        const id = await newDispatch(await newBatch('driver1'), 'delivered');
+        const response = await patch(id, body('not_delivered'));
+        expect(response.status).toBe(409);
+        expect(response.body.error).toBe('DISPATCH_STATUS_TERMINAL');
+        expect(await dispatchRow(id)).toMatchObject({ status: 'delivered' });
+    });
+
+    it('rechaza un lote que ya no está en ejecución con 409', async () => {
+        const batch = await newBatch('driver1');
+        const id = await newDispatch(batch);
+        await dataSource.query(`UPDATE route_batches SET status = 'closed' WHERE route_batch_id = $1`, [batch]);
+        const response = await patch(id, body('in_transit'));
+        expect(response.status).toBe(409);
+        expect(response.body.error).toBe('ROUTE_BATCH_NOT_IN_EXECUTION');
+        expect(await dispatchRow(id)).toMatchObject({ status: 'out_for_delivery' });
+    });
+
+    it('no acepta foto ni firma como sustituto del OTP de high_value_control', async () => {
+        const id = await newDispatch(await newBatch('driver1'), 'in_transit', 'high_value_control');
+        await addEvidence(id, 'signature');
+        await addEvidence(id, 'photo');
+        const response = await patch(id, body('delivered'));
+        expect(response.status).toBe(422);
+        expect(response.body.error).toBe('DISPATCH_EVIDENCE_REQUIRED');
+        expect(await dispatchRow(id)).toMatchObject({ status: 'in_transit' });
     });
 });

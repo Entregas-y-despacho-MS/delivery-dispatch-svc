@@ -111,6 +111,29 @@ describe('DispatchStatusService.update', () => {
         expect(ctx.events.emit).not.toHaveBeenCalled();
     });
 
+    it('returns the current state for a repeated eventId after its batch has closed', async () => {
+        const ctx = setup({
+            current: DispatchStatusEnum.DELIVERED,
+            batchStatus: 'closed',
+            previous: { dispatchId: 12, eventType: 'status_changed', createdAt: new Date(), metadata: { previousStatus: 'in_transit' } },
+        });
+        const result = await ctx.service.update(12, dto(DispatchStatusEnum.DELIVERED), 7);
+        expect(result).toMatchObject({ dispatchId: 12, status: 'delivered', previousStatus: 'in_transit' });
+        expect(ctx.dispatchEvents.create).not.toHaveBeenCalled();
+        expect(ctx.events.emit).not.toHaveBeenCalled();
+    });
+
+    it('returns an old repeated event before applying the occurredAt age limit', async () => {
+        const ctx = setup({
+            current: DispatchStatusEnum.IN_TRANSIT,
+            previous: { dispatchId: 12, eventType: 'status_changed', createdAt: new Date(), metadata: { previousStatus: 'out_for_delivery' } },
+        });
+        const oldEvent = dto(DispatchStatusEnum.IN_TRANSIT);
+        oldEvent.occurredAt = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
+        await expect(ctx.service.update(12, oldEvent, 7)).resolves.toMatchObject({ status: 'in_transit' });
+        expect(ctx.dispatchEvents.create).not.toHaveBeenCalled();
+    });
+
     it('rejects a duplicate eventId reused by a different dispatch', async () => {
         const ctx = setup({ previous: { dispatchId: 90, eventType: 'status_changed', createdAt: new Date(), metadata: {} } });
         await expect(ctx.service.update(12, dto(DispatchStatusEnum.IN_TRANSIT), 7)).rejects.toBeInstanceOf(DispatchStatusConflictException);
