@@ -314,12 +314,16 @@ describe('VerificationCodeService', () => {
 
         it('gives back a claimed proof with the life it had left', async () => {
             vi.useFakeTimers();
-            const { service, lastCode } = setup();
+            const { service, cache, lastCode } = setup();
             const proof = await proofOf(service, lastCode);
             const claimed = (await service.claimProof(7, proof))!;
 
             vi.advanceTimersByTime(4 * MIN);
+            const store = vi.spyOn(cache, 'setIfAbsent');
             await service.releaseProof(7, claimed);
+
+            // The store keeps it for exactly what was left (6 of the 10 minutes), not for a fresh full life.
+            expect(store).toHaveBeenCalledWith('public-tracking:proof:7', expect.any(String), 6 * 60);
 
             await expect(service.hasValidProof(7, proof)).resolves.toBe(true);
             vi.advanceTimersByTime(6 * MIN - 1000);
@@ -335,7 +339,7 @@ describe('VerificationCodeService', () => {
             const claimed = (await service.claimProof(7, proof))!;
 
             vi.advanceTimersByTime(10 * MIN);
-            const store = vi.spyOn(cache, 'setWithTtl');
+            const store = vi.spyOn(cache, 'setIfAbsent');
             await service.releaseProof(7, claimed);
 
             await expect(service.hasValidProof(7, proof)).resolves.toBe(false);
@@ -366,6 +370,42 @@ describe('VerificationCodeService', () => {
             await service.releaseProof(7, claimed);
 
             await expect(service.hasValidProof(7, fresh)).resolves.toBe(true);
+            await expect(service.hasValidProof(7, old)).resolves.toBe(false);
+        });
+
+        it('does not overwrite a proof issued between the check and the write of the give-back (the interleaving)', async () => {
+            // A cache where, just before the give-back writes, the customer gets a newer proof: the worst moment.
+            class RacingCache extends MemoryCacheAdapter {
+                intruder: string | null = null;
+
+                private async intrude(cacheKey: string, ttlSeconds: number): Promise<void> {
+                    if (this.intruder === null) return;
+                    const record = this.intruder;
+                    this.intruder = null;
+                    await super.setWithTtl(cacheKey, record, ttlSeconds);
+                }
+
+                override async setWithTtl(cacheKey: string, value: string, ttlSeconds: number): Promise<void> {
+                    await this.intrude(cacheKey, ttlSeconds);
+                    await super.setWithTtl(cacheKey, value, ttlSeconds);
+                }
+
+                override async setIfAbsent(cacheKey: string, value: string, ttlSeconds: number): Promise<boolean> {
+                    await this.intrude(cacheKey, ttlSeconds);
+                    return await super.setIfAbsent(cacheKey, value, ttlSeconds);
+                }
+            }
+            const cache = new RacingCache();
+            const { service, lastCode } = setup({ cache });
+            const old = await proofOf(service, lastCode);
+            const claimed = (await service.claimProof(7, old))!;
+            const newer = { hash: hashToken('c'.repeat(64)), expiresAt: Date.now() + 5 * MIN };
+            cache.intruder = JSON.stringify(newer);
+
+            await service.releaseProof(7, claimed);
+
+            expect(JSON.parse((await cache.get('public-tracking:proof:7'))!)).toEqual(newer);
+            await expect(service.hasValidProof(7, 'c'.repeat(64))).resolves.toBe(true);
             await expect(service.hasValidProof(7, old)).resolves.toBe(false);
         });
 

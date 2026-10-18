@@ -8,6 +8,13 @@ export abstract class CacheService {
     abstract setWithTtl(key: string, value: string, ttlSeconds: number): Promise<void>;
 
     /**
+     * Stores a value that disappears after `ttlSeconds` ONLY IF the key is empty, in one atomic step (Redis `SET NX EX`).
+     * True when it was stored, false when something was already there; it never overwrites. Use it to put something back
+     * without trampling what someone else stored in the meantime: a read followed by a write is not safe.
+     */
+    abstract setIfAbsent(key: string, value: string, ttlSeconds: number): Promise<boolean>;
+
+    /**
      * Adds 1 to a counter and returns the new value, atomically: two callers never get the same number.
      * The counter lives `ttlSeconds` from its FIRST increment (a fixed window); later increments do not extend it.
      */

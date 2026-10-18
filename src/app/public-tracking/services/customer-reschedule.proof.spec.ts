@@ -146,7 +146,7 @@ describe('the proof of a rescheduling is claimed atomically', () => {
             const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
             const { service, issueProof, cache } = setup({ computeOffers: async () => { throw new OsrmUnavailableException(); } });
             const proof = await issueProof();
-            vi.spyOn(cache, 'setWithTtl').mockRejectedValue(new CacheUnavailableException());
+            vi.spyOn(cache, 'setIfAbsent').mockRejectedValue(new CacheUnavailableException());
 
             await expect(service.reschedule(TOKEN, SLOT, proof, NOW)).rejects.toBeInstanceOf(OsrmUnavailableException);
 

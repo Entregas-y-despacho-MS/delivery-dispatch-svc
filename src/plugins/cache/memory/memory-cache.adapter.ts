@@ -40,6 +40,15 @@ export class MemoryCacheAdapter extends CacheService {
         this.expiresAt.set(key, Date.now() + ttlSeconds * 1000);
     }
 
+    async setIfAbsent(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+        // No `await` between the check and the write: that is what makes it atomic in a single process.
+        this.evictIfExpired(key);
+        if (this.values.has(key)) return false;
+        this.values.set(key, value);
+        this.expiresAt.set(key, Date.now() + ttlSeconds * 1000);
+        return true;
+    }
+
     async increment(key: string, ttlSeconds: number): Promise<number> {
         this.evictIfExpired(key);
         const next = Number(this.values.get(key) ?? 0) + 1;

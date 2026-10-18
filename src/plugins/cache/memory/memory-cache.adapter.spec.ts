@@ -66,6 +66,47 @@ describe('MemoryCacheAdapter', () => {
         await expect(cache.get('proof')).resolves.toBeNull();
     });
 
+    it('stores a value only when the key is empty, and never overwrites', async () => {
+        const cache = new MemoryCacheAdapter();
+
+        await expect(cache.setIfAbsent('proof', 'first', 60)).resolves.toBe(true);
+        await expect(cache.setIfAbsent('proof', 'second', 60)).resolves.toBe(false);
+
+        await expect(cache.get('proof')).resolves.toBe('first');
+    });
+
+    it('does not overwrite a value stored without a time to live either', async () => {
+        const cache = new MemoryCacheAdapter();
+        await cache.set('key', 'kept');
+
+        await expect(cache.setIfAbsent('key', 'other', 60)).resolves.toBe(false);
+
+        await expect(cache.get('key')).resolves.toBe('kept');
+    });
+
+    it('stores again once the previous value expired, with its own time to live', async () => {
+        vi.useFakeTimers();
+        const cache = new MemoryCacheAdapter();
+        await cache.setIfAbsent('proof', 'old', 60);
+
+        vi.advanceTimersByTime(60_000);
+        await expect(cache.setIfAbsent('proof', 'new', 30)).resolves.toBe(true);
+
+        await expect(cache.get('proof')).resolves.toBe('new');
+        vi.advanceTimersByTime(30_000);
+        await expect(cache.get('proof')).resolves.toBeNull();
+    });
+
+    it('lets exactly one of many simultaneous writers store its value', async () => {
+        const cache = new MemoryCacheAdapter();
+
+        const stored = await Promise.all(Array.from({ length: 10 }, (_, i) => cache.setIfAbsent('proof', `writer-${i}`, 60)));
+
+        expect(stored.filter(Boolean)).toHaveLength(1);
+        const winner = stored.indexOf(true);
+        await expect(cache.get('proof')).resolves.toBe(`writer-${winner}`);
+    });
+
     it('delete also forgets the time to live', async () => {
         vi.useFakeTimers();
         const cache = new MemoryCacheAdapter();

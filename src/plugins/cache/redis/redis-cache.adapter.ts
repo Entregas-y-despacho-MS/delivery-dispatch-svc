@@ -80,6 +80,11 @@ export class RedisCacheAdapter extends CacheService implements OnModuleInit, OnM
         });
     }
 
+    async setIfAbsent(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+        // SET NX EX is one command: it answers 'OK' when it stored the value and null when the key already existed.
+        return await this.guard(async () => (await this.client.set(key, value, { NX: true, EX: Math.max(1, Math.ceil(ttlSeconds)) })) === 'OK');
+    }
+
     async increment(key: string, ttlSeconds: number): Promise<number> {
         // One script, so a crash between INCR and EXPIRE can never leave a counter that never expires.
         return await this.guard(async () => Number(await this.client.eval(

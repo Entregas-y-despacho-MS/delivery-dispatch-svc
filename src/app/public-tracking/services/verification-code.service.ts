@@ -138,14 +138,14 @@ export class VerificationCodeService {
 
     /**
      * Gives back a claimed proof that was not used, with only the life it has left (an expired one is not brought back).
-     * If the customer already has a newer proof it is left alone. Never throws for "nothing to give back".
+     * If the customer already has a newer proof it is left alone (atomic "put only if empty"). Never throws for "nothing to give back".
      */
     async releaseProof(dispatchId: number, claimed: ClaimedProof, now: Date = new Date()): Promise<void> {
         const remainingMs = claimed.expiresAt - now.getTime();
         if (remainingMs <= 0) return;
-        const current = await this.cached(() => this.cache.get(key('proof', dispatchId)));
-        if (current !== null) return;
-        await this.cached(() => this.cache.setWithTtl(key('proof', dispatchId), JSON.stringify(claimed), Math.ceil(remainingMs / 1000)));
+        // Only if the key is still empty, in ONE atomic step: a check followed by a write would let a proof issued in
+        // between be overwritten by this old one. If someone stored a newer proof, that one stays and this is dropped.
+        await this.cached(() => this.cache.setIfAbsent(key('proof', dispatchId), JSON.stringify(claimed), Math.ceil(remainingMs / 1000)));
     }
 
     private async ttlSeconds(): Promise<number> {
