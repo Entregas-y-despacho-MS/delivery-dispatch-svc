@@ -4,8 +4,10 @@ import { Throttle } from '@nestjs/throttler';
 import { Public } from '../../auth/decorators/index.js';
 import { ApiBadRequests, ApiConflict, ApiNotFound, errorBody } from '../../../shared/utils/swagger/index.js';
 import { PUBLIC_TRACKING_LIMIT, PUBLIC_TRACKING_TTL_MS } from '../config/throttle.js';
+import { ChangeRequestDto } from '../dto/change-request.dto.js';
 import { PublicTrackingDto } from '../dto/public-tracking.dto.js';
 import { VerificationCodeSentDto, VerificationProofDto, VerifyCodeDto } from '../dto/verification.dto.js';
+import { CustomerResponseService } from '../services/customer-response.service.js';
 import { PublicTrackingService } from '../services/public-tracking.service.js';
 import { VerificationCodeService } from '../services/verification-code.service.js';
 
@@ -30,7 +32,8 @@ const RESCHEDULE_NOT_AVAILABLE = {
  * Error dictionary: TRACKING_LINK_NOT_FOUND 404, TOO_MANY_REQUESTS 429,
  *   RESCHEDULE_NOT_AVAILABLE 409, VERIFICATION_CODE_RATE_LIMITED 429,
  *   INVALID_VERIFICATION_CODE 400, VERIFICATION_CODE_EXPIRED 400,
- *   VERIFICATION_CODE_NOT_SENT 503, VERIFICATION_UNAVAILABLE 503
+ *   VERIFICATION_CODE_NOT_SENT 503, VERIFICATION_UNAVAILABLE 503,
+ *   CONFIRMATION_NOT_AVAILABLE 409, CHANGE_REQUEST_NOT_AVAILABLE 409
  */
 @ApiTags('Public tracking')
 @Public()
@@ -40,6 +43,7 @@ export class PublicTrackingController {
     constructor(
         private readonly service: PublicTrackingService,
         private readonly verification: VerificationCodeService,
+        private readonly responses: CustomerResponseService,
     ) {}
 
     @Get(':token')
@@ -106,5 +110,38 @@ export class PublicTrackingController {
     })
     async verifyCode(@Param('token') token: string, @Body() dto: VerifyCodeDto): Promise<VerificationProofDto> {
         return await this.verification.verify(await this.service.resolve(token), dto.code);
+    }
+
+    @Post(':token/confirm')
+    @HttpCode(200)
+    @Header('Cache-Control', 'no-store')
+    @ApiOperation({
+        summary: 'Confirm the delivery promise',
+        description: 'Public, no login. The customer accepts the date and slot they were promised. The promise becomes firm now (`promise_firmed_at`), the warehouse is asked to prepare the order, and the self-service ends. It does not need the verification code. Only while the self-service is open and the customer has not answered (`selfService.canConfirm`); otherwise 409 `CONFIRMATION_NOT_AVAILABLE` with the `reason`. Sending it twice is safe: the order is queued once. Answers the updated page.',
+    })
+    @ApiParam(TOKEN_PARAM)
+    @ApiOkResponse({ type: PublicTrackingDto })
+    @ApiNotFound({ code: 'TRACKING_LINK_NOT_FOUND', message: 'Tracking link not found.' })
+    @ApiConflict({ code: 'CONFIRMATION_NOT_AVAILABLE', message: 'The delivery cannot be confirmed from this link.' })
+    @ApiResponse(TOO_MANY_REQUESTS)
+    async confirm(@Param('token') token: string): Promise<PublicTrackingDto> {
+        return await this.responses.confirm(token);
+    }
+
+    @Post(':token/change-request')
+    @HttpCode(200)
+    @Header('Cache-Control', 'no-store')
+    @ApiOperation({
+        summary: 'Ask the coordinator for a change',
+        description: 'Public, no login. The customer leaves what they need (`detail`, up to 500 characters) and the delivery is marked `change_requested`. Nothing is moved: the coordinator decides, and a rescheduling of the coordinator resolves it. It is the only action left once the self-service is over, and it also serves when no slot is available. Allowed while the delivery is `scheduled` or `assigned` and no request is pending (`selfService.canRequestChange`); otherwise 409 `CHANGE_REQUEST_NOT_AVAILABLE`. Answers the updated page.',
+    })
+    @ApiParam(TOKEN_PARAM)
+    @ApiOkResponse({ type: PublicTrackingDto })
+    @ApiBadRequests({ validation: true, example: ['detail must not be empty.'] })
+    @ApiNotFound({ code: 'TRACKING_LINK_NOT_FOUND', message: 'Tracking link not found.' })
+    @ApiConflict({ code: 'CHANGE_REQUEST_NOT_AVAILABLE', message: 'A change cannot be requested for this delivery.' })
+    @ApiResponse(TOO_MANY_REQUESTS)
+    async requestChange(@Param('token') token: string, @Body() dto: ChangeRequestDto): Promise<PublicTrackingDto> {
+        return await this.responses.requestChange(token, dto.detail);
     }
 }

@@ -17,6 +17,8 @@ const PUBLIC = new Set([
     'get /api/public/tracking/{token}',
     'post /api/public/tracking/{token}/verification-code',
     'post /api/public/tracking/{token}/verification-code/verify',
+    'post /api/public/tracking/{token}/confirm',
+    'post /api/public/tracking/{token}/change-request',
 ]);
 
 describe('Swagger document (e2e)', () => {

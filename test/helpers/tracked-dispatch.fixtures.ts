@@ -14,6 +14,8 @@ export interface TrackedDispatchOptions {
     shiftDate?: string | null;
     windowStart?: Date;
     windowEnd?: Date;
+    /** One package, so the preparation order can be built. `false` leaves the dispatch without packages. */
+    packages?: boolean;
 }
 
 export interface TrackedDispatch {
@@ -74,6 +76,13 @@ export class TrackedFixtures {
         );
         const dispatchId = Number(row.dispatch_id);
         this.dispatchIds.push(dispatchId);
+        if (options.packages !== false) {
+            await this.db.query(
+                `INSERT INTO dispatch_packages (dispatch_id, external_package_id, length_cm, width_cm, height_cm, gross_weight_kg)
+                 VALUES ($1, $2, 40, 30, 25, 6.4)`,
+                [dispatchId, `${ref}-PKG-1`],
+            );
+        }
         return { dispatchId, token, trackingCode: row.tracking_code, ref, routeBatchId };
     }
 

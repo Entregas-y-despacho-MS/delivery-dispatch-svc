@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
+import { PromiseFirmingModule } from '../promise-firming/promise-firming.module.js';
 import { PublicTrackingController } from './controllers/public-tracking.controller.js';
+import { CustomerResponseService } from './services/customer-response.service.js';
 import { PublicTrackingService } from './services/public-tracking.service.js';
 import { VerificationCodeService } from './services/verification-code.service.js';
 
@@ -8,8 +10,9 @@ import { VerificationCodeService } from './services/verification-code.service.js
  * `SettingsService` is global.
  */
 @Module({
+    imports: [PromiseFirmingModule],
     controllers: [PublicTrackingController],
-    providers: [PublicTrackingService, VerificationCodeService],
-    exports: [PublicTrackingService, VerificationCodeService],
+    providers: [PublicTrackingService, VerificationCodeService, CustomerResponseService],
+    exports: [PublicTrackingService, VerificationCodeService, CustomerResponseService],
 })
 export class PublicTrackingModule {}
