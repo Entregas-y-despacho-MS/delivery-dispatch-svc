@@ -13,6 +13,7 @@ import { DispatchStatusResponseDto } from '../dto/dispatch-status-response.dto.j
 import { UpdateDispatchStatusDto } from '../dto/update-dispatch-status.dto.js';
 import { assertDriverDispatchTransition } from '../domain/dispatch-status-transition.js';
 import { DISPATCH_STATUS_CHANGED_EVENT, DispatchStatusChangedEvent } from '../dispatch-status-changed.event.js';
+import { DispatchStatusPublicationService } from '../../../modules/dispatch/dispatch-status-publication/dispatch-status-publication.service.js';
 
 interface DispatchRow {
     id: number;
@@ -61,6 +62,7 @@ export class DispatchStatusService {
         private readonly dispatchEvents: DispatchEventsService,
         private readonly deliveryEvidences: DeliveryEvidencesService,
         private readonly events: EventEmitter2,
+        private readonly statusPublication: DispatchStatusPublicationService,
     ) {}
 
     async update(dispatchId: number, dto: UpdateDispatchStatusDto, driverId: number): Promise<DispatchStatusResponseDto> {
@@ -179,6 +181,14 @@ export class DispatchStatusService {
             [target.dispatch_status_id, dispatchId],
         );
         const occurredAt = new Date(dto.occurredAt);
+        const outboundRecordVersion = dispatch.status === dto.status
+            ? null
+            : await this.statusPublication.publish(manager, {
+                dispatchId,
+                status: dto.status,
+                previousStatus: dispatch.status,
+                occurredAt,
+            });
         await this.dispatchEvents.create({
             dispatchId,
             eventType: 'status_changed',
@@ -192,6 +202,7 @@ export class DispatchStatusService {
                 status: dto.status,
                 version: dispatch.version,
                 occurredAt: dto.occurredAt,
+                ...(outboundRecordVersion !== null && { outboundRecordVersion }),
                 lat: dto.lat,
                 lng: dto.lng,
                 accuracy: dto.accuracy,
