@@ -96,7 +96,10 @@ export class CustomerRescheduleService {
         const applied = await this.dataSource.transaction(async (manager) => await this.apply(manager, context, offer, now));
 
         // The proof is spent only now that the rescheduling happened. Failing to spend it must not undo it.
-        await this.verification.consumeProof(context.dispatchId, proof).catch(() => false);
+        await this.verification.consumeProof(context.dispatchId, proof).catch((error: unknown) => {
+            this.logger.warn(`The proof of dispatch ${context.dispatchId} could not be spent (${error instanceof Error ? error.name : 'unknown error'}).`);
+            return false;
+        });
         await this.confirmByEmail(context, offer, token);
         this.logger.log(`Dispatch ${context.dispatchId} rescheduled by the customer (batch ${applied.fromBatchId} → ${offer.routeBatchId}, recordVersion ${applied.recordVersion}).`);
         return await this.tracking.view(token, now);

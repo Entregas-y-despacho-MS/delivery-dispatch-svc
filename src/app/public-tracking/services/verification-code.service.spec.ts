@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryCacheAdapter } from '../../../plugins/cache/memory/memory-cache.adapter.js';
 import { CacheUnavailableException } from '../../../plugins/cache/exceptions/index.js';
@@ -119,6 +120,20 @@ describe('VerificationCodeService', () => {
                 status: 409, response: { error: 'RESCHEDULE_NOT_AVAILABLE', details: { reason } },
             });
             expect(mailer.send).not.toHaveBeenCalled();
+        });
+
+        it('logs why the email failed, without the address, the code or the token', async () => {
+            const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+            const { service } = setup({ mailThrows: true });
+
+            await expect(service.send(context())).rejects.toBeDefined();
+
+            expect(warn).toHaveBeenCalledTimes(1);
+            const line = String(warn.mock.calls[0][0]);
+            expect(line).toContain('dispatch 7');
+            expect(line).not.toContain('customer@example.test');
+            expect(line).not.toMatch(/\d{6}/);
+            warn.mockRestore();
         });
 
         it('turns a cache that is down into a 503 instead of a 500', async () => {

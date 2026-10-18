@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { SettingsService } from '../../../modules/settings/services/settings.service.js';
@@ -34,6 +34,8 @@ const PROOF_FORMAT = /^[0-9a-f]{64}$/;
  */
 @Injectable()
 export class VerificationCodeService {
+    private readonly logger = new Logger(VerificationCodeService.name);
+
     constructor(
         @InjectDataSource() private readonly dataSource: DataSource,
         private readonly cache: CacheService,
@@ -132,8 +134,11 @@ export class VerificationCodeService {
                 context: { code, expiresInMinutes: Math.round(ttlSeconds / 60) },
                 metadata: { dispatchId },
             });
+            if (result.status !== 'sent') this.logger.warn(`The verification code of dispatch ${dispatchId} was not delivered (${result.status}).`);
             return result.status === 'sent';
-        } catch {
+        } catch (error) {
+            // Never the address, the code or the token: only which dispatch and what kind of failure.
+            this.logger.warn(`The verification code of dispatch ${dispatchId} could not be sent (${error instanceof Error ? error.name : 'unknown error'}).`);
             return false;
         }
     }

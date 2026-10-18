@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { RouteCapacityExceededException } from '../../../modules/dispatch/route-batches/exceptions/index.js';
 import { localInstant } from '../../planning/domain/operating-calendar.js';
@@ -386,10 +387,16 @@ describe('CustomerRescheduleService', () => {
             expect(tracking.view).toHaveBeenCalled();
         });
 
-        it('is not undone by a proof that cannot be spent', async () => {
+        it('is not undone by a proof that cannot be spent, and says so in the log without the token', async () => {
+            const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
             const { service, choose } = setup({ consume: async () => { throw new Error('cache down'); } });
 
             await expect(service.reschedule(TOKEN, choose(), PROOF, NOW)).resolves.toEqual({ marker: 'view' });
+
+            const lines = warn.mock.calls.map((call) => String(call[0]));
+            expect(lines.some((line) => line.includes('could not be spent'))).toBe(true);
+            expect(lines.join(' ')).not.toContain(TOKEN);
+            warn.mockRestore();
         });
 
         it('records that the confirmation email was sent only when the transport accepted it', async () => {
