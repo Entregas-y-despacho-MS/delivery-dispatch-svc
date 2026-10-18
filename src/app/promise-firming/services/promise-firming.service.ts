@@ -14,6 +14,12 @@ import {
 export const PROMISE_RESPONSE_WINDOW_KEY = 'promise_response_window_minutes';
 const DEFAULT_WINDOW_MINUTES = 720;
 
+const FIRMING_REASON_TEXT: Record<PromiseFirmingReason, string> = {
+    window_elapsed: 'Response window elapsed with a valid notice',
+    customer_confirmed: 'Customer confirmed the promise',
+    customer_rescheduled: 'Customer rescheduled the delivery, which accepts the promise',
+};
+
 /** States in which a promise can still be firmed (the 2nd approval does not undo a communicated promise). */
 const FIRMABLE_STATUSES: string[] = [DispatchStatusEnum.SCHEDULED, DispatchStatusEnum.ASSIGNED];
 
@@ -62,8 +68,9 @@ export interface ReissueOrderOptions {
  * only if the promise was firmed. The `UPDATE ... WHERE promise_firmed_at IS NULL` is the single-emission
  * guard: two instances, or the timer racing the customer, can never queue it twice.
  *
- * The task of the 12 h window uses `firm` with `window_elapsed`; the public confirmation endpoint (ST-N3.1)
- * uses it with `customer_confirmed`, and its rescheduling calls `reissue` after bumping `version`.
+ * The task of the 12 h window uses `firm` with `window_elapsed`; the public confirmation endpoint (ST-224.1)
+ * uses it with `customer_confirmed`; its rescheduling uses `firm` with `customer_rescheduled` the first time
+ * (the promise is not firm yet) and `reissue` afterwards, always after moving the dispatch and bumping `version`.
  * `firm` does NOT touch `dispatches.version`: confirming or staying silent does not move the plan
  * (DICTIONARY, `version`); `recordVersion` is that version as it stands.
  */
@@ -141,10 +148,8 @@ export class PromiseFirmingService {
              VALUES ($1, 'promise_firmed', $2, $3, $4::jsonb)`,
             [
                 dispatchId,
-                reason === 'customer_confirmed' ? 'customer' : 'system',
-                reason === 'customer_confirmed'
-                    ? 'Customer confirmed the promise'
-                    : 'Response window elapsed with a valid notice',
+                reason === 'window_elapsed' ? 'system' : 'customer',
+                FIRMING_REASON_TEXT[reason],
                 JSON.stringify({ reason, recordVersion: row.version, windowMinutes }),
             ],
         );

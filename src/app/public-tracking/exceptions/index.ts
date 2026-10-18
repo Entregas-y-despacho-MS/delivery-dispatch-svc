@@ -8,3 +8,4 @@ export * from './verification-code-expired.exception.js';
 export * from './confirmation-not-available.exception.js';
 export * from './change-request-not-available.exception.js';
 export * from './verification-required.exception.js';
+export * from './slot-no-longer-available.exception.js';

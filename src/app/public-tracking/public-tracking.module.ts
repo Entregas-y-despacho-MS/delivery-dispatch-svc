@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
+import { RouteBatchesModule } from '../../modules/dispatch/route-batches/route-batches.module.js';
 import { PlanningModule } from '../planning/planning.module.js';
 import { PromiseFirmingModule } from '../promise-firming/promise-firming.module.js';
 import { PublicTrackingController } from './controllers/public-tracking.controller.js';
+import { CustomerRescheduleService } from './services/customer-reschedule.service.js';
 import { CustomerResponseService } from './services/customer-response.service.js';
 import { PublicTrackingService } from './services/public-tracking.service.js';
 import { SlotOfferService } from './services/slot-offer.service.js';
@@ -12,9 +14,9 @@ import { VerificationCodeService } from './services/verification-code.service.js
  * `SettingsService` is global.
  */
 @Module({
-    imports: [PlanningModule, PromiseFirmingModule],
+    imports: [PlanningModule, PromiseFirmingModule, RouteBatchesModule],
     controllers: [PublicTrackingController],
-    providers: [PublicTrackingService, VerificationCodeService, CustomerResponseService, SlotOfferService],
-    exports: [PublicTrackingService, VerificationCodeService, CustomerResponseService, SlotOfferService],
+    providers: [PublicTrackingService, VerificationCodeService, CustomerResponseService, SlotOfferService, CustomerRescheduleService],
+    exports: [PublicTrackingService, VerificationCodeService, CustomerResponseService, SlotOfferService, CustomerRescheduleService],
 })
 export class PublicTrackingModule {}

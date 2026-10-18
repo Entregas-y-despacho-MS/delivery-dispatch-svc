@@ -110,6 +110,15 @@ export class VerificationCodeService {
         return stored !== null && tokenMatchesHash(proof, stored);
     }
 
+    /**
+     * Spends the proof: true once, for the request that holds it. A rescheduling uses it after it has been applied, so
+     * a slot that was taken meanwhile does not cost the customer a new code, and the next rescheduling needs a new one.
+     */
+    async consumeProof(dispatchId: number, proof: string | undefined): Promise<boolean> {
+        if (!(await this.hasValidProof(dispatchId, proof))) return false;
+        return (await this.cached(() => this.cache.take(key('proof', dispatchId)))) !== null;
+    }
+
     private async ttlSeconds(): Promise<number> {
         return (await this.settings.getNumber(RESCHEDULE_CODE_EXPIRY_KEY, 10)) * 60;
     }

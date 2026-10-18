@@ -55,6 +55,7 @@ export class TrackedFixtures {
     private readonly zoneIds: number[] = [];
     private seq = 0;
     private plateSeq = 0;
+    private zoneSeq = 0;
 
     constructor(private readonly db: DataSource, private readonly tag: string) {}
 
@@ -67,7 +68,7 @@ export class TrackedFixtures {
     async createZone(label: string): Promise<number> {
         const [{ delivery_zone_id }] = await this.db.query(
             `INSERT INTO delivery_zones (code, name, estimated_time_min) VALUES ($1, $2, 30) RETURNING delivery_zone_id`,
-            [`Z${this.tag.slice(-8)}${label}`.slice(0, 20), `Zona e2e ${this.tag} ${label}`],
+            [`Z${this.tag.slice(-8)}${label}${++this.zoneSeq}`.slice(0, 20), `Zona e2e ${this.tag} ${label} ${this.zoneSeq}`],
         );
         this.zoneIds.push(delivery_zone_id);
         return delivery_zone_id;

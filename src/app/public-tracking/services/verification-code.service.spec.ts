@@ -254,6 +254,51 @@ describe('VerificationCodeService', () => {
         });
     });
 
+    describe('consumeProof', () => {
+        async function proofOf(service: VerificationCodeService, lastCode: () => string) {
+            await service.send(context());
+            return (await service.verify(context(), lastCode())).proof;
+        }
+
+        it('spends the proof once: the same proof cannot be used a second time', async () => {
+            const { service, lastCode } = setup();
+            const proof = await proofOf(service, lastCode);
+
+            await expect(service.consumeProof(7, proof)).resolves.toBe(true);
+            await expect(service.consumeProof(7, proof)).resolves.toBe(false);
+            await expect(service.hasValidProof(7, proof)).resolves.toBe(false);
+        });
+
+        it('hands it to only one of two parallel requests', async () => {
+            const { service, lastCode } = setup();
+            const proof = await proofOf(service, lastCode);
+
+            const results = await Promise.all([service.consumeProof(7, proof), service.consumeProof(7, proof)]);
+
+            expect(results.filter(Boolean)).toHaveLength(1);
+        });
+
+        it('does not spend the proof of someone else, or a wrong one', async () => {
+            const { service, lastCode } = setup();
+            const proof = await proofOf(service, lastCode);
+
+            await expect(service.consumeProof(8, proof)).resolves.toBe(false);
+            await expect(service.consumeProof(7, 'b'.repeat(64))).resolves.toBe(false);
+            await expect(service.consumeProof(7, undefined)).resolves.toBe(false);
+            await expect(service.hasValidProof(7, proof)).resolves.toBe(true);
+        });
+
+        it('lets a new code and a new proof follow the spent one', async () => {
+            const { service, lastCode } = setup();
+            const first = await proofOf(service, lastCode);
+            await service.consumeProof(7, first);
+
+            const second = await proofOf(service, lastCode);
+
+            await expect(service.consumeProof(7, second)).resolves.toBe(true);
+        });
+    });
+
     describe('hasValidProof', () => {
         it.each([undefined, '', 'abc', 'g'.repeat(64), 'A'.repeat(64), '0'.repeat(63)])('rejects %j without reading the cache', async (proof) => {
             const { service, cache } = setup();

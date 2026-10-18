@@ -6,8 +6,10 @@ import { ApiBadRequests, ApiConflict, ApiForbidden, ApiNotFound, errorBody } fro
 import { PUBLIC_TRACKING_LIMIT, PUBLIC_TRACKING_TTL_MS } from '../config/throttle.js';
 import { AvailableSlotsDto } from '../dto/available-slots.dto.js';
 import { ChangeRequestDto } from '../dto/change-request.dto.js';
+import { RescheduleDto } from '../dto/reschedule.dto.js';
 import { PublicTrackingDto } from '../dto/public-tracking.dto.js';
 import { VerificationCodeSentDto, VerificationProofDto, VerifyCodeDto } from '../dto/verification.dto.js';
+import { CustomerRescheduleService } from '../services/customer-reschedule.service.js';
 import { CustomerResponseService } from '../services/customer-response.service.js';
 import { PublicTrackingService } from '../services/public-tracking.service.js';
 import { SlotOfferService } from '../services/slot-offer.service.js';
@@ -36,7 +38,7 @@ const RESCHEDULE_NOT_AVAILABLE = {
  *   INVALID_VERIFICATION_CODE 400, VERIFICATION_CODE_EXPIRED 400,
  *   VERIFICATION_CODE_NOT_SENT 503, VERIFICATION_UNAVAILABLE 503,
  *   CONFIRMATION_NOT_AVAILABLE 409, CHANGE_REQUEST_NOT_AVAILABLE 409,
- *   VERIFICATION_REQUIRED 403, OSRM_UNAVAILABLE 503
+ *   VERIFICATION_REQUIRED 403, OSRM_UNAVAILABLE 503, SLOT_NO_LONGER_AVAILABLE 409
  */
 @ApiTags('Public tracking')
 @Public()
@@ -48,6 +50,7 @@ export class PublicTrackingController {
         private readonly verification: VerificationCodeService,
         private readonly responses: CustomerResponseService,
         private readonly slots: SlotOfferService,
+        private readonly rescheduling: CustomerRescheduleService,
     ) {}
 
     @Get(':token')
@@ -135,6 +138,33 @@ export class PublicTrackingController {
     })
     async listSlots(@Param('token') token: string, @Headers('x-verification-proof') proof?: string): Promise<AvailableSlotsDto> {
         return await this.slots.offer(await this.service.resolve(token), proof);
+    }
+
+    @Post(':token/reschedule')
+    @HttpCode(200)
+    @Header('Cache-Control', 'no-store')
+    @ApiOperation({
+        summary: 'Move the delivery to another slot',
+        description: 'Public, no login, with the proof of the verification code in the `X-Verification-Proof` header. The customer chooses one of the slots listed for the delivery (`slotId`) and the delivery moves to it, in one step and keeping its `scheduled` state: it enters the chosen batch and leaves the one it was in, the promise becomes firm (the first time) and the warehouse receives a new preparation order that replaces the previous one. The 12 hours of the customer do not start again. The proof is spent: another rescheduling needs a new code. The choice is checked again when it is made; if the slot cannot be taken any more nothing changes and the answer is 409 `SLOT_NO_LONGER_AVAILABLE`. Allowed while the original response window is open and `max_reschedule_attempts` is not reached (409 `RESCHEDULE_NOT_AVAILABLE` with the `reason` otherwise). The customer gets an email with the new slot. Answers the updated page.',
+    })
+    @ApiParam(TOKEN_PARAM)
+    @ApiHeader({ name: 'x-verification-proof', required: true, description: 'The `proof` returned by the verification of the code. It is spent by a successful rescheduling.' })
+    @ApiOkResponse({ type: PublicTrackingDto })
+    @ApiBadRequests({ validation: true, example: ['slotId must be one of the ids returned by the list of slots.'] })
+    @ApiNotFound({ code: 'TRACKING_LINK_NOT_FOUND', message: 'Tracking link not found.' })
+    @ApiForbidden({ code: 'VERIFICATION_REQUIRED', message: 'Verify the code sent to your email first.' })
+    @ApiConflict(RESCHEDULE_NOT_AVAILABLE, { code: 'SLOT_NO_LONGER_AVAILABLE', message: 'That slot is no longer available. Choose another one.' })
+    @ApiResponse(TOO_MANY_REQUESTS)
+    @ApiServiceUnavailableResponse({
+        description: 'The routing engine is down (`OSRM_UNAVAILABLE`) or the store of proofs is (`VERIFICATION_UNAVAILABLE`). Nothing was changed; try again in a moment.',
+        schema: { example: errorBody(503, 'OSRM_UNAVAILABLE', 'The routing engine is unavailable.') },
+    })
+    async reschedule(
+        @Param('token') token: string,
+        @Body() dto: RescheduleDto,
+        @Headers('x-verification-proof') proof?: string,
+    ): Promise<PublicTrackingDto> {
+        return await this.rescheduling.reschedule(token, dto.slotId, proof);
     }
 
     @Post(':token/confirm')

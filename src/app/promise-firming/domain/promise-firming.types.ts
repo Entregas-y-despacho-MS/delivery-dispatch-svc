@@ -1,8 +1,11 @@
 /** Outgoing topic: order of preparation to the warehouse (contracts/messages). */
 export const PREPARE_REQUESTED_TOPIC = 'dispatch.shipment.prepare_requested';
 
-/** Why the promise became firm: the 12 h window closed in silence, or the customer confirmed. */
-export type PromiseFirmingReason = 'window_elapsed' | 'customer_confirmed';
+/**
+ * Why the promise became firm: the 12 h window closed in silence, the customer confirmed, or the customer
+ * rescheduled (the first rescheduling of an unanswered promise is also the customer's acceptance, D-47).
+ */
+export type PromiseFirmingReason = 'window_elapsed' | 'customer_confirmed' | 'customer_rescheduled';
 
 /**
  * - `firmed`: promise firm and order queued.
