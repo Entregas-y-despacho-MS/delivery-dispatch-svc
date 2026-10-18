@@ -26,6 +26,7 @@ interface BatchRow {
 interface DispatchRow {
   id: number;
   version: number;
+  sequence_order: number | null;
   status: string;
   source_order_ref: string;
   tracking_code: string | null;
@@ -133,10 +134,10 @@ export class RouteBatchStartService {
     }
 
     const dispatches: DispatchRow[] = await manager.query(
-      `SELECT d.dispatch_id AS id, d.version, s.name AS status, d.source_order_ref, d.tracking_code
+      `SELECT d.dispatch_id AS id, d.version, d.sequence_order, s.name AS status, d.source_order_ref, d.tracking_code
          FROM dispatches d
          JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
-        WHERE d.route_batch_id = $1 ORDER BY d.dispatch_id FOR UPDATE OF d`,
+        WHERE d.route_batch_id = $1 ORDER BY d.sequence_order, d.dispatch_id FOR UPDATE OF d`,
       [routeBatchId],
     );
     if (dispatches.length === 0)

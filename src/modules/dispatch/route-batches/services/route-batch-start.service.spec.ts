@@ -17,6 +17,7 @@ const dispatches = [
   {
     id: 21,
     version: 3,
+    sequence_order: 1,
     status: DispatchStatusEnum.ASSIGNED,
     source_order_ref: 'SO-21',
     tracking_code: 'DSP-00021',
@@ -24,6 +25,7 @@ const dispatches = [
   {
     id: 22,
     version: 4,
+    sequence_order: 2,
     status: DispatchStatusEnum.ASSIGNED,
     source_order_ref: 'SO-22',
     tracking_code: 'DSP-00022',
@@ -58,7 +60,13 @@ function setup(
     query: vi.fn(async (sql: string) => {
       if (sql.includes('FROM route_batches')) return state.batch;
       if (sql.includes("metadata->>'eventId'")) return state.prior;
-      if (sql.includes('FROM dispatches d')) return state.dispatches;
+      if (sql.includes('FROM dispatches d'))
+        return [...state.dispatches].sort(
+          (left, right) =>
+            (left.sequence_order ?? Number.MAX_SAFE_INTEGER) -
+              (right.sequence_order ?? Number.MAX_SAFE_INTEGER) ||
+            left.id - right.id,
+        );
       if (sql.includes('FROM dispatch_packages')) return state.packages;
       if (sql.includes('UPDATE route_batches'))
         return [{ updated_at: savedAt }];
@@ -164,6 +172,26 @@ describe('RouteBatchStartService.start', () => {
     expect(ctx.outbox.enqueue).not.toHaveBeenCalled();
     expect(ctx.events.emit).not.toHaveBeenCalled();
     expect(ctx.runner.commitTransaction).toHaveBeenCalledOnce();
+  });
+
+  it('returns and publishes dispatches in visit order, not dispatch ID order', async () => {
+    const ctx = setup({
+      dispatches: [
+        { ...dispatches[0], sequence_order: 2 },
+        { ...dispatches[1], sequence_order: 1 },
+      ],
+    });
+
+    const result = await ctx.service.start(7, { eventId }, 9);
+
+    expect(result.dispatchIds).toEqual([22, 21]);
+    expect(ctx.manager.query).toHaveBeenCalledWith(
+      expect.stringContaining('ORDER BY d.sequence_order, d.dispatch_id'),
+      [7],
+    );
+    expect(ctx.manager.query.mock.calls.find(([sql]) =>
+      sql.includes('INSERT INTO route_batch_events'),
+    )?.[1]?.[2]).toContain('"dispatchIds":[22,21]');
   });
 
   it('rejects a non-confirmed batch without changing data', async () => {
