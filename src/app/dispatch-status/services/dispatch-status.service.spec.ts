@@ -38,18 +38,65 @@ function setup(options: {
         latest: options.latest ?? [], active: options.active ?? [], target: options.target ?? [{ dispatch_status_id: 3 }], updated: options.updated ?? [{ updated_at: saved }],
         remaining: options.remaining ?? [{ dispatch_id: 12 }], closed: options.closed ?? [{ closed_at: saved }],
     };
+    const queryResults = [
+        {
+            name: 'dispatch identity',
+            matches: (sql: string) => sql.startsWith('SELECT route_batch_id FROM dispatches'),
+            rows: state.identity,
+        },
+        {
+            name: 'active route dispatch',
+            matches: (sql: string) => sql.startsWith('SELECT d.dispatch_id FROM dispatches') && sql.includes('ds.name = $3'),
+            rows: state.active,
+        },
+        {
+            name: 'open route dispatch',
+            matches: (sql: string) => sql.startsWith('SELECT d.dispatch_id FROM dispatches') && sql.includes('ds.name = ANY'),
+            rows: state.remaining,
+        },
+        {
+            name: 'route batch lock',
+            matches: (sql: string) => sql.startsWith('SELECT route_batch_id AS id, driver_id, status FROM route_batches'),
+            rows: state.batch,
+        },
+        {
+            name: 'dispatch state',
+            matches: (sql: string) => sql.startsWith('SELECT d.dispatch_id AS id, d.route_batch_id'),
+            rows: state.dispatch,
+        },
+        {
+            name: 'latest status event',
+            matches: (sql: string) => sql.includes("event_type = 'status_changed'"),
+            rows: state.latest,
+        },
+        {
+            name: 'target status',
+            matches: (sql: string) => sql.startsWith('SELECT dispatch_status_id FROM dispatch_statuses'),
+            rows: state.target,
+        },
+        {
+            name: 'dispatch update',
+            matches: (sql: string) => sql.startsWith('WITH updated AS') && sql.includes('UPDATE dispatches'),
+            rows: state.updated,
+        },
+        {
+            name: 'route batch close',
+            matches: (sql: string) => sql.startsWith('UPDATE route_batches'),
+            rows: state.closed,
+        },
+        {
+            name: 'closed route event',
+            matches: (sql: string) => sql.startsWith('INSERT INTO route_batch_events'),
+            rows: [],
+        },
+    ];
     const manager = { query: vi.fn(async (sql: string) => {
-        if (sql.includes('SELECT route_batch_id FROM dispatches')) return state.identity;
-        if (sql.includes('ds.name = ANY($2::varchar[])')) return state.remaining;
-        if (sql.includes('UPDATE route_batches')) return state.closed;
-        if (sql.includes('INSERT INTO route_batch_events')) return [];
-        if (sql.includes('FROM route_batches')) return state.batch;
-        if (sql.includes('AND ds.name = $3')) return state.active;
-        if (sql.includes('JOIN dispatch_statuses ds')) return state.dispatch;
-        if (sql.includes("event_type = 'status_changed'")) return state.latest;
-        if (sql.includes('SELECT dispatch_status_id FROM dispatch_statuses')) return state.target;
-        if (sql.includes('UPDATE dispatches')) return state.updated;
-        throw new Error(`Unexpected SQL: ${sql}`);
+        const normalizedSql = sql.replace(/\s+/g, ' ').trim();
+        const matches = queryResults.filter((query) => query.matches(normalizedSql));
+        if (matches.length !== 1) {
+            throw new Error(`Expected one SQL fixture match, found ${matches.length}: ${normalizedSql}`);
+        }
+        return matches[0].rows;
     }) };
     const dataSource = { transaction: vi.fn(async (work: (manager: unknown) => unknown) => work(manager)) };
     const dispatchEvents = {

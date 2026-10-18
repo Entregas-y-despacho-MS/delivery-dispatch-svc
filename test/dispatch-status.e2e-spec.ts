@@ -64,7 +64,7 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
         await dataSource.query(
             `INSERT INTO delivery_evidences (delivery_evidence_id, dispatch_id, type, file_url, otp_code)
              VALUES ($1, $2, $3, $4, $5)`,
-            [uuidv7(), dispatchId, type, type === 'otp' ? null : 'https://example.test/e2e-evidence', null],
+            [uuidv7(), dispatchId, type, type === 'otp' ? null : 'https://example.test/e2e-evidence', type === 'otp' ? '123456' : null],
         );
     };
 
