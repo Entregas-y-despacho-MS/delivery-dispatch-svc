@@ -24,6 +24,7 @@ interface TrackingRow {
     scheduled_window_start: Date | null;
     scheduled_window_end: Date | null;
     delivery_date: string | null;
+    contact_email: string | null;
     has_contact_email: boolean;
     reschedule_attempts: number;
 }
@@ -76,7 +77,7 @@ export class PublicTrackingService {
         if (!isWellFormedTrackingToken(token)) throw new TrackingLinkNotFoundException();
 
         const [row]: TrackingRow[] = await this.dataSource.query(
-            `SELECT d.dispatch_id, ds.name AS status, d.version, d.tracking_code, d.customer_confirmation,
+            `SELECT d.dispatch_id, ds.name AS status, d.version, d.tracking_code, d.customer_confirmation, d.contact_email,
                     d.promise_notified_at, d.scheduled_window_start, d.scheduled_window_end,
                     to_char(rb.shift_date, 'YYYY-MM-DD') AS delivery_date,
                     (d.contact_email IS NOT NULL AND btrim(d.contact_email) <> '') AS has_contact_email,

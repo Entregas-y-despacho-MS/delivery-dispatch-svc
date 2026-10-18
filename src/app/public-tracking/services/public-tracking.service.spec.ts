@@ -17,6 +17,7 @@ function row(overrides: Record<string, unknown> = {}) {
         scheduled_window_start: new Date('2026-10-20T13:00:00Z'),
         scheduled_window_end: new Date('2026-10-20T15:00:00Z'),
         delivery_date: '2026-10-20',
+        contact_email: 'customer@example.test',
         has_contact_email: true,
         reschedule_attempts: 0,
         ...overrides,

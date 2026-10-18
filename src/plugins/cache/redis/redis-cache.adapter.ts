@@ -73,4 +73,31 @@ export class RedisCacheAdapter extends CacheService implements OnModuleInit, OnM
             throw new CacheUnavailableException();
         }
     }
+
+    async setWithTtl(key: string, value: string, ttlSeconds: number): Promise<void> {
+        await this.guard(async () => {
+            await this.client.set(key, value, { EX: Math.max(1, Math.ceil(ttlSeconds)) });
+        });
+    }
+
+    async increment(key: string, ttlSeconds: number): Promise<number> {
+        // One script, so a crash between INCR and EXPIRE can never leave a counter that never expires.
+        return await this.guard(async () => Number(await this.client.eval(
+            'local n=redis.call("INCR",KEYS[1]); if n==1 then redis.call("EXPIRE",KEYS[1],ARGV[1]) end; return n',
+            { keys: [key], arguments: [String(Math.max(1, Math.ceil(ttlSeconds)))] },
+        )));
+    }
+
+    async take(key: string): Promise<string | null> {
+        return await this.guard(async () => await this.client.getDel(key));
+    }
+
+    private async guard<T>(operation: () => Promise<T>): Promise<T> {
+        if (!this.client.isReady) throw new CacheUnavailableException();
+        try {
+            return await operation();
+        } catch {
+            throw new CacheUnavailableException();
+        }
+    }
 }
