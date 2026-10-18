@@ -106,6 +106,28 @@ describe('PromiseFirmingService', () => {
         expect(event[1][1]).toBe('customer');
     });
 
+    it('firms on the customer\'s first rescheduling, with the customer as actor and its own reason', async () => {
+        const { service, manager, queued } = setup();
+
+        const result = await service.firm(21, { reason: 'customer_rescheduled', now: new Date(NOTIFIED_AT.getTime() + 60_000) });
+
+        expect(result).toMatchObject({ outcome: 'firmed', reason: 'customer_rescheduled' });
+        expect(queued).toHaveLength(1);
+        const event = manager.query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO dispatch_events'))!;
+        expect(event[1][1]).toBe('customer');
+        expect(event[1][2]).toBe('Customer rescheduled the delivery, which accepts the promise');
+        expect(JSON.parse(event[1][3])).toMatchObject({ reason: 'customer_rescheduled', recordVersion: 3 });
+    });
+
+    it('does not apply the response window to a rescheduling: only the silent closing waits for it', async () => {
+        const { service, queued } = setup();
+
+        const early = await service.firm(21, { reason: 'customer_rescheduled', now: new Date(NOTIFIED_AT.getTime() + 60_000) });
+
+        expect(early.outcome).toBe('firmed');
+        expect(queued).toHaveLength(1);
+    });
+
     it('never firms a dispatch without a valid notice (a bounce leaves promise_notified_at null)', async () => {
         const { service, manager, queued } = setup({ row: { promise_notified_at: null } });
 

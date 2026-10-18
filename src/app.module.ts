@@ -42,6 +42,7 @@ import { PromiseFirmingModule } from './app/promise-firming/promise-firming.modu
 import { FinalReviewModule } from './app/final-review/final-review.module.js';
 import { RouteBatchCorrectionModule } from './app/route-batch-correction/route-batch-correction.module.js';
 import { RouteCutoffModule } from './app/route-cutoff/route-cutoff.module.js';
+import { PublicTrackingModule } from './app/public-tracking/public-tracking.module.js';
 
 @Module({
   imports: [
@@ -62,6 +63,7 @@ import { RouteCutoffModule } from './app/route-cutoff/route-cutoff.module.js';
     SchedulerModule,
     PlanningModule,
     PromiseFirmingModule,
+    PublicTrackingModule,
     RouteCutoffModule,
     RouteBatchCorrectionModule,
     FinalReviewModule,

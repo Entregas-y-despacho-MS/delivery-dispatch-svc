@@ -174,3 +174,77 @@ describe('PlanCandidatesRepository.findOpenBatches', () => {
         expect(query).toHaveBeenCalledOnce();
     });
 });
+
+describe('PlanCandidatesRepository.findOpenBatches filter', () => {
+    it('reads every open batch when no filter is given, exactly as before', async () => {
+        const { query, repository } = build([]);
+
+        await repository.findOpenBatches('2026-10-12');
+
+        const [sql, params] = query.mock.calls[0];
+        expect(sql).not.toContain('b.delivery_zone_id =');
+        expect(params).toEqual(['2026-10-12']);
+    });
+
+    it('narrows to one zone and one warehouse with bound parameters, never concatenated values', async () => {
+        const { query, repository } = build([]);
+
+        await repository.findOpenBatches('2026-10-12', { zoneId: 7, warehouseId: 3 });
+
+        const [sql, params] = query.mock.calls[0];
+        expect(sql).toContain('AND b.delivery_zone_id = $2 AND b.origin_warehouse_id = $3');
+        expect(sql).not.toMatch(/= 7\b|= 3\b/);
+        expect(params).toEqual(['2026-10-12', 7, 3]);
+    });
+
+    it('narrows by the zone alone', async () => {
+        const { query, repository } = build([]);
+
+        await repository.findOpenBatches('2026-10-12', { zoneId: 7 });
+
+        const [sql, params] = query.mock.calls[0];
+        expect(sql).toContain('AND b.delivery_zone_id = $2');
+        expect(sql).not.toContain('b.origin_warehouse_id = $');
+        expect(params).toEqual(['2026-10-12', 7]);
+    });
+});
+
+describe('PlanCandidatesRepository.findForRescheduling', () => {
+    const own = (over: Record<string, unknown> = {}) => ({
+        ...row({ status: 'scheduled' }),
+        route_batch_id: 500,
+        shift_date: '2026-10-15',
+        ...over,
+    });
+
+    it('reads the customer\'s own dispatch as the planner sees it, with its batch and date', async () => {
+        const { repository } = build([own()], [
+            { dispatch_id: 101, dispatch_package_id: 9, length_cm: '40', width_cm: '30', height_cm: '25', gross_weight_kg: '6.4' },
+        ]);
+
+        const found = await repository.findForRescheduling(101);
+
+        expect(found).toMatchObject({ routeBatchId: 500, shiftDate: '2026-10-15' });
+        expect(found!.dispatch).toMatchObject({
+            dispatchId: 101, zoneId: 7, warehouseId: 1, latitude: -16.54, longitude: -68.08, status: 'scheduled',
+            fixedDate: null, agreedWindow: null, estimatedWeightKg: 12.5,
+        });
+        expect(found!.dispatch.packages).toEqual([
+            { dispatchId: 101, packageId: 9, lengthCm: 40, widthCm: 30, heightCm: 25, grossWeightKg: 6.4 },
+        ]);
+    });
+
+    it('is null when the dispatch cannot be simulated (no point, zone or warehouse) or does not exist', async () => {
+        const { query, repository } = build([]);
+
+        await expect(repository.findForRescheduling(999)).resolves.toBeNull();
+        expect(query).toHaveBeenCalledOnce();
+        expect(String(query.mock.calls[0][0])).toContain('d.delivery_latitude IS NOT NULL');
+    });
+
+    it('has no batch and no date for a dispatch without a route', async () => {
+        const { repository } = build([own({ route_batch_id: null, shift_date: null })]);
+
+        await expect(repository.findForRescheduling(101)).resolves.toMatchObject({ routeBatchId: null, shiftDate: null });
+    });
+});
