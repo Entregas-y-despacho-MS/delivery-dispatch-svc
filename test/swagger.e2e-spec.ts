@@ -14,6 +14,7 @@ const PUBLIC = new Set([
     'post /api/auth/refresh',
     'post /api/auth/forgot-password',
     'post /api/auth/reset-password',
+    'get /api/public/tracking/{token}',
 ]);
 
 describe('Swagger document (e2e)', () => {

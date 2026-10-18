@@ -121,5 +121,7 @@ export const envValidation = Joi.object({
     THROTTLE_LIMIT:  Joi.number().default(100),
     // change-password and the 2FA endpoints (they verify a secret of a logged-in user)
     THROTTLE_SENSITIVE_LIMIT: Joi.number().default(10),
+    // Public tracking page endpoints (/public/tracking/*), per client IP and THROTTLE_TTL_MS
+    THROTTLE_PUBLIC_TRACKING_LIMIT: Joi.number().default(20),
 
 });

@@ -3,6 +3,7 @@ import {
     HttpException, HttpStatus, Logger,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { redactTrackingToken } from '../utils/redact-url.util.js';
 
 // Normalizes all HTTP exceptions to a consistent response shape:
 // { statusCode, error, message, path, timestamp }
@@ -16,6 +17,9 @@ export class HttpExceptionFilter implements ExceptionFilter {
         const request  = ctx.getRequest<Request>();
         const status   = exception.getStatus();
         const body     = exception.getResponse();
+        // The tracking token travels in the URL of the public page and is the customer's only credential:
+        // neither the log line nor the `path` echoed to the client may carry it (ST-224.1).
+        const path     = redactTrackingToken(request.url);
 
         const message = typeof body === 'string' ? body : (body as any).message ?? exception.message;
 
@@ -29,7 +33,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
             // is intentionally never sent to the client — logged here so it isn't lost entirely.
             const cause = typeof body === 'object' ? (body as any).cause : undefined;
             const suffix = cause ? ` — cause: ${cause}` : '';
-            this.logger.error(`[${request.method}] ${request.url} → ${status}${suffix}`, exception.stack);
+            this.logger.error(`[${request.method}] ${path} → ${status}${suffix}`, exception.stack);
         }
 
         // Optional structured detail a domain exception wants the client to read (e.g. the
@@ -43,7 +47,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
             error:      errorCode,
             message,
             ...(details === undefined ? {} : { details }),
-            path:       request.url,
+            path,
             timestamp:  new Date().toISOString(),
         });
     }
