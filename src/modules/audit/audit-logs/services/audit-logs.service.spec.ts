@@ -100,6 +100,28 @@ describe('AuditLogsService.findOutboundMessageAlerts', () => {
     expect(result.meta).toEqual({ page: 1, limit: 10, total: 1, pages: 1 });
   });
 
+  it('truncates broker errors to 500 characters before returning them', async () => {
+    const alert = {
+      id: 10,
+      action: OUTBOUND_MESSAGE_FAILED_ACTION,
+      createdAt: new Date('2026-10-18T12:00:00.000Z'),
+      detail: JSON.stringify({ lastError: 'x'.repeat(700) }),
+    } as AuditLog;
+    const auditLogs = { findAndCount: vi.fn().mockResolvedValue([[alert], 1]) };
+    const outboundMessages = { find: vi.fn() };
+    const service = new AuditLogsService(
+      auditLogs as never,
+      outboundMessages as never,
+    );
+
+    const result = await service.findOutboundMessageAlerts({
+      page: 1,
+      limit: 10,
+    });
+
+    expect(result.data[0].lastError).toHaveLength(500);
+  });
+
   it('returns an empty page without querying outbox messages', async () => {
     const auditLogs = { findAndCount: vi.fn().mockResolvedValue([[], 0]) };
     const outboundMessages = { find: vi.fn() };

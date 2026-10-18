@@ -20,6 +20,8 @@ interface AlertDetail {
   lastError?: unknown;
 }
 
+const OUTBOUND_ALERT_LAST_ERROR_MAX_LENGTH = 500;
+
 const parseDetail = (detail: string | null): AlertDetail => {
   if (!detail) return {};
   try {
@@ -92,7 +94,9 @@ export class AuditLogsService {
         attemptsAtAlert:
           typeof detail.attempts === 'number' ? detail.attempts : null,
         lastError:
-          typeof detail.lastError === 'string' ? detail.lastError : null,
+          typeof detail.lastError === 'string'
+            ? detail.lastError.slice(0, OUTBOUND_ALERT_LAST_ERROR_MAX_LENGTH)
+            : null,
         currentStatus: currentMessage?.status ?? null,
         currentAttempts: currentMessage?.attempts ?? null,
       } satisfies OutboundMessageAlertDto;

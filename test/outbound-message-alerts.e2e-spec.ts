@@ -152,34 +152,46 @@ describe('GET /audit/outbound-message-alerts (e2e, ST-73.1)', () => {
   });
 
   it('shows both alert types newest first with current outbox status and pagination', async () => {
-    const response = await request(app.getHttpServer())
-      .get(`${endpoint()}?page=1&limit=1`)
+    const limit = 100;
+    const firstPage = await request(app.getHttpServer())
+      .get(`${endpoint()}?page=1&limit=${limit}`)
       .set('Authorization', `Bearer ${coordinatorToken}`);
 
-    expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({
-      data: [
-        {
-          id: auditIds[1],
-          action: OUTBOUND_MESSAGE_FAILED_ACTION,
-          messageId: messageIds[1],
-          messageType: 'dispatch.shipment.departed',
-          attemptsAtAlert: 51,
-          lastError: 'broker timeout',
-          currentStatus: 'failed',
-          currentAttempts: 51,
-        },
-      ],
-      meta: { page: 1, limit: 1, total: 2, pages: 2 },
+    expect(firstPage.status).toBe(200);
+    expect(firstPage.body.meta).toMatchObject({ page: 1, limit });
+    expect(firstPage.body.meta.total).toBeGreaterThanOrEqual(auditIds.length);
+    expect(firstPage.body.meta.pages).toBe(
+      Math.ceil(firstPage.body.meta.total / limit),
+    );
+
+    const alerts = [...firstPage.body.data];
+    for (let page = 2; page <= firstPage.body.meta.pages; page++) {
+      const response = await request(app.getHttpServer())
+        .get(`${endpoint()}?page=${page}&limit=${limit}`)
+        .set('Authorization', `Bearer ${coordinatorToken}`);
+      expect(response.status).toBe(200);
+      expect(response.body.meta).toMatchObject({ page, limit });
+      alerts.push(...response.body.data);
+    }
+
+    const ownAlerts = alerts.filter((alert) => auditIds.includes(alert.id));
+    expect(ownAlerts).toHaveLength(auditIds.length);
+    expect(ownAlerts.map((alert) => alert.id)).toEqual([
+      auditIds[1],
+      auditIds[0],
+    ]);
+    expect(ownAlerts[0]).toMatchObject({
+      action: OUTBOUND_MESSAGE_FAILED_ACTION,
+      messageId: messageIds[1],
+      messageType: 'dispatch.shipment.departed',
+      attemptsAtAlert: 51,
+      lastError: 'broker timeout',
+      currentStatus: 'failed',
+      currentAttempts: 51,
     });
-
-    const secondPage = await request(app.getHttpServer())
-      .get(`${endpoint()}?page=2&limit=1`)
-      .set('Authorization', `Bearer ${coordinatorToken}`);
-    expect(secondPage.status).toBe(200);
-    expect(secondPage.body.data[0]).toMatchObject({
-      id: auditIds[0],
+    expect(ownAlerts[1]).toMatchObject({
       action: OUTBOUND_MESSAGE_DELAYED_ACTION,
+      messageId: messageIds[0],
       currentStatus: 'pending',
     });
   });

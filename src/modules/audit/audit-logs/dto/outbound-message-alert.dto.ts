@@ -41,7 +41,9 @@ export class OutboundMessageAlertDto {
   @ApiProperty({
     type: String,
     nullable: true,
-    description: 'Last broker error recorded with the alert.',
+    description:
+      'Last broker error recorded with the alert, truncated to 500 characters.',
+    maxLength: 500,
   })
   lastError: string | null;
 
