@@ -8,6 +8,7 @@ import { DatabaseModule } from './database/database.module.js';
 import { SettingsModule } from './modules/settings/settings.module.js';
 import { UsersModule } from './modules/auth/users/users.module.js';
 import { RolesModule } from './modules/auth/roles/roles.module.js';
+import { PushTokensModule } from './modules/auth/push-tokens/push-tokens.module.js';
 import { DeliveryZonesModule } from './modules/catalog/delivery-zones/delivery-zones.module.js';
 import { VehiclesModule } from './modules/fleet/vehicles/vehicles.module.js';
 import { ServiceLevelsModule } from './modules/catalog/service-levels/service-levels.module.js';
@@ -73,6 +74,7 @@ import { AuditLogsModule } from './modules/audit/audit-logs/audit-logs.module.js
     FinalReviewModule,
     UsersModule,
     RolesModule,
+    PushTokensModule,
     DeliveryZonesModule,
     VehiclesModule,
     ServiceLevelsModule,
