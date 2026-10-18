@@ -10,6 +10,7 @@ import {
   it,
 } from 'vitest';
 import { ProcurementPickupRepository } from './procurement-pickup.repository.js';
+import { createDispatchStatusPublication } from '../../../../../test/helpers/dispatch-status-publication.js';
 
 /**
  * Against PostgreSQL with delivery-dispatch-db migration 015 applied. Skipped unless TEST_DB_PORT
@@ -38,7 +39,7 @@ describe.skipIf(!PORT)('ProcurementPickupRepository against PostgreSQL', () => {
     if (!warehouse)
       throw new Error('The test database needs an active warehouse fixture.');
 
-    const repository = new ProcurementPickupRepository();
+    const repository = new ProcurementPickupRepository(createDispatchStatusPublication(dataSource));
     const created = await repository.applyRequested(
       {
         purchaseOrderId: orderId,
@@ -143,7 +144,7 @@ describe.skipIf(!PORT)('ProcurementPickupRepository against PostgreSQL', () => {
   it('keeps the scheduled status when an estimate-only update is applied', async () => {
     const orderId = purchaseOrderId();
     const dispatchId = await createScheduledPickup(orderId);
-    const repository = new ProcurementPickupRepository();
+    const repository = new ProcurementPickupRepository(createDispatchStatusPublication(dataSource));
 
     const outcome = await repository.applyUpdated(
       {
@@ -183,7 +184,7 @@ describe.skipIf(!PORT)('ProcurementPickupRepository against PostgreSQL', () => {
       `SELECT code FROM warehouses WHERE warehouse_id = $1`,
       [dispatch.destination_warehouse_id],
     );
-    const repository = new ProcurementPickupRepository();
+    const repository = new ProcurementPickupRepository(createDispatchStatusPublication(dataSource));
 
     const outcome = await repository.applyRequested(
       {
@@ -224,7 +225,7 @@ describe.skipIf(!PORT)('ProcurementPickupRepository against PostgreSQL', () => {
     const orderId = purchaseOrderId();
     const dispatchId = await createScheduledPickup(orderId);
     const before = await dispatchState(dispatchId);
-    const repository = new ProcurementPickupRepository();
+    const repository = new ProcurementPickupRepository(createDispatchStatusPublication(dataSource));
 
     const outcome = await repository.applyUpdated(
       {
@@ -248,7 +249,7 @@ describe.skipIf(!PORT)('ProcurementPickupRepository against PostgreSQL', () => {
   it('cancels a scheduled pickup when Procurement cancels it', async () => {
     const orderId = purchaseOrderId();
     const dispatchId = await createScheduledPickup(orderId);
-    const repository = new ProcurementPickupRepository();
+    const repository = new ProcurementPickupRepository(createDispatchStatusPublication(dataSource));
 
     const outcome = await repository.applyCancelled(
       {
@@ -265,6 +266,25 @@ describe.skipIf(!PORT)('ProcurementPickupRepository against PostgreSQL', () => {
     expect(await dispatchState(dispatchId)).toMatchObject({ status: 'cancelled' });
     expect(await eventTypes(dispatchId)).toContain('status_changed');
     expect(await eventTypes(dispatchId)).not.toContain('change_requires_attention');
+    const [dispatch] = await manager().query(
+      `SELECT tracking_code FROM dispatches WHERE dispatch_id = $1`,
+      [dispatchId],
+    );
+    expect(dispatch.tracking_code).toMatch(/^DSP-\d{4}-\d{5}$/);
+    const [message] = await manager().query(
+      `SELECT payload FROM outbound_messages
+        WHERE type = 'dispatch.transfer.status_changed'
+          AND payload->'data'->>'purchaseOrderId' = $1`,
+      [orderId],
+    );
+    expect(message.payload.data).toMatchObject({
+      purchaseOrderId: orderId,
+      trackingCode: dispatch.tracking_code,
+      status: 'cancelled',
+      previousStatus: 'scheduled',
+      reasonCode: 'ORDER-CANCELLED',
+      recordVersion: 1,
+    });
   });
 
   it('alerts without changing a delivered pickup when Procurement sends an update', async () => {
@@ -272,7 +292,7 @@ describe.skipIf(!PORT)('ProcurementPickupRepository against PostgreSQL', () => {
     const dispatchId = await createScheduledPickup(orderId);
     await setDispatchStatus(dispatchId, 'delivered');
     const before = await dispatchState(dispatchId);
-    const repository = new ProcurementPickupRepository();
+    const repository = new ProcurementPickupRepository(createDispatchStatusPublication(dataSource));
 
     const outcome = await repository.applyUpdated(
       {
@@ -298,7 +318,7 @@ describe.skipIf(!PORT)('ProcurementPickupRepository against PostgreSQL', () => {
     const dispatchId = await createScheduledPickup(orderId);
     await setDispatchStatus(dispatchId, 'delivered');
     const before = await dispatchState(dispatchId);
-    const repository = new ProcurementPickupRepository();
+    const repository = new ProcurementPickupRepository(createDispatchStatusPublication(dataSource));
 
     const outcome = await repository.applyCancelled(
       {

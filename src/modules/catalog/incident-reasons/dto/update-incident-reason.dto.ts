@@ -1,17 +1,19 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsNotEmpty, IsString, Matches, MaxLength } from 'class-validator';
 import { OptionalNotNull } from '../../../../shared/validators/optional-not-null.validator.js';
+import { INCIDENT_REASON_CODE_PATTERN } from './incident-reason-code.js';
 
 const normalizeCode = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toUpperCase() : value);
 const trim          = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 
 export class UpdateIncidentReasonDto {
-    @ApiPropertyOptional({ example: 'INC-CLI-AUS', maxLength: 30, description: 'New code. Must not belong to another reason. null is rejected' })
+    @ApiPropertyOptional({ example: 'INC-CLI-AUS', maxLength: 30, description: 'New code matching the outbound contract pattern. Must not belong to another reason. null is rejected' })
     @OptionalNotNull()
     @Transform(normalizeCode)
     @IsString()
     @IsNotEmpty({ message: 'Code must not be empty.' })
+    @Matches(INCIDENT_REASON_CODE_PATTERN, { message: 'Code must match the outbound reason-code format, e.g. INC-CLI-AUS.' })
     @MaxLength(30, { message: 'Code must not exceed 30 characters.' })
     code?: string;
 

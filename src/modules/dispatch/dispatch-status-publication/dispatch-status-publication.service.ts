@@ -29,7 +29,6 @@ export interface PublishDispatchStatusChangeInput {
 }
 
 const ORDER_ID_TYPES = new Set(['delivery', 'warehouse_return_pickup', 'supplier_pickup', 'supplier_return']);
-
 /** Creates the external status message in the same transaction as its dispatch transition. */
 @Injectable()
 export class DispatchStatusPublicationService {
@@ -45,7 +44,8 @@ export class DispatchStatusPublicationService {
             `SELECT t.name AS dispatch_type, d.source_order_ref, d.tracking_code
                FROM dispatches d
                JOIN dispatch_types t ON t.dispatch_type_id = d.dispatch_type_id
-              WHERE d.dispatch_id = $1`,
+              WHERE d.dispatch_id = $1
+              FOR UPDATE OF d`,
             [input.dispatchId],
         );
         if (!dispatch || !ORDER_ID_TYPES.has(dispatch.dispatch_type)) {
@@ -89,17 +89,23 @@ export class DispatchStatusPublicationService {
     }
 
     private async nextRecordVersion(manager: EntityManager, dispatchId: number): Promise<number> {
-        const rows: RecordVersionRow[] = await manager.query(
-            `SELECT metadata->>'outboundRecordVersion' AS version
+        // This outbound sequence is separate from dispatch.version. The dispatch row is locked above
+        // so concurrent result transitions cannot read the same previous value.
+        const [row]: RecordVersionRow[] = await manager.query(
+            `SELECT MAX(
+                       CASE
+                           WHEN metadata->>'outboundRecordVersion' ~ '^[1-9][0-9]{0,15}$'
+                           THEN (metadata->>'outboundRecordVersion')::numeric
+                       END
+                   )::text AS version
                FROM dispatch_events
               WHERE dispatch_id = $1
                 AND event_type = 'status_changed'
                 AND metadata ? 'outboundRecordVersion'`,
             [dispatchId],
         );
-        const previousVersions = rows
-            .map(({ version }) => Number(version))
-            .filter((version) => Number.isSafeInteger(version) && version > 0);
-        return previousVersions.length === 0 ? 1 : Math.max(...previousVersions) + 1;
+        const previousVersion = Number(row?.version);
+        if (!Number.isSafeInteger(previousVersion) || previousVersion <= 0) return 1;
+        return previousVersion + 1;
     }
 }

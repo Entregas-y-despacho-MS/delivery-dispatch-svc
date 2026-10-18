@@ -58,7 +58,7 @@ describe('DispatchStatusPublicationService', () => {
         expect(ctx.outbox.enqueue).not.toHaveBeenCalled();
     });
 
-    it('requires a contract-valid tracking code before a terminal transition can commit', async () => {
+    it('rejects a result transition without the contract-required tracking code', async () => {
         const ctx = setup({ dispatch: [{ dispatch_type: 'delivery', source_order_ref: 'SO-1', tracking_code: null }] });
         await expect(ctx.service.publish(ctx.manager as never, input)).rejects.toThrow(/tracking code is required/i);
         expect(ctx.outbox.enqueue).not.toHaveBeenCalled();

@@ -118,6 +118,7 @@ describe('POST /route-batches/:id/start (e2e, ST-51.5)', () => {
   async function fixture(
     status = 'confirmed',
     driver: 'driver1' | 'driver2' = 'driver1',
+    trackingCode: string | null = `DSP-2040-${String(fixtureSequence + 1).padStart(5, '0')}`,
   ) {
     const sequence = fixtureSequence++;
     const sourceOrderRef = `ST515-${run}-${sequence}`;
@@ -144,7 +145,7 @@ describe('POST /route-batches/:id/start (e2e, ST-51.5)', () => {
         assignedId,
         routeBatchId,
         sourceOrderRef,
-        `DSP-2040-${String(sequence + 1).padStart(5, '0')}`,
+        trackingCode,
       ],
     );
     const packageId = `${sourceOrderRef}-PKG`;
@@ -207,6 +208,37 @@ describe('POST /route-batches/:id/start (e2e, ST-51.5)', () => {
       packageIds: [packageId],
       recordVersion: 4,
     });
+  });
+
+  it('keeps a route confirmed when an assigned dispatch has no contract-required tracking code', async () => {
+    const { routeBatchId, dispatchId, sourceOrderRef } = await fixture('confirmed', 'driver1', null);
+
+    const response = await http()
+      .post(api(`/route-batches/${routeBatchId}/start`))
+      .set(auth('driver1'))
+      .send({ eventId: uuidv7() });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe('DISPATCH_TRACKING_CODE_REQUIRED');
+    const [{ status: batchStatus }] = await db.query(
+      `SELECT status FROM route_batches WHERE route_batch_id = $1`,
+      [routeBatchId],
+    );
+    expect(batchStatus).toBe('confirmed');
+    const [{ status: dispatchStatus, tracking_code: trackingCode }] = await db.query(
+      `SELECT s.name AS status, d.tracking_code
+         FROM dispatches d JOIN dispatch_statuses s USING (dispatch_status_id)
+        WHERE d.dispatch_id = $1`,
+      [dispatchId],
+    );
+    expect(dispatchStatus).toBe('assigned');
+    expect(trackingCode).toBeNull();
+    const [{ count }] = await db.query(
+      `SELECT COUNT(*)::int AS count FROM outbound_messages
+        WHERE type = 'dispatch.shipment.departed' AND payload #>> '{data,salesOrderId}' = $1`,
+      [sourceOrderRef],
+    );
+    expect(count).toBe(0);
   });
 
   it('returns 409 when the batch is not confirmed', async () => {

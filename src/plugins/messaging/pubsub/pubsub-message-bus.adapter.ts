@@ -47,11 +47,17 @@ export class PubsubMessageBusAdapter extends MessageBus implements OnModuleDestr
     }
 
     async publish(topic: string, envelope: MessageEnvelope): Promise<void> {
+        const status = topic === 'dispatch.transfer.status_changed' &&
+            typeof envelope.data === 'object' && envelope.data !== null &&
+            'status' in envelope.data && typeof envelope.data.status === 'string'
+            ? envelope.data.status
+            : undefined;
         await this.publishJson(topic, envelope, {
             messageId: envelope.messageId,
             type: envelope.type,
             source: envelope.source,
             schemaVersion: String(envelope.schemaVersion),
+            ...(status && { status }),
         });
     }
 

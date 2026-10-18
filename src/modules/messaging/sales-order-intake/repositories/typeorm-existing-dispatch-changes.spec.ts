@@ -42,6 +42,7 @@ describe('TypeOrmExistingDispatchChanges', () => {
     let warehouseRow: { id: number } | null;
     let packageRows: Record<string, unknown>[];
     let changes: TypeOrmExistingDispatchChanges;
+    const statusPublication = { publish: vi.fn().mockResolvedValue(1) };
     const options = () => ({ manager: manager as never });
 
     const manager = {
@@ -75,7 +76,8 @@ describe('TypeOrmExistingDispatchChanges', () => {
         warehouseRow = { id: 2 };
         packageRows = [packageRow()];
         manager.query.mockClear();
-        changes = new TypeOrmExistingDispatchChanges({ manager } as never);
+        statusPublication.publish.mockClear();
+        changes = new TypeOrmExistingDispatchChanges({ manager } as never, statusPublication as never);
     });
 
     describe('applyDeliveryChange', () => {
@@ -223,7 +225,7 @@ describe('TypeOrmExistingDispatchChanges', () => {
 
         it('runs on the manager it receives, not on the default one', async () => {
             const dataSourceQuery = vi.fn().mockResolvedValue([]);
-            const other = new TypeOrmExistingDispatchChanges({ manager: { query: dataSourceQuery } } as never);
+            const other = new TypeOrmExistingDispatchChanges({ manager: { query: dataSourceQuery } } as never, statusPublication as never);
 
             await other.applyDeliveryChange(input({ priority: 'urgent' }), options());
 
@@ -249,6 +251,9 @@ describe('TypeOrmExistingDispatchChanges', () => {
             const insert = sqlOf('INSERT INTO dispatch_events')!;
             expect(insert.params[1]).toBe('status_changed');
             expect(JSON.parse(insert.params[2] as string)).toMatchObject({ from: 'pending', to: 'cancelled', source: 'marketplace' });
+            expect(statusPublication.publish).toHaveBeenCalledWith(manager, expect.objectContaining({
+                dispatchId: 7, status: 'cancelled', previousStatus: 'pending', reasonCode: 'ORDER-CANCELLED',
+            }));
         });
 
         it('takes an in_planning dispatch out of its batch when it cancels it', async () => {

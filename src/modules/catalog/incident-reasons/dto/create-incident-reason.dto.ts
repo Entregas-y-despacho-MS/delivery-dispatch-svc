@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsNotEmpty, IsString, Matches, MaxLength } from 'class-validator';
+import { INCIDENT_REASON_CODE_PATTERN } from './incident-reason-code.js';
 
 // The code is looked up by exact value (unique index), so it is normalized the same way a plate is
 // (trim + uppercase) before validation and before it ever reaches the database.
@@ -8,10 +9,11 @@ const normalizeCode = ({ value }: { value: unknown }) => (typeof value === 'stri
 const trim          = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 
 export class CreateIncidentReasonDto {
-    @ApiProperty({ example: 'INC-CLI-AUS', maxLength: 30, description: 'Unique reference code. Trimmed and uppercased before validation; must not belong to another reason' })
+    @ApiProperty({ example: 'INC-CLI-AUS', maxLength: 30, description: 'Unique reference code matching the outbound contract pattern. Trimmed and uppercased before validation; must not belong to another reason' })
     @Transform(normalizeCode)
     @IsString()
     @IsNotEmpty({ message: 'Code is required.' })
+    @Matches(INCIDENT_REASON_CODE_PATTERN, { message: 'Code must match the outbound reason-code format, e.g. INC-CLI-AUS.' })
     @MaxLength(30, { message: 'Code must not exceed 30 characters.' })
     code: string;
 

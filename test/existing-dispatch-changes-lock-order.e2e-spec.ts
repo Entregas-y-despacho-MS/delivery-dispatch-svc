@@ -14,6 +14,7 @@ import { AppModule } from '../src/app.module.js';
 import { OsrmPort } from '../src/plugins/osrm/osrm.port.js';
 import { FakeOsrm } from '../src/app/planning/domain/plan-fixtures.helper-spec.js';
 import { TypeOrmExistingDispatchChanges } from '../src/modules/messaging/sales-order-intake/repositories/typeorm-existing-dispatch-changes.js';
+import { createDispatchStatusPublication } from './helpers/dispatch-status-publication.js';
 import { withEventPurge } from './helpers/purge-append-only-events.js';
 
 describe('Lock order of the changes over existing dispatches (e2e, ST-72.5 fix)', () => {
@@ -87,7 +88,7 @@ describe('Lock order of the changes over existing dispatches (e2e, ST-72.5 fix)'
 
     it('waits for the batch held by the cutoff instead of deadlocking with it', async () => {
         const { batchId, dispatchId, ref } = await makeBatchWithOrder();
-        const changes = new TypeOrmExistingDispatchChanges(dataSource);
+        const changes = new TypeOrmExistingDispatchChanges(dataSource, createDispatchStatusPublication(dataSource));
 
         // "The cutoff": locks the batch first, like the real writer does.
         const cutoff = await open();

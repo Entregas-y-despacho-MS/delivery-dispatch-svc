@@ -42,6 +42,11 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
             [users[driver], batchSequence++],
         );
         batchIds.push(id);
+        await dataSource.query(
+            `INSERT INTO route_batch_events (route_batch_id, event_type, actor_type, metadata)
+             VALUES ($1, 'route_started', 'system', $2::jsonb)`,
+            [id, JSON.stringify({ startedAt: new Date(Date.now() - 5 * 60_000).toISOString() })],
+        );
         return id as number;
     };
 
@@ -220,6 +225,26 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
             status: 'pending', type: 'dispatch.transfer.status_changed',
             data: expect.objectContaining({ status: 'not_delivered', previousStatus: 'out_for_delivery', recordVersion: 1 }),
         }]);
+    });
+
+    it('no permite que el móvil sincronice returned: es una decisión del coordinador', async () => {
+        const id = await newDispatch(await newBatch('driver1'));
+        const event = {
+            type: 'status_change', clientEventId: uuidv7(), dispatchId: id,
+            occurredAt: new Date().toISOString(), dispatchStatusId: statusIds.returned,
+        };
+
+        const response = await syncEvents([event]);
+
+        expect(response.status).toBe(201);
+        expect(response.body.results).toMatchObject([{
+            clientEventId: event.clientEventId,
+            outcome: 'failed',
+            error: 'The driver cannot set dispatch status returned.',
+        }]);
+        expect(await dispatchRow(id)).toMatchObject({ status: 'out_for_delivery' });
+        expect(await eventsFor(id)).toHaveLength(0);
+        expect(await outboundFor(id)).toHaveLength(0);
     });
 
     it('convierte y publica un incidente offline con su reasonCode', async () => {

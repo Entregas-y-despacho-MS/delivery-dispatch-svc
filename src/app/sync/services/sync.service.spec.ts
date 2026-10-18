@@ -8,9 +8,14 @@ import { SyncEventType } from '../dto/sync-event-type.enum.js';
 const ID1 = '01933b6e-7f2a-7c3d-9a1b-2f8e6c4d5a10';
 const DRIVER = 5;
 
-function build(over: { assigned?: boolean; targetStatus?: string; currentStatus?: string; reasonCode?: string } = {}) {
+function build(over: { assigned?: boolean; targetStatus?: string; currentStatus?: string | null; reasonCode?: string; routeStatus?: string; routeStartedAt?: string | null; routeClosedAt?: string | null } = {}) {
     const manager = { query: vi.fn(async (sql: string) => {
         if (sql.includes('incident_reasons')) return [{ code: over.reasonCode ?? 'DAMAGED_PACKAGE' }];
+        if (sql.includes('LEFT JOIN LATERAL') && sql.includes('route_batch_events')) return [{
+            status: over.routeStatus ?? 'in_execution',
+            started_at: over.routeStartedAt === undefined ? '2026-01-01T00:00:00.000Z' : over.routeStartedAt,
+            closed_at: over.routeClosedAt ?? null,
+        }];
         return [{ dispatch_id: 42 }];
     }) };
     const dataSource = { transaction: vi.fn(async (cb: any) => cb(manager)) };
@@ -20,7 +25,7 @@ function build(over: { assigned?: boolean; targetStatus?: string; currentStatus?
     const dispatches = {
         isAssignedToDriver: vi.fn().mockResolvedValue(over.assigned ?? true),
         updateStatus:       vi.fn(),
-        getStatusName:      vi.fn().mockResolvedValue(over.currentStatus ?? 'pending'),
+        getStatusName:      vi.fn().mockResolvedValue(over.currentStatus === undefined ? 'out_for_delivery' : over.currentStatus),
         getStatusNameById:  vi.fn().mockResolvedValue(over.targetStatus ?? 'in_transit'),
         getStatusIdByName:  vi.fn().mockResolvedValue(7),
     };
@@ -72,18 +77,60 @@ describe('SyncService.processBatch — a driver only syncs their own dispatches'
         expect(statusPublication.publish).not.toHaveBeenCalled();
     });
 
-    it.each(['delivered', 'not_delivered', 'returned', 'cancelled'])('publishes %s from offline status sync in the same transaction', async (status) => {
-        const { service, statusPublication, events, manager } = build({ targetStatus: status });
+    it.each(['delivered', 'not_delivered'])('publishes %s from offline status sync in the same transaction', async (status) => {
+        const { service, statusPublication, events, manager } = build({ targetStatus: status, currentStatus: 'in_transit' });
         const occurredAt = recent();
 
         const result = (await service.processBatch([statusEvent({ dispatchStatusId: 9, occurredAt })], DRIVER)).results[0];
         expect(result.outcome).toBe('applied');
         expect(statusPublication.publish).toHaveBeenCalledWith(manager, {
-            dispatchId: 42, status, previousStatus: 'pending', occurredAt: new Date(occurredAt),
+            dispatchId: 42, status, previousStatus: 'in_transit', occurredAt: new Date(occurredAt),
         });
         expect(events.create).toHaveBeenCalledWith(expect.objectContaining({
-            metadata: expect.objectContaining({ previousStatus: 'pending', status, outboundRecordVersion: 1 }),
+            metadata: expect.objectContaining({ previousStatus: 'in_transit', status, outboundRecordVersion: 1 }),
         }), { manager });
+    });
+
+    it.each(['returned', 'cancelled', 'incident'])('does not let a driver sync coordinator-only status %s', async (status) => {
+        const { service, dispatches, events, statusPublication } = build({ targetStatus: status });
+
+        const result = (await service.processBatch([statusEvent({ dispatchStatusId: 9 })], DRIVER)).results[0];
+
+        expect(result.outcome).toBe('failed');
+        expect(dispatches.updateStatus).not.toHaveBeenCalled();
+        expect(events.create).not.toHaveBeenCalled();
+        expect(statusPublication.publish).not.toHaveBeenCalled();
+    });
+
+    it('rejects a sync event outside the route execution window without writing it', async () => {
+        const { service, dispatches, events, incidents, statusPublication } = build({ routeStatus: 'confirmed' });
+
+        const result = (await service.processBatch([statusEvent()], DRIVER)).results[0];
+
+        expect(result).toMatchObject({ outcome: 'failed', error: 'The dispatch event is outside the route execution window.' });
+        expect(dispatches.updateStatus).not.toHaveBeenCalled();
+        expect(events.create).not.toHaveBeenCalled();
+        expect(incidents.create).not.toHaveBeenCalled();
+        expect(statusPublication.publish).not.toHaveBeenCalled();
+    });
+
+    it('rejects an in-execution batch without its route_started timestamp', async () => {
+        const { service, dispatches, events } = build({ routeStartedAt: null });
+
+        const result = (await service.processBatch([statusEvent()], DRIVER)).results[0];
+
+        expect(result).toMatchObject({ outcome: 'failed', error: 'The dispatch event is outside the route execution window.' });
+        expect(dispatches.updateStatus).not.toHaveBeenCalled();
+        expect(events.create).not.toHaveBeenCalled();
+    });
+
+    it('accepts an offline event recorded before an already closed route ended', async () => {
+        const { service, events } = build({ routeStatus: 'closed', routeClosedAt: new Date().toISOString() });
+
+        const result = (await service.processBatch([statusEvent()], DRIVER)).results[0];
+
+        expect(result.outcome).toBe('applied');
+        expect(events.create).toHaveBeenCalled();
     });
 
     it('an event that was already processed stays already_processed (idempotent retry)', async () => {
