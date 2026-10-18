@@ -25,6 +25,8 @@ function setup(options: {
     active?: { dispatch_id: number }[];
     target?: { dispatch_status_id: number }[];
     updated?: { updated_at: Date }[];
+    remaining?: { dispatch_id: number }[];
+    closed?: { closed_at: Date }[];
     previous?: { dispatchId: number; eventType: string; createdAt: Date; metadata: Record<string, unknown> } | null;
     evidence?: boolean;
 } = {}) {
@@ -34,9 +36,13 @@ function setup(options: {
         batch: options.batch ?? [{ id: 55, driver_id: options.driverId ?? 7, status: options.batchStatus ?? 'in_execution' }],
         dispatch: [{ id: 12, route_batch_id: 55, status: options.current ?? DispatchStatusEnum.OUT_FOR_DELIVERY, evidence_policy: 'hand_delivery_standard', version: 4, updated_at: saved }],
         latest: options.latest ?? [], active: options.active ?? [], target: options.target ?? [{ dispatch_status_id: 3 }], updated: options.updated ?? [{ updated_at: saved }],
+        remaining: options.remaining ?? [{ dispatch_id: 12 }], closed: options.closed ?? [{ closed_at: saved }],
     };
     const manager = { query: vi.fn(async (sql: string) => {
         if (sql.includes('SELECT route_batch_id FROM dispatches')) return state.identity;
+        if (sql.includes('ds.name = ANY($2::varchar[])')) return state.remaining;
+        if (sql.includes('UPDATE route_batches')) return state.closed;
+        if (sql.includes('INSERT INTO route_batch_events')) return [];
         if (sql.includes('FROM route_batches')) return state.batch;
         if (sql.includes('AND ds.name = $3')) return state.active;
         if (sql.includes('JOIN dispatch_statuses ds')) return state.dispatch;
@@ -83,6 +89,43 @@ describe('DispatchStatusService.update', () => {
         expect(updateSql).toContain('SET dispatch_status_id = $1, updated_at = now()');
         expect(updateSql).not.toMatch(/version|latitude|longitude|gps/i);
         expect(ctx.events.emit).toHaveBeenCalledWith(DISPATCH_STATUS_CHANGED_EVENT, expect.objectContaining({ status: 'in_transit', previousStatus: 'out_for_delivery' }));
+    });
+
+    it('closes the batch and records a system event in the same transaction when no open dispatch remains', async () => {
+        const ctx = setup({
+            current: DispatchStatusEnum.IN_TRANSIT,
+            remaining: [],
+        });
+        ctx.dataSource.transaction.mockImplementationOnce(async (work: (manager: unknown) => unknown) => {
+            const result = await work(ctx.manager);
+            expect(ctx.events.emit).not.toHaveBeenCalled();
+            return result;
+        });
+
+        await ctx.service.update(12, dto(DispatchStatusEnum.DELIVERED), 7);
+
+        const closeIndex = ctx.manager.query.mock.calls.findIndex(([sql]) => String(sql).includes('UPDATE route_batches'));
+        const routeEventIndex = ctx.manager.query.mock.calls.findIndex(([sql]) => String(sql).includes("INSERT INTO route_batch_events"));
+        expect(closeIndex).toBeGreaterThan(-1);
+        expect(routeEventIndex).toBeGreaterThan(closeIndex);
+        expect(ctx.manager.query.mock.calls[routeEventIndex]).toMatchObject([
+            expect.stringContaining("'closed', NULL, 'system'"),
+            [55, 'All route dispatches are outside active states.', JSON.stringify({ dispatchId: 12, dispatchStatus: DispatchStatusEnum.DELIVERED })],
+        ]);
+        expect(ctx.events.emit).toHaveBeenCalledWith(DISPATCH_STATUS_CHANGED_EVENT, expect.objectContaining({ status: DispatchStatusEnum.DELIVERED }));
+    });
+
+    it('keeps the batch in execution while an assigned, out_for_delivery or in_transit dispatch remains', async () => {
+        const ctx = setup({ remaining: [{ dispatch_id: 99 }] });
+
+        await ctx.service.update(12, dto(DispatchStatusEnum.IN_TRANSIT), 7);
+
+        expect(ctx.manager.query).toHaveBeenCalledWith(
+            expect.stringContaining('ds.name = ANY($2::varchar[])'),
+            [55, ['assigned', 'out_for_delivery', 'in_transit']],
+        );
+        expect(ctx.manager.query.mock.calls.some(([sql]) => String(sql).includes('UPDATE route_batches'))).toBe(false);
+        expect(ctx.manager.query.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO route_batch_events'))).toBe(false);
     });
 
     it('rejects illegal transitions without writing or publishing', async () => {
