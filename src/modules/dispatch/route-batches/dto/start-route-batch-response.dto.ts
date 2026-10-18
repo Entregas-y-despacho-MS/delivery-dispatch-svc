@@ -23,6 +23,14 @@ export class StartRouteBatchResponseDto {
   dispatchIds!: number[];
 
   @ApiProperty({
+    type: [Number],
+    example: [103],
+    description:
+      'Dispatch IDs skipped because they have an unresolved package-check failure.',
+  })
+  excludedDispatchIds!: number[];
+
+  @ApiProperty({
     format: 'date-time',
     example: '2026-10-18T12:30:00.000Z',
     description: 'UTC time when the route and custody transfer were recorded.',

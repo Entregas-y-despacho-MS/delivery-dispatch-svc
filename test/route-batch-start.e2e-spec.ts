@@ -175,6 +175,7 @@ describe('POST /route-batches/:id/start (e2e, ST-51.5)', () => {
       routeBatchId,
       status: 'in_execution',
       dispatchIds: [dispatchId],
+      excludedDispatchIds: [],
     });
     const [{ status: batchStatus, accepted_at: acceptedAt }] = await db.query(
       `SELECT status, accepted_at FROM route_batches WHERE route_batch_id = $1`,
@@ -249,6 +250,116 @@ describe('POST /route-batches/:id/start (e2e, ST-51.5)', () => {
     );
     expect(routeEvents).toBe(1);
     expect(messages).toBe(1);
+  });
+
+  it('starts only dispatches without an unresolved cotejo failure and repeats the exclusions idempotently', async () => {
+    const { routeBatchId, dispatchId, sourceOrderRef } = await fixture();
+    const excludedOrderRef = `${sourceOrderRef}-EXCLUDED`;
+    sourceRefs.push(excludedOrderRef);
+    const [{ dispatch_type_id: typeId }] = await db.query(
+      `SELECT dispatch_type_id FROM dispatch_types WHERE name = 'delivery'`,
+    );
+    const [{ dispatch_status_id: assignedId }] = await db.query(
+      `SELECT dispatch_status_id FROM dispatch_statuses WHERE name = 'assigned'`,
+    );
+    const [{ dispatch_id: excludedDispatchId }] = await db.query(
+      `INSERT INTO dispatches (dispatch_type_id, dispatch_status_id, route_batch_id, sequence_order,
+          source_order_ref, delivery_address, tracking_code, version)
+       VALUES ($1, $2, $3, 2, $4, 'Excluded test destination', NULL, 1) RETURNING dispatch_id`,
+      [typeId, assignedId, routeBatchId, excludedOrderRef],
+    );
+    const excludedPackageId = `${excludedOrderRef}-PKG`;
+    await db.query(
+      `INSERT INTO dispatch_packages (dispatch_id, external_package_id, length_cm, width_cm, height_cm, gross_weight_kg)
+       VALUES ($1, $2, 20, 20, 20, 5)`,
+      [excludedDispatchId, excludedPackageId],
+    );
+    await db.query(
+      `INSERT INTO dispatch_events (dispatch_id, event_type, actor_user_id, actor_type, reason, metadata)
+       VALUES ($1, 'cotejo_failed', $2, 'user', 'Package did not pass the physical check', $3::jsonb)`,
+      [
+        excludedDispatchId,
+        users.driver1,
+        JSON.stringify({
+          routeBatchId,
+          packageIds: [excludedPackageId],
+          photo: 'e2e://cotejo-failure.jpg',
+        }),
+      ],
+    );
+
+    const eventId = uuidv7();
+    const send = () =>
+      http()
+        .post(api(`/route-batches/${routeBatchId}/start`))
+        .set(auth('driver1'))
+        .send({ eventId });
+    const first = await send();
+    const retry = await send();
+
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({
+      dispatchIds: [dispatchId],
+      excludedDispatchIds: [Number(excludedDispatchId)],
+    });
+    expect(retry.status).toBe(200);
+    expect(retry.body).toEqual(first.body);
+    const [{ metadata: routeStarted }] = await db.query(
+      `SELECT metadata FROM route_batch_events WHERE route_batch_id = $1 AND event_type = 'route_started'`,
+      [routeBatchId],
+    );
+    expect(routeStarted).toMatchObject({
+      dispatchIds: [dispatchId],
+      excludedDispatchIds: [Number(excludedDispatchId)],
+    });
+    const statuses = await db.query(
+      `SELECT d.dispatch_id, s.name AS status FROM dispatches d JOIN dispatch_statuses s USING (dispatch_status_id)
+        WHERE d.dispatch_id = ANY($1::int[]) ORDER BY d.dispatch_id`,
+      [[dispatchId, excludedDispatchId]],
+    );
+    expect(statuses).toEqual([
+      { dispatch_id: dispatchId, status: 'out_for_delivery' },
+      { dispatch_id: Number(excludedDispatchId), status: 'assigned' },
+    ]);
+    const messages = await db.query(
+      `SELECT payload #>> '{data,salesOrderId}' AS order_ref FROM outbound_messages
+        WHERE type = 'dispatch.shipment.departed' AND payload #>> '{data,salesOrderId}' = ANY($1::text[])
+        ORDER BY payload #>> '{data,salesOrderId}'`,
+      [[sourceOrderRef, excludedOrderRef]],
+    );
+    expect(messages).toEqual([{ order_ref: sourceOrderRef }]);
+  });
+
+  it('returns a dedicated 409 and leaves the batch confirmed when every dispatch is excluded', async () => {
+    const { routeBatchId, dispatchId, packageId, sourceOrderRef } =
+      await fixture();
+    await db.query(
+      `INSERT INTO dispatch_events (dispatch_id, event_type, actor_user_id, actor_type, reason, metadata)
+       VALUES ($1, 'cotejo_failed', $2, 'user', 'Package did not pass the physical check', $3::jsonb)`,
+      [
+        dispatchId,
+        users.driver1,
+        JSON.stringify({ routeBatchId, packageIds: [packageId] }),
+      ],
+    );
+
+    const response = await http()
+      .post(api(`/route-batches/${routeBatchId}/start`))
+      .set(auth('driver1'))
+      .send({ eventId: uuidv7() });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe('ROUTE_BATCH_ALL_DISPATCHES_EXCLUDED');
+    const [{ status }] = await db.query(
+      `SELECT status FROM route_batches WHERE route_batch_id = $1`,
+      [routeBatchId],
+    );
+    expect(status).toBe('confirmed');
+    const [{ count }] = await db.query(
+      `SELECT COUNT(*)::int AS count FROM outbound_messages WHERE type = 'dispatch.shipment.departed' AND payload #>> '{data,salesOrderId}' = $1`,
+      [sourceOrderRef],
+    );
+    expect(count).toBe(0);
   });
 
   it('returns 403 when another driver starts the route', async () => {

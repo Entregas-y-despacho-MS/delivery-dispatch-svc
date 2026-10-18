@@ -38,7 +38,12 @@ interface PackageRow {
 interface StartedMetadata {
   eventId: string;
   dispatchIds: number[];
+  excludedDispatchIds?: number[];
   startedAt: string;
+}
+interface LatestCotejoEventRow {
+  dispatch_id: number;
+  event_type: 'cotejo_failed' | 'cotejo_resolved';
 }
 interface StartResult extends StartRouteBatchResponseDto {
   events: DispatchStatusChangedEvent[];
@@ -121,6 +126,7 @@ export class RouteBatchStartService {
         routeBatchId,
         status: RouteBatchStatusEnum.IN_EXECUTION,
         dispatchIds: prior.metadata.dispatchIds,
+        excludedDispatchIds: prior.metadata.excludedDispatchIds ?? [],
         startedAt: prior.metadata.startedAt,
         events: [],
       };
@@ -145,7 +151,38 @@ export class RouteBatchStartService {
         'ROUTE_BATCH_HAS_NO_DISPATCHES',
         'The route batch has no dispatches to start.',
       );
-    const notAssigned = dispatches.filter(
+
+    // ST-210.1 records cotejo outcomes as append-only dispatch events. A newer
+    // resolution for the same dispatch and batch cancels its previous failure.
+    // ST-210.1 must take the route-batch lock before appending these events so
+    // route start and a concurrent cotejo update are serialized.
+    const latestCotejoEvents: LatestCotejoEventRow[] = await manager.query(
+      `SELECT DISTINCT ON (e.dispatch_id) e.dispatch_id, e.event_type
+         FROM dispatch_events e
+        WHERE e.dispatch_id = ANY($1::int[])
+          AND e.event_type IN ('cotejo_failed', 'cotejo_resolved')
+          AND e.metadata->>'routeBatchId' = $2::text
+        ORDER BY e.dispatch_id, e.created_at DESC, e.dispatch_event_id DESC`,
+      [dispatches.map(({ id }) => id), routeBatchId],
+    );
+    const excludedIds = new Set(
+      latestCotejoEvents
+        .filter(({ event_type }) => event_type === 'cotejo_failed')
+        .map(({ dispatch_id }) => dispatch_id),
+    );
+    const excludedDispatchIds = dispatches
+      .filter(({ id }) => excludedIds.has(id))
+      .map(({ id }) => id);
+    const departingDispatches = dispatches.filter(
+      ({ id }) => !excludedIds.has(id),
+    );
+    if (departingDispatches.length === 0)
+      throw new RouteBatchStartConflictException(
+        'ROUTE_BATCH_ALL_DISPATCHES_EXCLUDED',
+        'No dispatches can depart because every dispatch has an unresolved package-check failure.',
+      );
+
+    const notAssigned = departingDispatches.filter(
       ({ status }) => status !== DispatchStatusEnum.ASSIGNED,
     );
     if (notAssigned.length)
@@ -153,7 +190,7 @@ export class RouteBatchStartService {
         'DISPATCH_NOT_ASSIGNED',
         `Dispatches ${notAssigned.map(({ id }) => id).join(', ')} are not assigned.`,
       );
-    const missingTracking = dispatches.filter(
+    const missingTracking = departingDispatches.filter(
       ({ tracking_code }) => !tracking_code?.trim(),
     );
     if (missingTracking.length)
@@ -165,7 +202,7 @@ export class RouteBatchStartService {
     const packages: PackageRow[] = await manager.query(
       `SELECT dispatch_id, external_package_id FROM dispatch_packages
         WHERE dispatch_id = ANY($1::int[]) ORDER BY dispatch_id, external_package_id`,
-      [dispatches.map(({ id }) => id)],
+      [departingDispatches.map(({ id }) => id)],
     );
     const packageIds = new Map<number, string[]>();
     for (const row of packages)
@@ -173,7 +210,7 @@ export class RouteBatchStartService {
         ...(packageIds.get(row.dispatch_id) ?? []),
         row.external_package_id,
       ]);
-    const missingPackages = dispatches.filter(
+    const missingPackages = departingDispatches.filter(
       ({ id }) => !packageIds.get(id)?.length,
     );
     if (missingPackages.length)
@@ -200,7 +237,7 @@ export class RouteBatchStartService {
       );
 
     const dispatchEvents: DispatchStatusChangedEvent[] = [];
-    for (const dispatch of dispatches) {
+    for (const dispatch of departingDispatches) {
       const updated: { dispatch_id: number }[] = await manager.query(
         `UPDATE dispatches SET dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $2), updated_at = $3
           WHERE dispatch_id = $1 AND route_batch_id = $4
@@ -264,7 +301,8 @@ export class RouteBatchStartService {
 
     const metadata: StartedMetadata = {
       eventId: dto.eventId,
-      dispatchIds: dispatches.map(({ id }) => id),
+      dispatchIds: departingDispatches.map(({ id }) => id),
+      excludedDispatchIds,
       startedAt: startedAt.toISOString(),
     };
     await manager.query(
@@ -290,6 +328,7 @@ export class RouteBatchStartService {
       routeBatchId,
       status: RouteBatchStatusEnum.IN_EXECUTION,
       dispatchIds: metadata.dispatchIds,
+      excludedDispatchIds: metadata.excludedDispatchIds ?? [],
       startedAt: metadata.startedAt,
       events: dispatchEvents,
     };
