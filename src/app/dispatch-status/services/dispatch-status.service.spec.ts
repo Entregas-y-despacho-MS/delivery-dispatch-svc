@@ -82,9 +82,7 @@ describe('DispatchStatusService.update', () => {
             clientEventId: eventId, actorUserId: 7, actorType: 'user', occurredAt: expect.any(Date),
             metadata: expect.objectContaining({ previousStatus: 'out_for_delivery', status: 'in_transit', version: 4, lat: -16.5, lng: -68.1, accuracy: 8.4 }),
         }), { manager: ctx.manager });
-        expect(ctx.statusPublication.publish).toHaveBeenCalledWith(ctx.manager, expect.objectContaining({
-            dispatchId: 12, status: DispatchStatusEnum.IN_TRANSIT, previousStatus: DispatchStatusEnum.OUT_FOR_DELIVERY,
-        }));
+        expect(ctx.statusPublication.publish).not.toHaveBeenCalled();
         const updateSql = ctx.manager.query.mock.calls.find(([sql]) => sql.includes('UPDATE dispatches'))?.[0] ?? '';
         expect(updateSql).toContain('SET dispatch_status_id = $1, updated_at = now()');
         expect(updateSql).not.toMatch(/version|latitude|longitude|gps/i);
@@ -108,11 +106,12 @@ describe('DispatchStatusService.update', () => {
 
     it('queues the delivery result and stores its outbound version with the event in one transaction', async () => {
         const ctx = setup({ current: DispatchStatusEnum.IN_TRANSIT });
-        await ctx.service.update(12, dto(DispatchStatusEnum.DELIVERED), 7);
+        const event = dto(DispatchStatusEnum.DELIVERED);
+        await ctx.service.update(12, event, 7);
 
         expect(ctx.statusPublication.publish).toHaveBeenCalledWith(ctx.manager, expect.objectContaining({
             dispatchId: 12, status: DispatchStatusEnum.DELIVERED, previousStatus: DispatchStatusEnum.IN_TRANSIT,
-            occurredAt: new Date(dto(DispatchStatusEnum.DELIVERED).occurredAt),
+            occurredAt: new Date(event.occurredAt),
         }));
         expect(ctx.dispatchEvents.create).toHaveBeenCalledWith(expect.objectContaining({
             metadata: expect.objectContaining({ outboundRecordVersion: 1 }),

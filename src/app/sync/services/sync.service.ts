@@ -13,6 +13,8 @@ import { SyncEventDto } from '../dto/sync-event.dto.js';
 import { SyncEventType } from '../dto/sync-event-type.enum.js';
 import { SyncEventOutcome, SyncEventResultDto, SyncEventsBatchResultDto } from '../dto/sync-event-result.dto.js';
 import { SyncEvidenceDto } from '../dto/sync-evidence.dto.js';
+import { DispatchStatusPublicationService } from '../../../modules/dispatch/dispatch-status-publication/dispatch-status-publication.service.js';
+import { PUBLISHED_DELIVERY_OUTCOME_STATUSES } from '../../../modules/dispatch/dispatch-status-publication/dispatch-status-message.js';
 
 // A device clock is never exact, but an event from 2099 or from last year is not a real one: it would
 // corrupt the history (and every report built on it).
@@ -34,6 +36,7 @@ export class SyncService {
         private readonly deliveryEvidencesService: DeliveryEvidencesService,
         private readonly dispatchesService: DispatchesService,
         private readonly storage: StoragePort,
+        private readonly statusPublication: DispatchStatusPublicationService,
     ) {}
 
     /**
@@ -98,6 +101,11 @@ export class SyncService {
                 this.assertPlausibleTime(event.occurredAt);
 
                 // Unknown dispatch and someone else's dispatch answer the same: a driver cannot probe other routes.
+                const [lockedDispatch] = await manager.query(
+                    'SELECT dispatch_id FROM dispatches WHERE dispatch_id = $1 FOR UPDATE',
+                    [event.dispatchId],
+                );
+                if (!lockedDispatch) throw new DispatchNotFoundException();
                 if (!(await this.dispatchesService.isAssignedToDriver(event.dispatchId, driverId, options))) throw new DispatchNotFoundException();
                 // A finished order (delivered / returned) cannot go back: a late or duplicated event from the
                 // device must not reopen it.
@@ -106,13 +114,28 @@ export class SyncService {
                 if (current && FINAL_STATUSES.includes(current) && target !== current) {
                     throw new BadRequestException(`The dispatch is already ${current}: its status cannot change.`);
                 }
+                const occurredAt = new Date(event.occurredAt);
+                const outboundRecordVersion = current && target && current !== target && PUBLISHED_DELIVERY_OUTCOME_STATUSES.includes(target)
+                    ? await this.statusPublication.publish(manager, {
+                        dispatchId: event.dispatchId,
+                        status: target,
+                        previousStatus: current,
+                        occurredAt,
+                    })
+                    : null;
                 await this.dispatchesService.updateStatus(event.dispatchId, event.dispatchStatusId!, options);
                 await this.dispatchEventsService.create({
                     dispatchId:    event.dispatchId,
                     eventType:     'status_changed',
                     detail:        event.detail ?? null,
                     clientEventId: event.clientEventId,
-                    occurredAt:    new Date(event.occurredAt),
+                    occurredAt,
+                    metadata: {
+                        previousStatus: current,
+                        status: target,
+                        occurredAt: event.occurredAt,
+                        ...(outboundRecordVersion !== null && { outboundRecordVersion }),
+                    },
                 }, options);
                 return SyncEventOutcome.APPLIED;
             }
@@ -122,7 +145,35 @@ export class SyncService {
                 return SyncEventOutcome.ALREADY_PROCESSED;
             }
             this.assertPlausibleTime(event.occurredAt);
+            const [lockedDispatch] = await manager.query(
+                'SELECT dispatch_id FROM dispatches WHERE dispatch_id = $1 FOR UPDATE',
+                [event.dispatchId],
+            );
+            if (!lockedDispatch) throw new DispatchNotFoundException();
             if (!(await this.dispatchesService.isAssignedToDriver(event.dispatchId, driverId, options))) throw new DispatchNotFoundException();
+
+            const current = await this.dispatchesService.getStatusName(event.dispatchId, options);
+            if (current && FINAL_STATUSES.includes(current) && current !== 'incident') {
+                throw new BadRequestException(`The dispatch is already ${current}: its status cannot change.`);
+            }
+            const [reason]: { code: string }[] = await manager.query(
+                'SELECT code FROM incident_reasons WHERE incident_reason_id = $1 AND deleted_at IS NULL',
+                [event.incidentReasonId],
+            );
+            const incidentStatusId = await this.dispatchesService.getStatusIdByName('incident', options);
+            if (!incidentStatusId) throw new BadRequestException('The incident dispatch status is not configured.');
+
+            let outboundRecordVersion: number | null = null;
+            if (current !== 'incident') {
+                outboundRecordVersion = await this.statusPublication.publish(manager, {
+                    dispatchId: event.dispatchId,
+                    status: 'incident',
+                    previousStatus: current ?? 'unknown',
+                    occurredAt: new Date(event.occurredAt),
+                    ...(reason?.code && { reasonCode: reason.code }),
+                });
+                await this.dispatchesService.updateStatus(event.dispatchId, incidentStatusId, options);
+            }
 
             await this.dispatchIncidentsService.create({
                 id:               event.clientEventId,
@@ -130,6 +181,21 @@ export class SyncService {
                 incidentReasonId: event.incidentReasonId!,
                 description:      event.detail ?? null,
                 occurredAt:       new Date(event.occurredAt),
+            }, options);
+            await this.dispatchEventsService.create({
+                dispatchId: event.dispatchId,
+                eventType: 'status_changed',
+                detail: event.detail ?? null,
+                clientEventId: event.clientEventId,
+                occurredAt: new Date(event.occurredAt),
+                reason: reason?.code ?? null,
+                metadata: {
+                    previousStatus: current,
+                    status: 'incident',
+                    occurredAt: event.occurredAt,
+                    ...(reason?.code && { reasonCode: reason.code }),
+                    ...(outboundRecordVersion !== null && { outboundRecordVersion }),
+                },
             }, options);
             return SyncEventOutcome.APPLIED;
         });

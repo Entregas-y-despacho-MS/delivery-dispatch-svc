@@ -5,6 +5,7 @@ import { DispatchEventsModule } from '../../modules/dispatch/dispatch-events/dis
 import { DispatchIncidentsModule } from '../../modules/dispatch/dispatch-incidents/dispatch-incidents.module.js';
 import { DeliveryEvidencesModule } from '../../modules/dispatch/delivery-evidences/delivery-evidences.module.js';
 import { DispatchesModule } from '../../modules/dispatch/dispatches/dispatches.module.js';
+import { DispatchStatusPublicationModule } from '../../modules/dispatch/dispatch-status-publication/dispatch-status-publication.module.js';
 
 // No own table — orchestrates across dispatch-events/dispatch-incidents/delivery-evidences/
 // dispatches (RF-U13). Same shape as app/auth: "system logic", not a domain CRUD module.
@@ -14,6 +15,7 @@ import { DispatchesModule } from '../../modules/dispatch/dispatches/dispatches.m
         DispatchIncidentsModule,
         DeliveryEvidencesModule,
         DispatchesModule,
+        DispatchStatusPublicationModule,
     ],
     controllers: [SyncController],
     providers:   [SyncService],

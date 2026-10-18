@@ -14,6 +14,7 @@ import { UpdateDispatchStatusDto } from '../dto/update-dispatch-status.dto.js';
 import { assertDriverDispatchTransition } from '../domain/dispatch-status-transition.js';
 import { DISPATCH_STATUS_CHANGED_EVENT, DispatchStatusChangedEvent } from '../dispatch-status-changed.event.js';
 import { DispatchStatusPublicationService } from '../../../modules/dispatch/dispatch-status-publication/dispatch-status-publication.service.js';
+import { PUBLISHED_DELIVERY_OUTCOME_STATUSES } from '../../../modules/dispatch/dispatch-status-publication/dispatch-status-message.js';
 
 interface DispatchRow {
     id: number;
@@ -181,7 +182,7 @@ export class DispatchStatusService {
             [target.dispatch_status_id, dispatchId],
         );
         const occurredAt = new Date(dto.occurredAt);
-        const outboundRecordVersion = dispatch.status === dto.status
+        const outboundRecordVersion = dispatch.status === dto.status || !PUBLISHED_DELIVERY_OUTCOME_STATUSES.includes(dto.status)
             ? null
             : await this.statusPublication.publish(manager, {
                 dispatchId,

@@ -8,8 +8,11 @@ import { SyncEventType } from '../dto/sync-event-type.enum.js';
 const ID1 = '01933b6e-7f2a-7c3d-9a1b-2f8e6c4d5a10';
 const DRIVER = 5;
 
-function build(over: { assigned?: boolean } = {}) {
-    const manager = {};
+function build(over: { assigned?: boolean; targetStatus?: string; currentStatus?: string; reasonCode?: string } = {}) {
+    const manager = { query: vi.fn(async (sql: string) => {
+        if (sql.includes('incident_reasons')) return [{ code: over.reasonCode ?? 'DAMAGED_PACKAGE' }];
+        return [{ dispatch_id: 42 }];
+    }) };
     const dataSource = { transaction: vi.fn(async (cb: any) => cb(manager)) };
     const events    = { existsByClientEventId: vi.fn().mockResolvedValue(false), create: vi.fn() };
     const incidents = { existsById: vi.fn().mockResolvedValue(false), create: vi.fn() };
@@ -17,12 +20,14 @@ function build(over: { assigned?: boolean } = {}) {
     const dispatches = {
         isAssignedToDriver: vi.fn().mockResolvedValue(over.assigned ?? true),
         updateStatus:       vi.fn(),
-        getStatusName:      vi.fn().mockResolvedValue('pending'),       // current status of the dispatch
-        getStatusNameById:  vi.fn().mockResolvedValue('in_transit'),    // status the event asks for
+        getStatusName:      vi.fn().mockResolvedValue(over.currentStatus ?? 'pending'),
+        getStatusNameById:  vi.fn().mockResolvedValue(over.targetStatus ?? 'in_transit'),
+        getStatusIdByName:  vi.fn().mockResolvedValue(7),
     };
+    const statusPublication = { publish: vi.fn().mockResolvedValue(1) };
     const storage = { upload: vi.fn().mockResolvedValue({ url: 'http://x/uploads/a.png' }) };
-    const service = new SyncService(dataSource as any, events as any, incidents as any, evidences as any, dispatches as any, storage as any);
-    return { service, events, incidents, evidences, dispatches, storage, manager };
+    const service = new SyncService(dataSource as any, events as any, incidents as any, evidences as any, dispatches as any, storage as any, statusPublication as any);
+    return { service, events, incidents, evidences, dispatches, storage, manager, statusPublication };
 }
 
 const recent = () => new Date(Date.now() - 60_000).toISOString();
@@ -57,13 +62,28 @@ describe('SyncService.processBatch — a driver only syncs their own dispatches'
     });
 
     it('their own dispatch is applied', async () => {
-        const { service, dispatches, events } = build();
+        const { service, dispatches, events, statusPublication } = build();
 
         const { results } = await service.processBatch([statusEvent()], DRIVER);
 
         expect(results[0].outcome).toBe('applied');
         expect(dispatches.updateStatus).toHaveBeenCalledWith(42, 2, expect.anything());
         expect(events.create).toHaveBeenCalled();
+        expect(statusPublication.publish).not.toHaveBeenCalled();
+    });
+
+    it.each(['delivered', 'not_delivered', 'returned', 'cancelled'])('publishes %s from offline status sync in the same transaction', async (status) => {
+        const { service, statusPublication, events, manager } = build({ targetStatus: status });
+        const occurredAt = recent();
+
+        const result = (await service.processBatch([statusEvent({ dispatchStatusId: 9, occurredAt })], DRIVER)).results[0];
+        expect(result.outcome).toBe('applied');
+        expect(statusPublication.publish).toHaveBeenCalledWith(manager, {
+            dispatchId: 42, status, previousStatus: 'pending', occurredAt: new Date(occurredAt),
+        });
+        expect(events.create).toHaveBeenCalledWith(expect.objectContaining({
+            metadata: expect.objectContaining({ previousStatus: 'pending', status, outboundRecordVersion: 1 }),
+        }), { manager });
     });
 
     it('an event that was already processed stays already_processed (idempotent retry)', async () => {
@@ -211,6 +231,47 @@ describe('SyncService — references that do not exist are reported clearly (it 
         dispatches.updateStatus.mockRejectedValue(new Error('connection refused to 10.0.0.5'));
 
         expect((await service.processBatch([statusEvent()], DRIVER)).results[0].error).toBe('Unexpected error.');
+    });
+});
+
+describe('SyncService — offline incidents publish the result atomically', () => {
+    it('moves the dispatch to incident and records reason/outbox version in the same transaction', async () => {
+        const { service, dispatches, incidents, events, statusPublication, manager } = build({ currentStatus: 'out_for_delivery' });
+        const occurredAt = recent();
+
+        const result = (await service.processBatch([incidentEvent({ occurredAt })], DRIVER)).results[0];
+
+        expect(result.outcome).toBe('applied');
+        expect(dispatches.getStatusIdByName).toHaveBeenCalledWith('incident', { manager });
+        expect(dispatches.updateStatus).toHaveBeenCalledWith(42, 7, { manager });
+        expect(statusPublication.publish).toHaveBeenCalledWith(manager, {
+            dispatchId: 42, status: 'incident', previousStatus: 'out_for_delivery', occurredAt: new Date(occurredAt), reasonCode: 'DAMAGED_PACKAGE',
+        });
+        expect(incidents.create).toHaveBeenCalledWith(expect.objectContaining({ id: ID1, dispatchId: 42 }), { manager });
+        expect(events.create).toHaveBeenCalledWith(expect.objectContaining({
+            eventType: 'status_changed', clientEventId: ID1, reason: 'DAMAGED_PACKAGE',
+            metadata: expect.objectContaining({ status: 'incident', previousStatus: 'out_for_delivery', outboundRecordVersion: 1 }),
+        }), { manager });
+    });
+
+    it('does not change a finished dispatch to incident', async () => {
+        const { service, dispatches, incidents, events } = build({ currentStatus: 'delivered' });
+
+        const result = (await service.processBatch([incidentEvent()], DRIVER)).results[0];
+
+        expect(result.outcome).toBe('failed');
+        expect(result.error).toContain('already delivered');
+        expect(dispatches.updateStatus).not.toHaveBeenCalled();
+        expect(incidents.create).not.toHaveBeenCalled();
+        expect(events.create).not.toHaveBeenCalled();
+    });
+
+    it('does not publish on a duplicate incident event ID', async () => {
+        const { service, incidents, statusPublication } = build();
+        incidents.existsById.mockResolvedValue(true);
+
+        expect((await service.processBatch([incidentEvent()], DRIVER)).results[0].outcome).toBe('already_processed');
+        expect(statusPublication.publish).not.toHaveBeenCalled();
     });
 });
 

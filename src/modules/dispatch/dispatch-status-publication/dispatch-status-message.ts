@@ -1,4 +1,4 @@
-import { v5 } from 'uuid';
+import { createHash } from 'node:crypto';
 
 export const DISPATCH_TRANSFER_STATUS_CHANGED_TOPIC = 'dispatch.transfer.status_changed';
 
@@ -9,8 +9,6 @@ export const PUBLISHED_DELIVERY_OUTCOME_STATUSES: readonly string[] = [
     'returned',
     'cancelled',
 ];
-
-const STATUS_MESSAGE_NAMESPACE = 'ff487b35-37d1-48fa-a6ad-a84632fe8164';
 
 export interface DispatchStatusMessageData {
     dispatchId: number;
@@ -24,8 +22,13 @@ export interface DispatchStatusMessageData {
     reasonCode?: string;
 }
 
-export function dispatchStatusMessageId(dispatchId: number, status: string, recordVersion: number): string {
-    return v5(`${dispatchId}:${status}:${recordVersion}`, STATUS_MESSAGE_NAMESPACE);
+export function dispatchStatusMessageId(dispatchId: number, status: string, recordVersion: number, occurredAt: Date): string {
+    // Deterministic UUIDv7: contract-compatible and stable for the idempotency tuple.
+    const timestamp = Math.max(0, Math.trunc(occurredAt.getTime())).toString(16).slice(-12).padStart(12, '0');
+    const entropy = createHash('sha256').update(`${dispatchId}:${status}:${recordVersion}`).digest('hex');
+    const randA = ((Number.parseInt(entropy.slice(0, 3), 16) & 0x0fff) | 0x7000).toString(16);
+    const randB = ((Number.parseInt(entropy.slice(3, 6), 16) & 0x3fff) | 0x8000).toString(16);
+    return `${timestamp.slice(0, 8)}-${timestamp.slice(8)}-${randA}-${randB}-${entropy.slice(6, 18)}`;
 }
 
 export function dispatchStatusMessagePayload(data: DispatchStatusMessageData): Record<string, unknown> {

@@ -81,7 +81,7 @@ export class DispatchStatusPublicationService {
             type: DISPATCH_TRANSFER_STATUS_CHANGED_TOPIC,
             source: 'dispatch',
             occurredAt: input.occurredAt,
-            messageId: dispatchStatusMessageId(input.dispatchId, input.status, recordVersion),
+            messageId: dispatchStatusMessageId(input.dispatchId, input.status, recordVersion, input.occurredAt),
             data,
         }), { manager });
 

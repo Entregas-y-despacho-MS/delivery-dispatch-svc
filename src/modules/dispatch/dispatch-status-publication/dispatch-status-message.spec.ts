@@ -7,11 +7,13 @@ import {
 
 describe('dispatch transfer status-changed message', () => {
     it('uses a stable id for dispatch, resulting status and record version', () => {
-        const first = dispatchStatusMessageId(42, 'delivered', 3);
-        expect(dispatchStatusMessageId(42, 'delivered', 3)).toBe(first);
-        expect(dispatchStatusMessageId(42, 'returned', 3)).not.toBe(first);
-        expect(dispatchStatusMessageId(42, 'delivered', 4)).not.toBe(first);
-        expect(dispatchStatusMessageId(43, 'delivered', 3)).not.toBe(first);
+        const at = new Date('2026-10-18T00:00:00.000Z');
+        const first = dispatchStatusMessageId(42, 'delivered', 3, at);
+        expect(dispatchStatusMessageId(42, 'delivered', 3, at)).toBe(first);
+        expect(dispatchStatusMessageId(42, 'returned', 3, at)).not.toBe(first);
+        expect(dispatchStatusMessageId(42, 'delivered', 4, at)).not.toBe(first);
+        expect(dispatchStatusMessageId(43, 'delivered', 3, at)).not.toBe(first);
+        expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     });
 
     it('publishes the order identity, transport result and optional reason without personal data', () => {
