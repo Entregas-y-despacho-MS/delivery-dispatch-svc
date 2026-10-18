@@ -16,7 +16,7 @@ import {
 } from '../exceptions/index.js';
 import { PublicTrackingService, assertCanReschedule, type TrackingContext } from './public-tracking.service.js';
 import { SlotOfferService } from './slot-offer.service.js';
-import { VerificationCodeService } from './verification-code.service.js';
+import { VerificationCodeService, type ClaimedProof } from './verification-code.service.js';
 
 /** Catalog code seeded for the rescheduling nobody executes: the customer's own (`reschedule_reasons`). */
 export const CUSTOMER_RESCHEDULE_REASON_CODE = 'RES-CLI-SELF';
@@ -83,26 +83,44 @@ export class CustomerRescheduleService {
     async reschedule(token: string, slotId: string, proof: string | undefined, now: Date = new Date()): Promise<PublicTrackingDto> {
         const context = await this.tracking.resolve(token, now);
         assertCanReschedule(context);
-        if (!(await this.verification.hasValidProof(context.dispatchId, proof))) throw new VerificationRequiredException();
-
+        // A request that cannot be a rescheduling never touches the proof.
         const choice = parseSlotId(slotId);
         if (!choice) throw new SlotNoLongerAvailableException();
-        // The routing engine first, before anything is locked. The slot is matched by its date and time: that is what
-        // the customer chose, and only one batch offers a given date and time.
-        const { offers } = await this.offers.computeOffers(context.dispatchId, now);
-        const offer = offers.find((candidate) => candidate.windowStart.getTime() === choice.windowStart.getTime());
-        if (!offer) throw new SlotNoLongerAvailableException();
 
-        const applied = await this.dataSource.transaction(async (manager) => await this.apply(manager, context, offer, now));
+        // The proof is CLAIMED, atomically, before anything else: of simultaneous requests with the same proof only one
+        // gets past this line, and a failure of the store is a 503 here, before the plan is asked or anything is locked.
+        const claim = await this.verification.claimProof(context.dispatchId, proof, now);
+        if (!claim) throw new VerificationRequiredException();
 
-        // The proof is spent only now that the rescheduling happened. Failing to spend it must not undo it.
-        await this.verification.consumeProof(context.dispatchId, proof).catch((error: unknown) => {
-            this.logger.warn(`The proof of dispatch ${context.dispatchId} could not be spent (${error instanceof Error ? error.name : 'unknown error'}).`);
-            return false;
-        });
+        let offer: RescheduleOffer | undefined;
+        let applied: Applied;
+        try {
+            // The routing engine first, before anything is locked. The slot is matched by its date and time: that is what
+            // the customer chose, and only one batch offers a given date and time.
+            const { offers } = await this.offers.computeOffers(context.dispatchId, now);
+            offer = offers.find((candidate) => candidate.windowStart.getTime() === choice.windowStart.getTime());
+            if (!offer) throw new SlotNoLongerAvailableException();
+            const chosen = offer;
+            applied = await this.dataSource.transaction(async (manager) => await this.apply(manager, context, chosen, now));
+        } catch (error) {
+            // Nothing was changed (the transaction is all or nothing): the customer keeps the proof, with what is left of it.
+            await this.giveBack(context.dispatchId, claim, now);
+            throw error;
+        }
+
+        // From here on the rescheduling is done and the proof stays spent. What follows must not undo it.
         await this.confirmByEmail(context, offer, token);
         this.logger.log(`Dispatch ${context.dispatchId} rescheduled by the customer (batch ${applied.fromBatchId} → ${offer.routeBatchId}, recordVersion ${applied.recordVersion}).`);
         return await this.tracking.view(token, now);
+    }
+
+    /** Gives the claimed proof back. If that fails the original error is the one the customer must see, so it is only logged. */
+    private async giveBack(dispatchId: number, claim: ClaimedProof, now: Date): Promise<void> {
+        try {
+            await this.verification.releaseProof(dispatchId, claim, now);
+        } catch (error) {
+            this.logger.warn(`The proof of dispatch ${dispatchId} could not be given back (${error instanceof Error ? error.name : 'unknown error'}).`);
+        }
     }
 
     private async apply(manager: EntityManager, context: TrackingContext, offer: RescheduleOffer, now: Date): Promise<Applied> {

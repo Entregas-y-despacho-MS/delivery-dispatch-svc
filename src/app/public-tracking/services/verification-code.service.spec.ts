@@ -1,4 +1,5 @@
 import { Logger } from '@nestjs/common';
+import { hashToken } from '../../../shared/utils/crypto.util.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryCacheAdapter } from '../../../plugins/cache/memory/memory-cache.adapter.js';
 import { CacheUnavailableException } from '../../../plugins/cache/exceptions/index.js';
@@ -154,8 +155,8 @@ describe('VerificationCodeService', () => {
 
             expect(proof).toMatch(/^[0-9a-f]{64}$/);
             expect(expiresAt).toEqual(new Date(now.getTime() + 10 * MIN));
-            await expect(service.hasValidProof(7, proof)).resolves.toBe(true);
-            await expect(service.hasValidProof(8, proof)).resolves.toBe(false);
+            await expect(service.hasValidProof(7, proof, now)).resolves.toBe(true);
+            await expect(service.hasValidProof(8, proof, now)).resolves.toBe(false);
             expect(events().map((e) => e.params[1])).toEqual(['reschedule_code_sent', 'reschedule_code_verified']);
             expect(JSON.stringify(events().at(-1)!.params)).not.toContain(proof);
         });
@@ -269,48 +270,132 @@ describe('VerificationCodeService', () => {
         });
     });
 
-    describe('consumeProof', () => {
+    describe('claimProof and releaseProof', () => {
         async function proofOf(service: VerificationCodeService, lastCode: () => string) {
             await service.send(context());
             return (await service.verify(context(), lastCode())).proof;
         }
 
-        it('spends the proof once: the same proof cannot be used a second time', async () => {
+        it('hands the proof to the first claim, and the same proof gives nothing a second time', async () => {
             const { service, lastCode } = setup();
             const proof = await proofOf(service, lastCode);
 
-            await expect(service.consumeProof(7, proof)).resolves.toBe(true);
-            await expect(service.consumeProof(7, proof)).resolves.toBe(false);
+            await expect(service.claimProof(7, proof)).resolves.toMatchObject({ hash: expect.any(String), expiresAt: expect.any(Number) });
+            await expect(service.claimProof(7, proof)).resolves.toBeNull();
             await expect(service.hasValidProof(7, proof)).resolves.toBe(false);
         });
 
-        it('hands it to only one of two parallel requests', async () => {
+        it('hands it to exactly one of many simultaneous claims', async () => {
             const { service, lastCode } = setup();
             const proof = await proofOf(service, lastCode);
 
-            const results = await Promise.all([service.consumeProof(7, proof), service.consumeProof(7, proof)]);
+            const claims = await Promise.all(Array.from({ length: 10 }, () => service.claimProof(7, proof)));
 
-            expect(results.filter(Boolean)).toHaveLength(1);
+            expect(claims.filter((claim) => claim !== null)).toHaveLength(1);
         });
 
-        it('does not spend the proof of someone else, or a wrong one', async () => {
+        it('does not claim the proof of someone else, a wrong one or a malformed one, and leaves the real one alone', async () => {
             const { service, lastCode } = setup();
             const proof = await proofOf(service, lastCode);
 
-            await expect(service.consumeProof(8, proof)).resolves.toBe(false);
-            await expect(service.consumeProof(7, 'b'.repeat(64))).resolves.toBe(false);
-            await expect(service.consumeProof(7, undefined)).resolves.toBe(false);
+            await expect(service.claimProof(8, proof)).resolves.toBeNull();
+            await expect(service.claimProof(7, 'b'.repeat(64))).resolves.toBeNull();
+            await expect(service.claimProof(7, 'nope')).resolves.toBeNull();
+            await expect(service.claimProof(7, undefined)).resolves.toBeNull();
             await expect(service.hasValidProof(7, proof)).resolves.toBe(true);
         });
 
-        it('lets a new code and a new proof follow the spent one', async () => {
+        it('does not claim a proof that already expired, even if the cache still holds it', async () => {
+            const { service, lastCode } = setup();
+            const proof = await proofOf(service, lastCode);
+
+            await expect(service.claimProof(7, proof, new Date(Date.now() + 11 * MIN))).resolves.toBeNull();
+        });
+
+        it('gives back a claimed proof with the life it had left', async () => {
+            vi.useFakeTimers();
+            const { service, lastCode } = setup();
+            const proof = await proofOf(service, lastCode);
+            const claimed = (await service.claimProof(7, proof))!;
+
+            vi.advanceTimersByTime(4 * MIN);
+            await service.releaseProof(7, claimed);
+
+            await expect(service.hasValidProof(7, proof)).resolves.toBe(true);
+            vi.advanceTimersByTime(6 * MIN - 1000);
+            await expect(service.hasValidProof(7, proof)).resolves.toBe(true);
+            vi.advanceTimersByTime(1000);
+            await expect(service.hasValidProof(7, proof)).resolves.toBe(false);
+        });
+
+        it('does not bring back a proof that expired while it was claimed', async () => {
+            vi.useFakeTimers();
+            const { service, cache, lastCode } = setup();
+            const proof = await proofOf(service, lastCode);
+            const claimed = (await service.claimProof(7, proof))!;
+
+            vi.advanceTimersByTime(10 * MIN);
+            const store = vi.spyOn(cache, 'setWithTtl');
+            await service.releaseProof(7, claimed);
+
+            await expect(service.hasValidProof(7, proof)).resolves.toBe(false);
+            // Not even stored: a store whose shortest life is one second would otherwise bring it back for that second.
+            expect(store).not.toHaveBeenCalled();
+            await expect(cache.get('public-tracking:proof:7')).resolves.toBeNull();
+        });
+
+        it('does not spend a newer proof that replaced the checked one between the check and the removal, and puts it back', async () => {
+            const { service, cache, lastCode } = setup();
+            const old = await proofOf(service, lastCode);
+            const newer = { hash: hashToken('c'.repeat(64)), expiresAt: Date.now() + 5 * MIN };
+            // What `take` really does: the stored value leaves the cache; here it turns out to be the newer proof.
+            vi.spyOn(cache, 'take').mockImplementationOnce(async (cacheKey) => { await cache.delete(cacheKey); return JSON.stringify(newer); });
+
+            await expect(service.claimProof(7, old)).resolves.toBeNull();
+
+            expect(JSON.parse((await cache.get('public-tracking:proof:7'))!)).toEqual(newer);
+            await expect(service.hasValidProof(7, 'c'.repeat(64))).resolves.toBe(true);
+        });
+
+        it('does not overwrite a newer proof the customer got while the old one was claimed', async () => {
+            const { service, lastCode } = setup();
+            const old = await proofOf(service, lastCode);
+            const claimed = (await service.claimProof(7, old))!;
+            const fresh = await proofOf(service, lastCode);
+
+            await service.releaseProof(7, claimed);
+
+            await expect(service.hasValidProof(7, fresh)).resolves.toBe(true);
+            await expect(service.hasValidProof(7, old)).resolves.toBe(false);
+        });
+
+        it('lets a new code and a new proof follow a spent one', async () => {
             const { service, lastCode } = setup();
             const first = await proofOf(service, lastCode);
-            await service.consumeProof(7, first);
+            await service.claimProof(7, first);
 
             const second = await proofOf(service, lastCode);
 
-            await expect(service.consumeProof(7, second)).resolves.toBe(true);
+            await expect(service.claimProof(7, second)).resolves.not.toBeNull();
+        });
+
+        it('stores the proof as a fingerprint with its expiry, never the proof itself', async () => {
+            const { service, cache, lastCode } = setup();
+            const proof = await proofOf(service, lastCode);
+
+            const stored = JSON.parse((await cache.get('public-tracking:proof:7'))!);
+
+            expect(Object.keys(stored).sort()).toEqual(['expiresAt', 'hash']);
+            expect(stored.hash).toMatch(/^[0-9a-f]{64}$/);
+            expect(stored.hash).not.toBe(proof);
+        });
+
+        it('answers a store that is down as 503, not as a proof that does not exist', async () => {
+            const { service, cache, lastCode } = setup();
+            const proof = await proofOf(service, lastCode);
+            vi.spyOn(cache, 'get').mockRejectedValue(new CacheUnavailableException());
+
+            await expect(service.claimProof(7, proof)).rejects.toMatchObject({ status: 503, response: { error: 'VERIFICATION_UNAVAILABLE' } });
         });
     });
 

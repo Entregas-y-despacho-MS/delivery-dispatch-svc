@@ -443,6 +443,63 @@ describe('Rescheduling by token (e2e, ST-224.1)', () => {
             expect(await snapshot(s)).toEqual(frozen);
         });
 
+        it('is claimed atomically: simultaneous requests with the same proof and the same slot reschedule exactly once', async () => {
+            const s = await scenario({ neighbour: true });
+            const proof = await proofFor(s.own.token);
+            const slot = (await slotsFor(s.own.token, proof)).find((candidate) => candidate.deliveryDate === d2)!;
+            const before = await dispatchRow(s.own.dispatchId);
+
+            const results = await Promise.all(Array.from({ length: 8 }, () => reschedule(s.own.token, slot.slotId, proof)));
+
+            expect(results.filter((res) => res.status === 200)).toHaveLength(1);
+            for (const refused of results.filter((res) => res.status !== 200)) {
+                expect(refused.status).toBe(403);
+                expect(refused.body.error).toBe('VERIFICATION_REQUIRED');
+            }
+            // One movement, one order, one version bump: not eight.
+            expect(await reschedulings(s.own.dispatchId)).toHaveLength(1);
+            expect(await orders(s.own.ref)).toHaveLength(1);
+            expect((await dispatchRow(s.own.dispatchId)).version).toBe(before.version + 1);
+            expect(await batchEvents(s.own.dispatchId, 'customer_rescheduled')).toHaveLength(1);
+            expect((await reschedule(s.own.token, slot.slotId, proof)).status).toBe(403);
+        });
+
+        it('is claimed atomically: simultaneous requests with the same proof and different slots move the delivery once', async () => {
+            const s = await scenario({ neighbour: true });
+            const proof = await proofFor(s.own.token);
+            const options = await slotsFor(s.own.token, proof);
+            const toD2 = options.find((candidate) => candidate.deliveryDate === d2)!;
+            const toD3 = options.find((candidate) => candidate.deliveryDate === d3)!;
+
+            const results = await Promise.all([toD2, toD3, toD2, toD3].map((slot) => reschedule(s.own.token, slot.slotId, proof)));
+
+            expect(results.filter((res) => res.status === 200)).toHaveLength(1);
+            expect(results.filter((res) => res.status === 403)).toHaveLength(3);
+            expect(await reschedulings(s.own.dispatchId)).toHaveLength(1);
+            expect(await orders(s.own.ref)).toHaveLength(1);
+            const winner = results.find((res) => res.status === 200)!;
+            expect((await dispatchRow(s.own.dispatchId)).route_batch_id).toBe(winner.body.deliveryDate === d2 ? s.batchD2 : s.batchD3);
+        });
+
+        it('is given back when the rescheduling does not happen, also under simultaneous requests', async () => {
+            const s = await scenario();
+            const proof = await proofFor(s.own.token);
+            const chosen = (await slotsFor(s.own.token, proof)).find((candidate) => candidate.deliveryDate === d2)!;
+            const [{ vehicle_id }] = await db.query(`SELECT vehicle_id FROM route_batches WHERE route_batch_id = $1`, [s.batchD2]);
+            await db.query(`UPDATE vehicles SET capacity_kg = 1 WHERE vehicle_id = $1`, [vehicle_id]);
+            const frozen = await snapshot(s);
+
+            const results = await Promise.all(Array.from({ length: 4 }, () => reschedule(s.own.token, chosen.slotId, proof)));
+
+            // The one that held the proof was refused for the slot; the others never had it. Nothing moved.
+            expect(results.filter((res) => res.status === 409).map((res) => res.body.error)).toEqual(['SLOT_NO_LONGER_AVAILABLE']);
+            expect(results.filter((res) => res.status === 403)).toHaveLength(3);
+            expect(await snapshot(s)).toEqual(frozen);
+            // And the customer still has the proof for another choice.
+            const other = (await slotsFor(s.own.token, proof)).find((candidate) => candidate.deliveryDate === d3)!;
+            expect((await reschedule(s.own.token, other.slotId, proof)).status).toBe(200);
+        });
+
         it('belongs to one delivery: the proof of another customer does not move this one', async () => {
             const mine = await scenario();
             const other = await scenario();

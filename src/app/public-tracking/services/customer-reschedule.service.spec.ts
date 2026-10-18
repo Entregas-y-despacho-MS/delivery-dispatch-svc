@@ -1,4 +1,3 @@
-import { Logger } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { RouteCapacityExceededException } from '../../../modules/dispatch/route-batches/exceptions/index.js';
 import { localInstant } from '../../planning/domain/operating-calendar.js';
@@ -61,7 +60,7 @@ const destinationStop = (over: Record<string, unknown> = {}) => ({
 
 function setup(options: {
     world?: World; proofIsValid?: boolean; offers?: RescheduleOffer[]; firm?: unknown; reissue?: unknown;
-    capacityError?: Error; mailer?: () => Promise<unknown>; consume?: () => Promise<boolean>; context?: TrackingContext;
+    capacityError?: Error; mailer?: () => Promise<unknown>; context?: TrackingContext;
 } = {}) {
     const world: Required<World> = {
         batches: [{ id: TO, status: 'provisional', version: 3, vehicle_id: 9 }, { id: FROM, status: 'provisional', version: 7, vehicle_id: 8 }],
@@ -86,9 +85,11 @@ function setup(options: {
     };
     const ctx = options.context ?? context();
     const tracking = { resolve: vi.fn(async () => ctx), view: vi.fn(async () => ({ marker: 'view' })) };
+    // The proof is claimed (null = not a valid proof) and, if the rescheduling does not happen, given back.
+    const claim = { hash: 'h', expiresAt: NOW.getTime() + 10 * 60_000 };
     const verification = {
-        hasValidProof: vi.fn(async () => options.proofIsValid ?? true),
-        consumeProof: vi.fn(options.consume ?? (async () => true)),
+        claimProof: vi.fn(async () => (options.proofIsValid === false ? null : claim)),
+        releaseProof: vi.fn(async () => undefined),
     };
     const offers = { computeOffers: vi.fn(async () => ({ offers: options.offers ?? [offer()], unavailableReason: null })) };
     const firming = {
@@ -235,13 +236,13 @@ describe('CustomerRescheduleService', () => {
             expect(offers.computeOffers.mock.invocationCallOrder[0]).toBeLessThan(dataSource.transaction.mock.invocationCallOrder[0]);
         });
 
-        it('spends the proof only after the rescheduling happened, and the email carries the new slot', async () => {
-            const { service, choose, verification, dataSource, mailer } = setup();
+        it('keeps the proof spent once it happened (it is not given back), and the email carries the new slot', async () => {
+            const { service, choose, verification, mailer } = setup();
 
             await service.reschedule(TOKEN, choose(), PROOF, NOW);
 
-            expect(verification.consumeProof).toHaveBeenCalledWith(1, PROOF);
-            expect(verification.consumeProof.mock.invocationCallOrder[0]).toBeGreaterThan(dataSource.transaction.mock.invocationCallOrder[0]);
+            expect(verification.claimProof).toHaveBeenCalledWith(1, PROOF, NOW);
+            expect(verification.releaseProof).not.toHaveBeenCalled();
             expect(mailer.send).toHaveBeenCalledWith(expect.objectContaining({
                 to: 'customer@example.test', template: 'promise',
                 context: expect.objectContaining({ trackingUrl: `http://localhost:5173/seguimiento/${TOKEN}` }),
@@ -271,19 +272,22 @@ describe('CustomerRescheduleService', () => {
         });
 
         it.each(['', 'abc', '5', '5.', '.5', '5.6.7', '5.1e9', '-5.100'])('is a SLOT_NO_LONGER_AVAILABLE for the id %j', async (slotId) => {
-            const { service, offers } = setup();
+            const { service, offers, verification } = setup();
 
             await expect(service.reschedule(TOKEN, slotId, PROOF, NOW)).rejects.toMatchObject({ status: 409, response: { error: 'SLOT_NO_LONGER_AVAILABLE' } });
             expect(offers.computeOffers).not.toHaveBeenCalled();
+            // A request that cannot be a rescheduling does not even touch the proof.
+            expect(verification.claimProof).not.toHaveBeenCalled();
         });
 
         it('is a SLOT_NO_LONGER_AVAILABLE when the plan does not offer that time any more', async () => {
-            const { service, dataSource, firming } = setup({ offers: [] });
+            const { service, dataSource, firming, verification } = setup({ offers: [] });
 
             await expect(service.reschedule(TOKEN, buildSlotId(TO, at('09:00')), PROOF, NOW))
                 .rejects.toMatchObject({ response: { error: 'SLOT_NO_LONGER_AVAILABLE' } });
             expect(dataSource.transaction).not.toHaveBeenCalled();
             expect(firming.firm).not.toHaveBeenCalled();
+            expect(verification.releaseProof).toHaveBeenCalledTimes(1);
         });
 
         it('takes the slot by its date and time even if another batch offers it now', async () => {
@@ -299,7 +303,8 @@ describe('CustomerRescheduleService', () => {
         const fails = async (options: Parameters<typeof setup>[0], error: Record<string, unknown>) => {
             const run = setup(options);
             await expect(run.service.reschedule(TOKEN, run.choose(), PROOF, NOW)).rejects.toMatchObject(error);
-            expect(run.verification.consumeProof).not.toHaveBeenCalled();
+            // Nothing changed, so the customer gets the proof back.
+            expect(run.verification.releaseProof).toHaveBeenCalledTimes(1);
             expect(run.mailer.send).not.toHaveBeenCalled();
             expect(run.tracking.view).not.toHaveBeenCalled();
             return run;
@@ -385,18 +390,6 @@ describe('CustomerRescheduleService', () => {
 
             await expect(service.reschedule(TOKEN, choose(), PROOF, NOW)).resolves.toEqual({ marker: 'view' });
             expect(tracking.view).toHaveBeenCalled();
-        });
-
-        it('is not undone by a proof that cannot be spent, and says so in the log without the token', async () => {
-            const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
-            const { service, choose } = setup({ consume: async () => { throw new Error('cache down'); } });
-
-            await expect(service.reschedule(TOKEN, choose(), PROOF, NOW)).resolves.toEqual({ marker: 'view' });
-
-            const lines = warn.mock.calls.map((call) => String(call[0]));
-            expect(lines.some((line) => line.includes('could not be spent'))).toBe(true);
-            expect(lines.join(' ')).not.toContain(TOKEN);
-            warn.mockRestore();
         });
 
         it('records that the confirmation email was sent only when the transport accepted it', async () => {

@@ -20,6 +20,12 @@ import { RESCHEDULE_CODE_EXPIRY_KEY, assertCanReschedule, type TrackingContext }
 /** 32 random bytes in hex: what a proof looks like. Anything else cannot be one and is not even compared. */
 const PROOF_FORMAT = /^[0-9a-f]{64}$/;
 
+/** What the cache keeps of a proof: its fingerprint and the instant it stops being good (epoch ms). */
+export interface ClaimedProof {
+    hash: string;
+    expiresAt: number;
+}
+
 /**
  * The verification code of the customer's rescheduling and the proof that it was checked (ST-224.1, D-47).
  *
@@ -98,27 +104,48 @@ export class VerificationCodeService {
 
         const proof = randomBytes(32).toString('hex');
         await this.cached(async () => {
-            await this.cache.setWithTtl(key('proof', dispatchId), hashToken(proof), ttlSeconds);
+            const record: ClaimedProof = { hash: hashToken(proof), expiresAt: now.getTime() + ttlSeconds * 1000 };
+            await this.cache.setWithTtl(key('proof', dispatchId), JSON.stringify(record), ttlSeconds);
             await this.cache.delete(key('attempts', dispatchId));
         });
         await this.recordEvent(dispatchId, 'reschedule_code_verified', 'Verification code checked', {});
         return { proof, expiresAt: new Date(now.getTime() + ttlSeconds * 1000) };
     }
 
-    /** True when `proof` is the one issued to this dispatch and it has not expired. Does not consume it. */
-    async hasValidProof(dispatchId: number, proof: string | undefined): Promise<boolean> {
+    /** True when `proof` is the one issued to this dispatch and it has not expired. Does not spend it. */
+    async hasValidProof(dispatchId: number, proof: string | undefined, now: Date = new Date()): Promise<boolean> {
         if (!proof || !PROOF_FORMAT.test(proof)) return false;
-        const stored = await this.cached(() => this.cache.get(key('proof', dispatchId)));
-        return stored !== null && tokenMatchesHash(proof, stored);
+        const record = parseProof(await this.cached(() => this.cache.get(key('proof', dispatchId))));
+        return record !== null && record.expiresAt > now.getTime() && tokenMatchesHash(proof, record.hash);
     }
 
     /**
-     * Spends the proof: true once, for the request that holds it. A rescheduling uses it after it has been applied, so
-     * a slot that was taken meanwhile does not cost the customer a new code, and the next rescheduling needs a new one.
+     * Claims the proof for ONE rescheduling: of any number of simultaneous requests with the same proof exactly one gets
+     * it (the removal is a single atomic step of the cache, `take`), the others get `null`. The caller must have the
+     * claim BEFORE it asks the plan or opens a transaction, and gives it back with `releaseProof` if the
+     * rescheduling does not happen. A successful rescheduling keeps it spent: the next one needs a new code.
      */
-    async consumeProof(dispatchId: number, proof: string | undefined): Promise<boolean> {
-        if (!(await this.hasValidProof(dispatchId, proof))) return false;
-        return (await this.cached(() => this.cache.take(key('proof', dispatchId)))) !== null;
+    async claimProof(dispatchId: number, proof: string | undefined, now: Date = new Date()): Promise<ClaimedProof | null> {
+        // Cheap checks first and without touching the cache, so a malformed value never costs the real proof.
+        if (!(await this.hasValidProof(dispatchId, proof, now))) return null;
+        const claimed = parseProof(await this.cached(() => this.cache.take(key('proof', dispatchId))));
+        if (!claimed) return null;
+        if (claimed.expiresAt > now.getTime() && tokenMatchesHash(proof!, claimed.hash)) return claimed;
+        // Between the check and the removal the customer replaced it with a newer proof: that one is not ours to spend.
+        await this.releaseProof(dispatchId, claimed, now);
+        return null;
+    }
+
+    /**
+     * Gives back a claimed proof that was not used, with only the life it has left (an expired one is not brought back).
+     * If the customer already has a newer proof it is left alone. Never throws for "nothing to give back".
+     */
+    async releaseProof(dispatchId: number, claimed: ClaimedProof, now: Date = new Date()): Promise<void> {
+        const remainingMs = claimed.expiresAt - now.getTime();
+        if (remainingMs <= 0) return;
+        const current = await this.cached(() => this.cache.get(key('proof', dispatchId)));
+        if (current !== null) return;
+        await this.cached(() => this.cache.setWithTtl(key('proof', dispatchId), JSON.stringify(claimed), Math.ceil(remainingMs / 1000)));
     }
 
     private async ttlSeconds(): Promise<number> {
@@ -159,6 +186,16 @@ export class VerificationCodeService {
             if (error instanceof CacheUnavailableException) throw new VerificationUnavailableException();
             throw error;
         }
+    }
+}
+
+function parseProof(stored: string | null): ClaimedProof | null {
+    if (stored === null) return null;
+    try {
+        const record = JSON.parse(stored) as Partial<ClaimedProof>;
+        return typeof record.hash === 'string' && typeof record.expiresAt === 'number' ? { hash: record.hash, expiresAt: record.expiresAt } : null;
+    } catch {
+        return null;
     }
 }
 
