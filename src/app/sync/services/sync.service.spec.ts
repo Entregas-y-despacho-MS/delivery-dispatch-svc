@@ -133,6 +133,54 @@ describe('SyncService.processBatch — a driver only syncs their own dispatches'
         expect(events.create).toHaveBeenCalled();
     });
 
+    it('accepts an offline event within five minutes before the server route start time', async () => {
+        const occurredAt = new Date(Date.now() - 60_000);
+        const routeStartedAt = new Date(occurredAt.getTime() + 4 * 60_000).toISOString();
+        const { service, dispatches, events } = build({ routeStartedAt });
+
+        const result = (await service.processBatch([statusEvent({ occurredAt: occurredAt.toISOString() })], DRIVER)).results[0];
+
+        expect(result.outcome).toBe('applied');
+        expect(dispatches.updateStatus).toHaveBeenCalled();
+        expect(events.create).toHaveBeenCalled();
+    });
+
+    it('rejects an offline event more than five minutes before route start', async () => {
+        const occurredAt = new Date(Date.now() - 60_000);
+        const routeStartedAt = new Date(occurredAt.getTime() + 6 * 60_000).toISOString();
+        const { service, dispatches, events } = build({ routeStartedAt });
+
+        const result = (await service.processBatch([statusEvent({ occurredAt: occurredAt.toISOString() })], DRIVER)).results[0];
+
+        expect(result).toMatchObject({ outcome: 'failed', error: 'The dispatch event is outside the route execution window.' });
+        expect(dispatches.updateStatus).not.toHaveBeenCalled();
+        expect(events.create).not.toHaveBeenCalled();
+    });
+
+    it('accepts an offline event within five minutes after the server route close time', async () => {
+        const occurredAt = new Date(Date.now() - 60_000);
+        const routeClosedAt = new Date(occurredAt.getTime() - 4 * 60_000).toISOString();
+        const { service, dispatches, events } = build({ routeStatus: 'closed', routeClosedAt });
+
+        const result = (await service.processBatch([statusEvent({ occurredAt: occurredAt.toISOString() })], DRIVER)).results[0];
+
+        expect(result.outcome).toBe('applied');
+        expect(dispatches.updateStatus).toHaveBeenCalled();
+        expect(events.create).toHaveBeenCalled();
+    });
+
+    it('rejects an offline event more than five minutes after route close', async () => {
+        const occurredAt = new Date(Date.now() - 60_000);
+        const routeClosedAt = new Date(occurredAt.getTime() - 6 * 60_000).toISOString();
+        const { service, dispatches, events } = build({ routeStatus: 'closed', routeClosedAt });
+
+        const result = (await service.processBatch([statusEvent({ occurredAt: occurredAt.toISOString() })], DRIVER)).results[0];
+
+        expect(result).toMatchObject({ outcome: 'failed', error: 'The dispatch event is outside the route execution window.' });
+        expect(dispatches.updateStatus).not.toHaveBeenCalled();
+        expect(events.create).not.toHaveBeenCalled();
+    });
+
     it('an event that was already processed stays already_processed (idempotent retry)', async () => {
         const { service, events } = build();
         events.existsByClientEventId.mockResolvedValue(true);

@@ -22,6 +22,8 @@ const DRIVER_SYNC_STATUSES = new Set(['in_transit', 'delivered', 'not_delivered'
 // corrupt the history (and every report built on it).
 const MAX_FUTURE_MS = 60 * 60 * 1000;
 const MAX_AGE_MS    = 30 * 24 * 60 * 60 * 1000;
+// Tolerate device/server clock drift without accepting events far outside the route's lifetime.
+const ROUTE_EXECUTION_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 // RF-U13 — orquesta la sincronización offline: idempotencia por clientEventId + orden estricto
 // del lote. Las operaciones genéricas (create/exists) viven en cada módulo de dominio; acá solo
@@ -270,10 +272,10 @@ export class SyncService {
         ) {
             throw new BadRequestException('The dispatch event is outside the route execution window.');
         }
-        if (occurredAt.getTime() < startedAt) {
+        if (occurredAt.getTime() < startedAt - ROUTE_EXECUTION_CLOCK_SKEW_MS) {
             throw new BadRequestException('The dispatch event is outside the route execution window.');
         }
-        if (closedAt !== null && occurredAt.getTime() > closedAt) {
+        if (closedAt !== null && occurredAt.getTime() > closedAt + ROUTE_EXECUTION_CLOCK_SKEW_MS) {
             throw new BadRequestException('The dispatch event is outside the route execution window.');
         }
     }
