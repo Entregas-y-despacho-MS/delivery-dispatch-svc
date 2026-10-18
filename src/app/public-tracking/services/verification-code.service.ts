@@ -12,10 +12,10 @@ import {
 } from '../domain/verification-code.js';
 import type { VerificationCodeSentDto, VerificationProofDto } from '../dto/verification.dto.js';
 import {
-    InvalidVerificationCodeException, RescheduleNotAvailableException, VerificationCodeExpiredException,
+    InvalidVerificationCodeException, VerificationCodeExpiredException,
     VerificationCodeNotSentException, VerificationCodeRateLimitedException, VerificationUnavailableException,
 } from '../exceptions/index.js';
-import { RESCHEDULE_CODE_EXPIRY_KEY, type TrackingContext } from './public-tracking.service.js';
+import { RESCHEDULE_CODE_EXPIRY_KEY, assertCanReschedule, type TrackingContext } from './public-tracking.service.js';
 
 /** 32 random bytes in hex: what a proof looks like. Anything else cannot be one and is not even compared. */
 const PROOF_FORMAT = /^[0-9a-f]{64}$/;
@@ -42,7 +42,7 @@ export class VerificationCodeService {
     ) {}
 
     async send(context: TrackingContext, now: Date = new Date()): Promise<VerificationCodeSentDto> {
-        this.assertCanReschedule(context);
+        assertCanReschedule(context);
         const email = context.row.contact_email!;
         const { dispatchId } = context;
         const ttlSeconds = await this.ttlSeconds();
@@ -70,7 +70,7 @@ export class VerificationCodeService {
     }
 
     async verify(context: TrackingContext, code: string, now: Date = new Date()): Promise<VerificationProofDto> {
-        this.assertCanReschedule(context);
+        assertCanReschedule(context);
         const { dispatchId } = context;
         const ttlSeconds = await this.ttlSeconds();
 
@@ -108,17 +108,6 @@ export class VerificationCodeService {
         if (!proof || !PROOF_FORMAT.test(proof)) return false;
         const stored = await this.cached(() => this.cache.get(key('proof', dispatchId)));
         return stored !== null && tokenMatchesHash(proof, stored);
-    }
-
-    private assertCanReschedule(context: TrackingContext): void {
-        const { selfService, row } = context;
-        if (selfService.canReschedule && row.contact_email) return;
-        throw new RescheduleNotAvailableException(this.unavailableReason(context));
-    }
-
-    private unavailableReason({ selfService, row }: TrackingContext): string {
-        if (selfService.closedReason) return selfService.closedReason;
-        return row.has_contact_email ? 'not_configured' : 'no_contact_email';
     }
 
     private async ttlSeconds(): Promise<number> {

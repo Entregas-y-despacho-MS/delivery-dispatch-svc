@@ -5,7 +5,6 @@ import {
     cutoffBefore,
     evaluateCandidateDates,
     localInstant,
-    minutesOfDay,
     rescheduledDateProblem,
     viableCandidateDates,
     weekStart,
@@ -13,7 +12,7 @@ import {
 import { findCheapestInsertion, sequenceByInsertion } from '../domain/insertion.js';
 import { composeBatches, type DurationLookup } from '../domain/proximity-split.js';
 import type { SimParams, SimResult, SimStop } from '../domain/route-simulation.js';
-import { buildTimeSlots } from '../domain/time-slots.js';
+import { buildSimParams } from '../domain/sim-params.js';
 import { fitsVehicle } from '../domain/vehicle-selection.js';
 import { toLocalMoment } from '../../scheduler/domain/task-schedule.js';
 import type {
@@ -81,16 +80,8 @@ export class InsertionLotPlanner extends LotPlanner {
         const openStates = this.openStates(input);
         const matrices = await this.loadMatrices(input, waiting, openStates);
 
-        const slots = buildTimeSlots(settings.morningWindow, settings.afternoonWindow, settings.slotDurationMinutes);
-        const simParams = (matrix: ZoneMatrix): SimParams => ({
-            slots,
-            routeStartMinute: minutesOfDay(settings.morningWindow.start),
-            routeEndMinute: minutesOfDay(settings.afternoonWindow.end),
-            serviceMinutes: settings.stopServiceMinutes,
-            marginPct: settings.planningMarginPct,
-            travelSeconds: (from, to) =>
-                matrix.durations[from === null ? 0 : matrix.indexOf.get(from)!][matrix.indexOf.get(to)!],
-        });
+        const simParams = (matrix: ZoneMatrix): SimParams => buildSimParams(settings, (from, to) =>
+            matrix.durations[from === null ? 0 : matrix.indexOf.get(from)!][matrix.indexOf.get(to)!]);
 
         // Vehicles and drivers are one per day (D-21). Seeded with the batches that already exist.
         const usedVehicles = new Map<string, Set<number>>();
@@ -439,7 +430,7 @@ function minuteOfInstant(instant: Date): number {
 }
 
 /** A stop of an open batch: a notified one keeps the window the customer was told. */
-function toSimStop(stop: OpenBatchStop): SimStop {
+export function toSimStop(stop: OpenBatchStop): SimStop {
     if (stop.notified && stop.window) {
         return {
             id: stop.dispatch.dispatchId,
@@ -450,7 +441,7 @@ function toSimStop(stop: OpenBatchStop): SimStop {
 }
 
 /** An order that is not notified yet: free, unless a rescheduled one with an agreed window. */
-function toFreshSimStop(dispatch: PlanDispatch): SimStop {
+export function toFreshSimStop(dispatch: PlanDispatch): SimStop {
     const window = dispatch.agreedWindow;
     return {
         id: dispatch.dispatchId,

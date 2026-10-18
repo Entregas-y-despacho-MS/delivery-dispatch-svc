@@ -34,6 +34,41 @@ export function findCheapestInsertion(existing: SimStop[], candidate: SimStop, p
     return best;
 }
 
+export interface InsertionOption extends InsertionChoice {
+    /** The slot the inserted stop gets in this position (minutes since local midnight). */
+    window: { startMinute: number; endMinute: number };
+}
+
+/**
+ * Every slot the stop can get in a route, with the cheapest feasible position for each one (ST-224.1).
+ *
+ * `findCheapestInsertion` answers one position; a customer who is choosing a new slot needs the whole menu:
+ * the morning and the afternoon of the same batch can both work, at different positions. Each feasible
+ * position is simulated as a whole sequence (so a notified stop never leaves its window), the stop's slot is
+ * read from the simulation, and for each distinct slot the cheapest position is kept (ties: the earliest).
+ * Sorted by slot start.
+ */
+export function findInsertionOptions(existing: SimStop[], candidate: SimStop, params: SimParams): InsertionOption[] {
+    const baseSeconds = drivingSeconds(existing.map((stop) => stop.id), params.travelSeconds) ?? 0;
+
+    const bySlot = new Map<string, InsertionOption>();
+    for (let position = 0; position <= existing.length; position++) {
+        const sequence = [...existing.slice(0, position), candidate, ...existing.slice(position)];
+        const simulation = simulateRoute(sequence, params);
+        if (!simulation.feasible) continue;
+
+        const total = drivingSeconds(sequence.map((stop) => stop.id), params.travelSeconds);
+        const window = simulation.stops.find((stop) => stop.id === candidate.id)?.window;
+        if (total === null || !window) continue;
+
+        const key = `${window.startMinute}-${window.endMinute}`;
+        const costSeconds = total - baseSeconds;
+        const kept = bySlot.get(key);
+        if (!kept || costSeconds < kept.costSeconds) bySlot.set(key, { position, costSeconds, simulation, window });
+    }
+    return [...bySlot.values()].sort((a, b) => a.window.startMinute - b.window.startMinute);
+}
+
 export interface SequenceResult {
     /** The stops that fit, in visiting order. */
     sequence: SimStop[];

@@ -17,6 +17,7 @@ const PUBLIC = new Set([
     'get /api/public/tracking/{token}',
     'post /api/public/tracking/{token}/verification-code',
     'post /api/public/tracking/{token}/verification-code/verify',
+    'get /api/public/tracking/{token}/slots',
     'post /api/public/tracking/{token}/confirm',
     'post /api/public/tracking/{token}/change-request',
 ]);

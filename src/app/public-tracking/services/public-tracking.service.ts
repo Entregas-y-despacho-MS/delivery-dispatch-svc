@@ -6,7 +6,7 @@ import { PROMISE_RESPONSE_WINDOW_KEY } from '../../promise-firming/services/prom
 import { evaluateSelfService, type SelfServiceState } from '../domain/self-service.js';
 import { isWellFormedTrackingToken } from '../domain/tracking-token.js';
 import { PublicTrackingDto } from '../dto/public-tracking.dto.js';
-import { TrackingLinkNotFoundException } from '../exceptions/index.js';
+import { RescheduleNotAvailableException, TrackingLinkNotFoundException } from '../exceptions/index.js';
 
 export const MAX_RESCHEDULE_ATTEMPTS_KEY = 'max_reschedule_attempts';
 export const WAREHOUSE_PREP_LEAD_KEY = 'warehouse_prep_lead_minutes';
@@ -118,4 +118,15 @@ export class PublicTrackingService {
         }
         return true;
     }
+}
+
+/** The rescheduling starts only while the self-service lets the customer reschedule; otherwise 409 with the reason. */
+export function assertCanReschedule(context: TrackingContext): void {
+    if (context.selfService.canReschedule && context.row.contact_email) return;
+    throw new RescheduleNotAvailableException(rescheduleUnavailableReason(context));
+}
+
+function rescheduleUnavailableReason({ selfService, row }: TrackingContext): string {
+    if (selfService.closedReason) return selfService.closedReason;
+    return row.has_contact_email ? 'not_configured' : 'no_contact_email';
 }

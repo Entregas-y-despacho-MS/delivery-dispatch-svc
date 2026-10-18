@@ -7,3 +7,4 @@ export * from './invalid-verification-code.exception.js';
 export * from './verification-code-expired.exception.js';
 export * from './confirmation-not-available.exception.js';
 export * from './change-request-not-available.exception.js';
+export * from './verification-required.exception.js';

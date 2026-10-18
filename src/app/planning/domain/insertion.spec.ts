@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findCheapestInsertion, sequenceByInsertion } from './insertion.js';
+import { findCheapestInsertion, findInsertionOptions, sequenceByInsertion } from './insertion.js';
 import { buildTimeSlots } from './time-slots.js';
 import type { SimParams, SimStop, TravelSeconds } from './route-simulation.js';
 
@@ -95,5 +95,73 @@ describe('sequenceByInsertion', () => {
 
         expect(result.sequence.map((s) => s.id)).toEqual([2, 1]);
         expect(result.simulation.stops[1].window.endMinute).toBe(hm('09:40'));
+    });
+});
+
+describe('findInsertionOptions', () => {
+    // Every point is 1 km from the previous one (60 s), 15 minutes of service and no margin: easy to follow by hand.
+    const line = { 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 8: 8, 9: 9 };
+    const slow = (over: Partial<SimParams> = {}) => params(line, { serviceMinutes: 15, ...over });
+
+    it('offers every slot the stop can get, one per slot, with the cheapest position of each', () => {
+        // Eight free stops fill the morning: the ninth point is reached late in the morning or in the afternoon.
+        const route = [1, 2, 3, 4, 5, 6, 7, 8].map(free);
+
+        const options = findInsertionOptions(route, free(9), slow());
+
+        expect(options.length).toBeGreaterThan(1);
+        const starts = options.map((o) => o.window.startMinute);
+        expect(starts).toEqual([...starts].sort((a, b) => a - b));
+        expect(new Set(options.map((o) => `${o.window.startMinute}-${o.window.endMinute}`)).size).toBe(options.length);
+        for (const option of options) {
+            expect(option.simulation.feasible).toBe(true);
+            expect(option.simulation.stops.find((s) => s.id === 9)!.window).toEqual(option.window);
+        }
+    });
+
+    it('agrees with findCheapestInsertion on the cheapest position overall', () => {
+        const route = [free(1), free(3)];
+
+        const cheapest = findCheapestInsertion(route, free(2), params(line));
+        const options = findInsertionOptions(route, free(2), params(line));
+
+        const best = [...options].sort((a, b) => a.costSeconds - b.costSeconds || a.position - b.position)[0];
+        expect(best).toMatchObject({ position: cheapest!.position, costSeconds: cheapest!.costSeconds });
+    });
+
+    it('never offers a position that pushes a notified stop out of its window', () => {
+        // The notified stop is told 09:00-11:00 and sits 1 km away. Seven free stops before it would make it late.
+        const route = [notified(1, '09:00', '11:00')];
+
+        const options = findInsertionOptions(route, free(2), slow());
+
+        for (const option of options) {
+            const stop = option.simulation.stops.find((s) => s.id === 1)!;
+            expect(stop.window).toEqual({ startMinute: hm('09:00'), endMinute: hm('11:00') });
+            expect(stop.arrivalMinute).toBeLessThanOrEqual(hm('11:00'));
+        }
+    });
+
+    it('is empty when no position keeps the route feasible', () => {
+        // The last notified window ends before anything can reach it behind a long route.
+        const route = [notified(1, '09:00', '09:30')];
+        const tooLate = params({ 1: 1, 2: 600 }, { serviceMinutes: 15 });
+
+        expect(findInsertionOptions(route, notified(2, '09:00', '09:30'), tooLate)).toEqual([]);
+    });
+
+    it('is a single option on an empty route', () => {
+        const options = findInsertionOptions([], free(1), params(line));
+
+        expect(options).toHaveLength(1);
+        expect(options[0]).toMatchObject({ position: 0, window: { startMinute: hm('09:00'), endMinute: hm('11:00') } });
+    });
+
+    it('keeps the earliest of two equally cheap positions for the same slot', () => {
+        // Two points at the same place: inserting before or after the twin costs the same.
+        const options = findInsertionOptions([free(1)], free(2), params({ 1: 1, 2: 1 }));
+
+        expect(options).toHaveLength(1);
+        expect(options[0].position).toBe(0);
     });
 });

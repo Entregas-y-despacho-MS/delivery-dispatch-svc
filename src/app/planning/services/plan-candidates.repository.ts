@@ -143,7 +143,12 @@ export class PlanCandidatesRepository {
      * may still be inserted into (the planner drops those whose cutoff has passed). A batch with a
      * stop that has no sequence or no point on the map is left out: it cannot be simulated.
      */
-    async findOpenBatches(today: string): Promise<OpenBatch[]> {
+    async findOpenBatches(today: string, filter: { zoneId?: number; warehouseId?: number } = {}): Promise<OpenBatch[]> {
+        // The optional filter narrows the read to one zone and warehouse (the customer's rescheduling looks at one).
+        const params: unknown[] = [today];
+        let narrowing = '';
+        if (filter.zoneId !== undefined) narrowing += ` AND b.delivery_zone_id = $${params.push(filter.zoneId)}`;
+        if (filter.warehouseId !== undefined) narrowing += ` AND b.origin_warehouse_id = $${params.push(filter.warehouseId)}`;
         const rows: OpenStopRow[] = await this.dataSource.query(
             `SELECT b.route_batch_id, b.version, b.shift_date::text AS shift_date, b.delivery_zone_id,
                     z.code AS zone_code, z.name AS zone_name, (z.deleted_at IS NOT NULL) AS zone_deleted,
@@ -157,9 +162,9 @@ export class PlanCandidatesRepository {
                JOIN dispatches d ON d.route_batch_id = b.route_batch_id
                JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
               WHERE b.status = 'provisional' AND b.shift_date >= $1::date
-                AND b.vehicle_id IS NOT NULL AND b.origin_warehouse_id IS NOT NULL
+                AND b.vehicle_id IS NOT NULL AND b.origin_warehouse_id IS NOT NULL${narrowing}
               ORDER BY b.route_batch_id, d.sequence_order, d.dispatch_id`,
-            [today],
+            params,
         );
         if (rows.length === 0) return [];
 
@@ -216,6 +221,58 @@ export class PlanCandidatesRepository {
         return [...batches.values()]
             .filter((entry) => entry.complete && entry.batch.stops.length > 0)
             .map((entry) => entry.batch);
+    }
+
+    /**
+     * One delivery that already has a route, as the planner sees it (ST-224.1): the customer's own dispatch
+     * when the rescheduling looks for another batch. `null` when it cannot be simulated (no point on the map,
+     * no zone or warehouse) or does not exist.
+     */
+    async findForRescheduling(dispatchId: number): Promise<{ dispatch: PlanDispatch; routeBatchId: number | null; shiftDate: string | null } | null> {
+        const [row]: (Omit<CandidateRow, 'status' | 'reschedule_window_start' | 'reschedule_window_end'> & {
+            status: string;
+            route_batch_id: number | null;
+            shift_date: string | null;
+        })[] = await this.dataSource.query(
+            `SELECT d.dispatch_id, d.delivery_zone_id, z.code AS zone_code, z.name AS zone_name,
+                    (z.deleted_at IS NOT NULL) AS zone_deleted, d.origin_warehouse_id,
+                    d.delivery_latitude, d.delivery_longitude, d.priority,
+                    COALESCE(d.order_confirmed_at, d.created_at) AS confirmed_at,
+                    s.name AS status, d.estimated_weight_kg, d.scheduled_window_start, d.scheduled_window_end,
+                    d.route_batch_id, to_char(b.shift_date, 'YYYY-MM-DD') AS shift_date
+               FROM dispatches d
+               JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
+               JOIN delivery_zones z ON z.delivery_zone_id = d.delivery_zone_id
+          LEFT JOIN route_batches b ON b.route_batch_id = d.route_batch_id
+              WHERE d.dispatch_id = $1
+                AND d.delivery_latitude IS NOT NULL AND d.delivery_longitude IS NOT NULL
+                AND d.origin_warehouse_id IS NOT NULL`,
+            [dispatchId],
+        );
+        if (!row) return null;
+
+        const packages = await this.findPackages([dispatchId]);
+        return {
+            routeBatchId: row.route_batch_id,
+            shiftDate: row.shift_date,
+            dispatch: {
+                dispatchId: row.dispatch_id,
+                zoneId: row.delivery_zone_id,
+                zoneCode: row.zone_code,
+                zoneName: row.zone_name,
+                zoneDeleted: row.zone_deleted,
+                warehouseId: row.origin_warehouse_id,
+                latitude: Number(row.delivery_latitude),
+                longitude: Number(row.delivery_longitude),
+                priority: row.priority,
+                orderConfirmedAt: row.confirmed_at,
+                status: row.status === 'scheduled' ? 'scheduled' : 'in_planning',
+                fixedDate: null,
+                agreedWindow: null,
+                estimatedWeightKg: row.estimated_weight_kg === null ? null : Number(row.estimated_weight_kg),
+                packages: packages.get(dispatchId) ?? [],
+            },
+        };
     }
 
     private async findPackages(dispatchIds: number[]): Promise<Map<number, PlanDispatch['packages']>> {

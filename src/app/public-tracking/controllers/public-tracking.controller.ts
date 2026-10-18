@@ -1,14 +1,16 @@
-import { Body, Controller, Get, Header, HttpCode, Param, Post } from '@nestjs/common';
-import { ApiOkResponse, ApiOperation, ApiParam, ApiResponse, ApiServiceUnavailableResponse, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Header, HttpCode, Headers, Param, Post } from '@nestjs/common';
+import { ApiHeader, ApiOkResponse, ApiOperation, ApiParam, ApiResponse, ApiServiceUnavailableResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Public } from '../../auth/decorators/index.js';
-import { ApiBadRequests, ApiConflict, ApiNotFound, errorBody } from '../../../shared/utils/swagger/index.js';
+import { ApiBadRequests, ApiConflict, ApiForbidden, ApiNotFound, errorBody } from '../../../shared/utils/swagger/index.js';
 import { PUBLIC_TRACKING_LIMIT, PUBLIC_TRACKING_TTL_MS } from '../config/throttle.js';
+import { AvailableSlotsDto } from '../dto/available-slots.dto.js';
 import { ChangeRequestDto } from '../dto/change-request.dto.js';
 import { PublicTrackingDto } from '../dto/public-tracking.dto.js';
 import { VerificationCodeSentDto, VerificationProofDto, VerifyCodeDto } from '../dto/verification.dto.js';
 import { CustomerResponseService } from '../services/customer-response.service.js';
 import { PublicTrackingService } from '../services/public-tracking.service.js';
+import { SlotOfferService } from '../services/slot-offer.service.js';
 import { VerificationCodeService } from '../services/verification-code.service.js';
 
 const TOKEN_PARAM = { name: 'token', description: 'Tracking token of the link sent by email (not the tracking code).' };
@@ -33,7 +35,8 @@ const RESCHEDULE_NOT_AVAILABLE = {
  *   RESCHEDULE_NOT_AVAILABLE 409, VERIFICATION_CODE_RATE_LIMITED 429,
  *   INVALID_VERIFICATION_CODE 400, VERIFICATION_CODE_EXPIRED 400,
  *   VERIFICATION_CODE_NOT_SENT 503, VERIFICATION_UNAVAILABLE 503,
- *   CONFIRMATION_NOT_AVAILABLE 409, CHANGE_REQUEST_NOT_AVAILABLE 409
+ *   CONFIRMATION_NOT_AVAILABLE 409, CHANGE_REQUEST_NOT_AVAILABLE 409,
+ *   VERIFICATION_REQUIRED 403, OSRM_UNAVAILABLE 503
  */
 @ApiTags('Public tracking')
 @Public()
@@ -44,6 +47,7 @@ export class PublicTrackingController {
         private readonly service: PublicTrackingService,
         private readonly verification: VerificationCodeService,
         private readonly responses: CustomerResponseService,
+        private readonly slots: SlotOfferService,
     ) {}
 
     @Get(':token')
@@ -110,6 +114,27 @@ export class PublicTrackingController {
     })
     async verifyCode(@Param('token') token: string, @Body() dto: VerifyCodeDto): Promise<VerificationProofDto> {
         return await this.verification.verify(await this.service.resolve(token), dto.code);
+    }
+
+    @Get(':token/slots')
+    @Header('Cache-Control', 'no-store')
+    @ApiOperation({
+        summary: 'List the slots the delivery can be moved to',
+        description: 'Public, no login, but it needs the proof of the verification code in the `X-Verification-Proof` header (403 `VERIFICATION_REQUIRED` without it). Lists only slots the plan can really take: open batches of the delivery\'s own zone and warehouse, other than the one it is in, whose cutoff of the day before has not passed, that leave the warehouse its lead time, with an active vehicle that holds the load, and where the route stays feasible without moving any customer already told (the same check the plan generator applies to a late order). One entry per date and time, earliest first. When nothing fits, `slots` is empty with an `unavailableReason` and the page sends the customer to Dispatch. Asks the routing engine: 503 `OSRM_UNAVAILABLE` if it is down. Nothing is changed by listing; the choice is checked again when it is made.',
+    })
+    @ApiParam(TOKEN_PARAM)
+    @ApiHeader({ name: 'x-verification-proof', required: true, description: 'The `proof` returned by the verification of the code. It is not the code and it is not the tracking token.' })
+    @ApiOkResponse({ type: AvailableSlotsDto })
+    @ApiNotFound({ code: 'TRACKING_LINK_NOT_FOUND', message: 'Tracking link not found.' })
+    @ApiForbidden({ code: 'VERIFICATION_REQUIRED', message: 'Verify the code sent to your email first.' })
+    @ApiConflict(RESCHEDULE_NOT_AVAILABLE)
+    @ApiResponse(TOO_MANY_REQUESTS)
+    @ApiServiceUnavailableResponse({
+        description: 'The routing engine is down (`OSRM_UNAVAILABLE`) or the store of proofs is (`VERIFICATION_UNAVAILABLE`). Try again in a moment.',
+        schema: { example: errorBody(503, 'OSRM_UNAVAILABLE', 'The routing engine is unavailable.') },
+    })
+    async listSlots(@Param('token') token: string, @Headers('x-verification-proof') proof?: string): Promise<AvailableSlotsDto> {
+        return await this.slots.offer(await this.service.resolve(token), proof);
     }
 
     @Post(':token/confirm')
