@@ -93,6 +93,26 @@ describe.skipIf(!PORT)('ProcurementPickupRepository against PostgreSQL', () => {
     return row;
   };
 
+  const setDispatchStatus = async (
+    id: number,
+    status: string,
+  ): Promise<void> => {
+    await manager().query(
+      `UPDATE dispatches
+          SET dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $1)
+        WHERE dispatch_id = $2`,
+      [status, id],
+    );
+  };
+
+  const eventTypes = async (id: number): Promise<string[]> => {
+    const events = await manager().query(
+      `SELECT event_type FROM dispatch_events WHERE dispatch_id = $1 ORDER BY dispatch_event_id`,
+      [id],
+    );
+    return events.map(({ event_type }: { event_type: string }) => event_type);
+  };
+
   beforeAll(async () => {
     dataSource = new DataSource({
       type: 'postgres',
@@ -222,12 +242,81 @@ describe.skipIf(!PORT)('ProcurementPickupRepository against PostgreSQL', () => {
       event: { changeType: 'order_changed' },
     });
     expect(await dispatchState(dispatchId)).toEqual(before);
-    const events = await manager().query(
-      `SELECT event_type FROM dispatch_events WHERE dispatch_id = $1 ORDER BY dispatch_event_id`,
-      [dispatchId],
+    expect(await eventTypes(dispatchId)).toContain('change_requires_attention');
+  });
+
+  it('cancels a scheduled pickup when Procurement cancels it', async () => {
+    const orderId = purchaseOrderId();
+    const dispatchId = await createScheduledPickup(orderId);
+    const repository = new ProcurementPickupRepository();
+
+    const outcome = await repository.applyCancelled(
+      {
+        purchaseOrderId: orderId,
+        recordVersion: 2,
+        updatedAt: '2026-10-14T18:00:00Z',
+        cancelledAt: '2026-10-14T18:00:00Z',
+        reason: 'El proveedor ya no puede recoger',
+      },
+      options(),
     );
-    expect(
-      events.map(({ event_type }: { event_type: string }) => event_type),
-    ).toContain('change_requires_attention');
+
+    expect(outcome).toBeNull();
+    expect(await dispatchState(dispatchId)).toMatchObject({ status: 'cancelled' });
+    expect(await eventTypes(dispatchId)).toContain('status_changed');
+    expect(await eventTypes(dispatchId)).not.toContain('change_requires_attention');
+  });
+
+  it('alerts without changing a delivered pickup when Procurement sends an update', async () => {
+    const orderId = purchaseOrderId();
+    const dispatchId = await createScheduledPickup(orderId);
+    await setDispatchStatus(dispatchId, 'delivered');
+    const before = await dispatchState(dispatchId);
+    const repository = new ProcurementPickupRepository();
+
+    const outcome = await repository.applyUpdated(
+      {
+        purchaseOrderId: orderId,
+        recordVersion: 2,
+        updatedAt: '2026-10-14T18:00:00Z',
+        estimates: { weightKg: 32 },
+      },
+      options(),
+    );
+
+    expect(outcome).toMatchObject({
+      status: 'attention_required',
+      dispatchId,
+      event: { changeType: 'order_changed' },
+    });
+    expect(await dispatchState(dispatchId)).toEqual(before);
+    expect(await eventTypes(dispatchId)).toContain('change_requires_attention');
+  });
+
+  it('alerts without cancelling a delivered pickup when Procurement cancels it', async () => {
+    const orderId = purchaseOrderId();
+    const dispatchId = await createScheduledPickup(orderId);
+    await setDispatchStatus(dispatchId, 'delivered');
+    const before = await dispatchState(dispatchId);
+    const repository = new ProcurementPickupRepository();
+
+    const outcome = await repository.applyCancelled(
+      {
+        purchaseOrderId: orderId,
+        recordVersion: 2,
+        updatedAt: '2026-10-14T18:00:00Z',
+        cancelledAt: '2026-10-14T18:00:00Z',
+        reason: 'Orden cancelada por Compras',
+      },
+      options(),
+    );
+
+    expect(outcome).toMatchObject({
+      status: 'attention_required',
+      dispatchId,
+      event: { changeType: 'order_cancelled' },
+    });
+    expect(await dispatchState(dispatchId)).toEqual(before);
+    expect(await eventTypes(dispatchId)).toContain('change_requires_attention');
   });
 });

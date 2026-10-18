@@ -9,7 +9,11 @@ import { MemoryMessageBusAdapter } from '../../../plugins/messaging/memory/memor
 import type { TransactionOptions } from '../../../plugins/messaging/inbound-message-transaction.port.js';
 import { generateMessageId } from '../../../plugins/messaging/envelope/uuid-v7.js';
 import { PickupSchedulingService } from '../../dispatch/pickup-scheduling/services/pickup-scheduling.service.js';
-import { OrderSyncStatePort, type OrderSyncState, type OrderSyncSource } from '../sales-order-sync/ports/order-sync-state.port.js';
+import {
+  OrderSyncStatePort,
+  type OrderSyncState,
+  type OrderSyncSource,
+} from '../sales-order-sync/ports/order-sync-state.port.js';
 import { DispatchChangeEvents } from '../sales-order-intake/services/dispatch-change-events.service.js';
 import { ProcurementPickupRepository } from './repositories/procurement-pickup.repository.js';
 import { ProcurementPickupConsumer } from './services/procurement-pickup-consumer.service.js';
@@ -34,7 +38,12 @@ interface PickupRecord {
   products: Array<{ productId: string; quantity: number }>;
 }
 
-class MemoryPickupRepository extends ProcurementPickupRepository implements MemoryTransactionParticipant<PickupRecord[]> {
+class MemoryPickupRepository
+  extends ProcurementPickupRepository
+  implements MemoryTransactionParticipant<PickupRecord[]>
+{
+  // This double isolates the consumer/message circuit; it does not exercise the SQL or business
+  // rules in ProcurementPickupRepository. Those repository rules have separate integration specs.
   records: PickupRecord[] = [];
 
   snapshot(): PickupRecord[] {
@@ -45,9 +54,18 @@ class MemoryPickupRepository extends ProcurementPickupRepository implements Memo
     this.records = snapshot;
   }
 
-  async applyRequested(data: ProcurementPickupRequestedData, _options: TransactionOptions): Promise<null> {
-    const existing = this.records.find((record) => record.purchaseOrderId === data.purchaseOrderId);
-    const complete = Boolean(data.pickupAddress?.line && data.pickupWindow && data.warehouseId === 'WH-LPZ-01');
+  async applyRequested(
+    data: ProcurementPickupRequestedData,
+    _options: TransactionOptions,
+  ): Promise<null> {
+    const existing = this.records.find(
+      (record) => record.purchaseOrderId === data.purchaseOrderId,
+    );
+    const complete = Boolean(
+      data.pickupAddress?.line &&
+      data.pickupWindow &&
+      data.warehouseId === 'WH-LPZ-01',
+    );
     const record: PickupRecord = {
       dispatchId: existing?.dispatchId ?? this.records.length + 1,
       purchaseOrderId: data.purchaseOrderId,
@@ -64,28 +82,51 @@ class MemoryPickupRepository extends ProcurementPickupRepository implements Memo
     return null;
   }
 
-  async applyUpdated(data: ProcurementPickupUpdatedData, _options: TransactionOptions): Promise<null> {
-    const record = this.records.find((item) => item.purchaseOrderId === data.purchaseOrderId);
+  async applyUpdated(
+    data: ProcurementPickupUpdatedData,
+    _options: TransactionOptions,
+  ): Promise<null> {
+    const record = this.records.find(
+      (item) => item.purchaseOrderId === data.purchaseOrderId,
+    );
     if (!record) return null;
     if (data.pickupAddress) record.address = data.pickupAddress.line;
-    if (data.pickupWindow) record.pickupWindow = structuredClone(data.pickupWindow);
+    if (data.pickupWindow)
+      record.pickupWindow = structuredClone(data.pickupWindow);
     if (data.warehouseId !== undefined) record.warehouseId = data.warehouseId;
     if (data.estimates) record.weightKg = data.estimates.weightKg ?? null;
     if (data.products) record.products = structuredClone(data.products);
     if (record.status !== 'scheduled') {
-      record.status = record.address && record.pickupWindow && record.warehouseId === 'WH-LPZ-01' ? 'pending' : 'address_review';
+      record.status =
+        record.address &&
+        record.pickupWindow &&
+        record.warehouseId === 'WH-LPZ-01'
+          ? 'pending'
+          : 'address_review';
     }
     return null;
   }
 
-  async applyCancelled(data: ProcurementPickupCancelledData, _options: TransactionOptions): Promise<null> {
-    const record = this.records.find((item) => item.purchaseOrderId === data.purchaseOrderId);
-    if (record && ['pending', 'address_review', 'scheduled'].includes(record.status)) record.status = 'cancelled';
+  async applyCancelled(
+    data: ProcurementPickupCancelledData,
+    _options: TransactionOptions,
+  ): Promise<null> {
+    const record = this.records.find(
+      (item) => item.purchaseOrderId === data.purchaseOrderId,
+    );
+    if (
+      record &&
+      ['pending', 'address_review', 'scheduled'].includes(record.status)
+    )
+      record.status = 'cancelled';
     return null;
   }
 }
 
-class MemoryOrderSyncState extends OrderSyncStatePort implements MemoryTransactionParticipant<Map<string, OrderSyncState>> {
+class MemoryOrderSyncState
+  extends OrderSyncStatePort
+  implements MemoryTransactionParticipant<Map<string, OrderSyncState>>
+{
   private states = new Map<string, OrderSyncState>();
 
   snapshot(): Map<string, OrderSyncState> {
@@ -96,16 +137,24 @@ class MemoryOrderSyncState extends OrderSyncStatePort implements MemoryTransacti
     this.states = snapshot;
   }
 
-  async find(salesOrderId: string, source: OrderSyncSource): Promise<OrderSyncState | null> {
+  async find(
+    salesOrderId: string,
+    source: OrderSyncSource,
+  ): Promise<OrderSyncState | null> {
     return this.states.get(`${salesOrderId}:${source}`) ?? null;
   }
 
   async findAllOf(salesOrderId: string): Promise<OrderSyncState[]> {
-    return [...this.states.values()].filter((state) => state.salesOrderId === salesOrderId);
+    return [...this.states.values()].filter(
+      (state) => state.salesOrderId === salesOrderId,
+    );
   }
 
   async save(state: OrderSyncState): Promise<void> {
-    this.states.set(`${state.salesOrderId}:${state.source}`, structuredClone(state));
+    this.states.set(
+      `${state.salesOrderId}:${state.source}`,
+      structuredClone(state),
+    );
   }
 }
 
@@ -127,8 +176,19 @@ function pickupRequest(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function message(type: string, data: Record<string, unknown>, messageId = generateMessageId()): MessageEnvelope {
-  return { messageId, type, source: 'procurement', schemaVersion: 1, occurredAt: new Date().toISOString(), data };
+function message(
+  type: string,
+  data: Record<string, unknown>,
+  messageId = generateMessageId(),
+): MessageEnvelope {
+  return {
+    messageId,
+    type,
+    source: 'procurement',
+    schemaVersion: 1,
+    occurredAt: new Date().toISOString(),
+    data,
+  };
 }
 
 function buildConsumerCircuit() {
@@ -140,9 +200,17 @@ function buildConsumerCircuit() {
   const syncStates = new MemoryOrderSyncState();
   transaction.registerParticipant(pickups);
   transaction.registerParticipant(syncStates);
-  const events = { emitAfterCommit: vi.fn() } as unknown as DispatchChangeEvents;
-  const consumer = new ProcurementPickupConsumer(bus, transaction, syncStates, pickups, events);
-  return { bus, validator, pickups, syncStates, consumer };
+  const events = {
+    emitAfterCommit: vi.fn(),
+  } as unknown as DispatchChangeEvents;
+  const consumer = new ProcurementPickupConsumer(
+    bus,
+    transaction,
+    syncStates,
+    pickups,
+    events,
+  );
+  return { bus, pickups, syncStates, consumer };
 }
 
 describe('Procurement pickup messaging integration', () => {
@@ -155,20 +223,32 @@ describe('Procurement pickup messaging integration', () => {
 
     expect(outcome).toBe('processed');
     expect(pickups.records).toHaveLength(1);
-    expect(pickups.records[0]).toMatchObject({ type: 'supplier_pickup', status: 'pending', purchaseOrderId: ORDER_ID });
+    expect(pickups.records[0]).toMatchObject({
+      type: 'supplier_pickup',
+      status: 'pending',
+      purchaseOrderId: ORDER_ID,
+      address: 'Av. Industrial 123',
+      warehouseId: 'WH-LPZ-01',
+      products: [{ productId: 'SKU-1', quantity: 2 }],
+    });
   });
 
   it('retains an incomplete request for address review when its warehouse is unknown', async () => {
     const { bus, pickups, consumer } = buildConsumerCircuit();
     await consumer.onModuleInit();
-    const envelope = message('procurement.pickup.requested', pickupRequest({ warehouseId: 'WH-MISSING' }));
+    const envelope = message(
+      'procurement.pickup.requested',
+      pickupRequest({ warehouseId: 'WH-MISSING' }),
+    );
 
     const outcome = await bus.publishRaw(envelope.type, envelope);
 
     expect(outcome).toBe('processed');
-    expect(pickups.records[0]).toMatchObject({ status: 'address_review', warehouseId: 'WH-MISSING' });
+    expect(pickups.records[0]).toMatchObject({
+      status: 'address_review',
+      warehouseId: 'WH-MISSING',
+    });
   });
-
 
   it('applies a newer update and cancellation while the pickup is pending', async () => {
     const { bus, pickups, syncStates, consumer } = buildConsumerCircuit();
@@ -183,8 +263,13 @@ describe('Procurement pickup messaging integration', () => {
       estimates: { packages: 3, weightKg: 550, volumeM3: 4 },
     });
     expect(await bus.publishRaw(updated.type, updated)).toBe('processed');
-    expect(pickups.records[0]).toMatchObject({ status: 'pending', weightKg: 550 });
-    expect(await syncStates.find(ORDER_ID, 'procurement')).toMatchObject({ lastRecordVersion: 2 });
+    expect(pickups.records[0]).toMatchObject({
+      status: 'pending',
+      weightKg: 550,
+    });
+    expect(await syncStates.find(ORDER_ID, 'procurement')).toMatchObject({
+      lastRecordVersion: 2,
+    });
 
     const cancelledAt = new Date().toISOString();
     const cancelled = message('procurement.pickup.cancelled', {
@@ -196,14 +281,120 @@ describe('Procurement pickup messaging integration', () => {
     });
     expect(await bus.publishRaw(cancelled.type, cancelled)).toBe('processed');
     expect(pickups.records[0].status).toBe('cancelled');
-    expect(await syncStates.find(ORDER_ID, 'procurement')).toMatchObject({ lastRecordVersion: 3, cancelledAt });
+    expect(await syncStates.find(ORDER_ID, 'procurement')).toMatchObject({
+      lastRecordVersion: 3,
+      cancelledAt,
+    });
   });
 
+  it.each([
+    { kind: 'requested', version: 2 },
+    { kind: 'requested', version: 3 },
+    { kind: 'updated', version: 2 },
+    { kind: 'updated', version: 3 },
+    { kind: 'cancelled', version: 2 },
+    { kind: 'cancelled', version: 3 },
+  ] as const)(
+    'ignores a $kind message at recordVersion $version when the last applied version is 3',
+    async ({ kind, version }) => {
+      const { bus, pickups, syncStates, consumer } = buildConsumerCircuit();
+      await consumer.onModuleInit();
+      await syncStates.save({
+        salesOrderId: ORDER_ID,
+        source: 'procurement',
+        lastRecordVersion: 3,
+        baseReceived: true,
+        cancelledAt: null,
+        cancelledVersion: null,
+      });
+
+      const updatedAt = new Date().toISOString();
+      const type = `procurement.pickup.${kind}`;
+      const data =
+        kind === 'requested'
+          ? pickupRequest({ recordVersion: version })
+          : kind === 'updated'
+            ? {
+                purchaseOrderId: ORDER_ID,
+                recordVersion: version,
+                updatedAt,
+                estimates: { weightKg: 900 },
+              }
+            : {
+                purchaseOrderId: ORDER_ID,
+                recordVersion: version,
+                updatedAt,
+                cancelledAt: updatedAt,
+                reason: 'Cancelación tardía',
+              };
+
+      expect(await bus.publishRaw(type, message(type, data))).toBe('processed');
+      expect(pickups.records).toHaveLength(0);
+      expect(await syncStates.find(ORDER_ID, 'procurement')).toMatchObject({
+        lastRecordVersion: 3,
+        cancelledAt: null,
+      });
+    },
+  );
+
+  it('ignores a requested message received after that purchase order was cancelled', async () => {
+    const { bus, pickups, syncStates, consumer } = buildConsumerCircuit();
+    await consumer.onModuleInit();
+    const cancelledAt = new Date().toISOString();
+    await syncStates.save({
+      salesOrderId: ORDER_ID,
+      source: 'procurement',
+      lastRecordVersion: 2,
+      baseReceived: true,
+      cancelledAt,
+      cancelledVersion: 2,
+    });
+    const requested = message(
+      'procurement.pickup.requested',
+      pickupRequest({ recordVersion: 3 }),
+    );
+
+    expect(await bus.publishRaw(requested.type, requested)).toBe('processed');
+    expect(pickups.records).toHaveLength(0);
+    expect(await syncStates.find(ORDER_ID, 'procurement')).toMatchObject({
+      lastRecordVersion: 2,
+      cancelledAt,
+    });
+  });
+
+  it('ignores an update when the base request has not been received', async () => {
+    const { bus, pickups, syncStates, consumer } = buildConsumerCircuit();
+    await consumer.onModuleInit();
+    await syncStates.save({
+      salesOrderId: ORDER_ID,
+      source: 'procurement',
+      lastRecordVersion: 0,
+      baseReceived: false,
+      cancelledAt: null,
+      cancelledVersion: null,
+    });
+    const updated = message('procurement.pickup.updated', {
+      purchaseOrderId: ORDER_ID,
+      recordVersion: 1,
+      updatedAt: new Date().toISOString(),
+      estimates: { weightKg: 900 },
+    });
+
+    expect(await bus.publishRaw(updated.type, updated)).toBe('processed');
+    expect(pickups.records).toHaveLength(0);
+    expect(await syncStates.find(ORDER_ID, 'procurement')).toMatchObject({
+      lastRecordVersion: 0,
+      baseReceived: false,
+    });
+  });
 
   it('dead-letters an invalid request without creating a pickup', async () => {
     const { bus, pickups, consumer } = buildConsumerCircuit();
     await consumer.onModuleInit();
-    const invalid = message('procurement.pickup.requested', { purchaseOrderId: ORDER_ID, recordVersion: 1 });
+    const invalid = message('procurement.pickup.requested', {
+      purchaseOrderId: ORDER_ID,
+      recordVersion: 1,
+    });
 
     const outcome = await bus.publishRaw(invalid.type, invalid);
 
@@ -247,23 +438,42 @@ function scheduleCircuit() {
     reception_end_time: '12:00:00',
   };
   const manager = {
+    // SQL-fragment routing keeps this query double explicit and fails closed when the service adds a query.
     query: vi.fn(async (sql: string, params: unknown[]) => {
       if (sql.includes('FOR UPDATE OF d')) return [{ ...row }];
-      if (sql.includes('FROM vehicles')) return [{ capacity_kg: '1000', capacity_m3: '8' }];
+      if (sql.includes('FROM vehicles'))
+        return [{ capacity_kg: '1000', capacity_m3: '8' }];
       if (sql.includes('FROM dispatch_events')) {
         return savedEvents
-          .filter((event) => ['pickup_scheduled', 'pickup_rescheduled'].includes(String(event.eventType)))
-          .map((event) => ({ version: String((event.metadata as Record<string, unknown>).recordVersion) }));
+          .filter((event) =>
+            ['pickup_scheduled', 'pickup_rescheduled'].includes(
+              String(event.eventType),
+            ),
+          )
+          .map((event) => ({
+            version: String(
+              (event.metadata as Record<string, unknown>).recordVersion,
+            ),
+          }));
       }
       if (sql.includes('INSERT INTO dispatch_events')) {
-        savedEvents.push({ eventType: params[1], metadata: JSON.parse(params[5] as string) });
+        savedEvents.push({
+          eventType: params[1],
+          metadata: JSON.parse(params[5] as string),
+        });
         return [];
       }
-      if (sql.includes('FROM incident_reasons')) return [{ code: 'INC-COMP-FAILURE' }];
-      if (sql.includes('FROM reschedule_reasons')) return [{ code: 'RES-OPS-SUPPLIER' }];
-      if (sql.includes('INSERT INTO dispatch_incidents') || sql.includes('INSERT INTO dispatch_reschedules')) return [];
+      if (sql.includes('FROM incident_reasons'))
+        return [{ code: 'INC-COMP-FAILURE' }];
+      if (sql.includes('FROM reschedule_reasons'))
+        return [{ code: 'RES-OPS-SUPPLIER' }];
+      if (
+        sql.includes('INSERT INTO dispatch_incidents') ||
+        sql.includes('INSERT INTO dispatch_reschedules')
+      )
+        return [];
       if (sql.includes('UPDATE dispatches')) {
-        if (typeof params[0] === 'string') {
+        if (isInitialScheduleUpdate(params)) {
           row.status = params[0];
           row.scheduled_window_start = params[1];
           row.scheduled_window_end = params[2];
@@ -277,20 +487,34 @@ function scheduleCircuit() {
       throw new Error(`Unexpected scheduling query: ${sql}`);
     }),
   };
-  const dataSource = { transaction: async (callback: (manager: unknown) => unknown) => await callback(manager) };
+  const dataSource = {
+    transaction: async (callback: (manager: unknown) => unknown) =>
+      await callback(manager),
+  };
   const settings = {
     getString: vi.fn(async (_key: string, fallback: string) => fallback),
     getNumber: vi.fn(async () => 2),
   };
   const outbox = {
     enqueue: vi.fn(async (envelope: MessageEnvelope) => {
-      expect(validator.validate(envelope.type, envelope)).toEqual({ valid: true });
+      expect(validator.validate(envelope.type, envelope)).toEqual({
+        valid: true,
+      });
       await bus.publish(envelope.type, envelope);
       return true;
     }),
   };
-  const service = new PickupSchedulingService(dataSource as never, settings as never, outbox as never);
+  const service = new PickupSchedulingService(
+    dataSource as never,
+    settings as never,
+    outbox as never,
+  );
   return { service, bus, outbox, savedEvents, manager, row };
+}
+
+/** schedule() binds a status name first; reschedule() binds the new start time first. */
+function isInitialScheduleUpdate(params: unknown[]): boolean {
+  return typeof params[0] === 'string';
 }
 
 describe('supplier pickup scheduling message integration', () => {
@@ -308,5 +532,52 @@ describe('supplier pickup scheduling message integration', () => {
     });
   });
 
+  it('publishes scheduling and rescheduling messages with consecutive recordVersions', async () => {
+    const { service, bus, outbox, row } = scheduleCircuit();
+    await service.schedule(7, { vehicleId: 3 }, 9, SCHEDULE_NOW);
+    await service.reschedule(
+      7,
+      {
+        incidentReasonId: 4,
+        rescheduleReasonId: 6,
+        window: {
+          startsAt: new Date('2026-10-21T13:00:00Z'),
+          endsAt: new Date('2026-10-21T15:00:00Z'),
+        },
+      },
+      9,
+      SCHEDULE_NOW,
+    );
 
+    const scheduledMessages = bus.publishedTo(
+      'dispatch.pickup.scheduled',
+    ) as Array<
+      MessageEnvelope<{
+        recordVersion: number;
+        pickupWindow: { startsAt: string };
+      }>
+    >;
+    const outboxMessages = outbox.enqueue.mock.calls.map(
+      ([envelope]) => envelope,
+    );
+    expect(outbox.enqueue).toHaveBeenCalledTimes(3);
+    expect(outboxMessages.map(({ type }) => type)).toEqual([
+      'dispatch.pickup.scheduled',
+      'dispatch.transfer.incident_reported',
+      'dispatch.pickup.scheduled',
+    ]);
+    expect(outboxMessages.map(({ data }) => data.recordVersion)).toEqual([
+      1, 2, 2,
+    ]);
+    expect(scheduledMessages).toHaveLength(2);
+    expect(scheduledMessages.map(({ data }) => data.recordVersion)).toEqual([
+      1, 2,
+    ]);
+    expect(scheduledMessages[1].data.pickupWindow.startsAt).toBe(
+      '2026-10-21T13:00:00.000Z',
+    );
+    expect(row.scheduled_window_start).toEqual(
+      new Date('2026-10-21T13:00:00Z'),
+    );
+  });
 });
