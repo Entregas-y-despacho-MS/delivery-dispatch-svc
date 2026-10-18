@@ -19,11 +19,11 @@ export class SyncEvidenceDto {
     @Max(INT4_MAX)
     dispatchId: number;
 
-    @ApiProperty({ enum: ['photo', 'signature', 'otp'], description: 'Kind of evidence: a photo of the delivery, the recipient signature, or the OTP code they gave' })
+    @ApiProperty({ enum: ['photo', 'signature', 'otp'], description: 'Photo or signature evidence. Legacy OTP submissions are rejected. Online validation belongs to ST-31.3.' })
     @IsIn(['photo', 'signature', 'otp'])
     type: string;
 
-    @ApiPropertyOptional({ example: '123456', maxLength: 10, description: 'The OTP code the recipient gave. Used when type = otp' })
+    @ApiPropertyOptional({ example: '123456', maxLength: 10, description: 'Legacy field. OTP submissions are rejected; online validation belongs to ST-31.3.' })
     @IsOptional()
     @IsString()
     @MaxLength(10)
