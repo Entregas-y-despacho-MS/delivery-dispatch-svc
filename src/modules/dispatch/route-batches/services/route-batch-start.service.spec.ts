@@ -31,6 +31,13 @@ const dispatches = [
     tracking_code: 'DSP-00022',
   },
 ];
+type CotejoEvent = {
+  dispatch_id: number;
+  dispatch_event_id: number;
+  event_type: 'cotejo_failed' | 'cotejo_resolved';
+  created_at: string;
+  metadata: { routeBatchId: number; packageIds: string[] };
+};
 
 function setup(
   options: {
@@ -40,6 +47,7 @@ function setup(
       metadata: { dispatchIds: number[]; startedAt: string };
     }[];
     dispatches?: typeof dispatches;
+    cotejoEvents?: CotejoEvent[];
     packages?: { dispatch_id: number; external_package_id: string }[];
     outboxFailure?: Error;
   } = {},
@@ -50,6 +58,7 @@ function setup(
     ],
     prior: options.prior ?? [],
     dispatches: options.dispatches ?? dispatches,
+    cotejoEvents: options.cotejoEvents ?? [],
     packages: options.packages ?? [
       { dispatch_id: 21, external_package_id: 'PKG-21-A' },
       { dispatch_id: 22, external_package_id: 'PKG-22-A' },
@@ -57,7 +66,7 @@ function setup(
     ],
   };
   const manager = {
-    query: vi.fn(async (sql: string) => {
+    query: vi.fn(async (sql: string, parameters?: unknown[]) => {
       if (sql.includes('FROM route_batches')) return state.batch;
       if (sql.includes("metadata->>'eventId'")) return state.prior;
       if (sql.includes('FROM dispatches d'))
@@ -67,6 +76,26 @@ function setup(
               (right.sequence_order ?? Number.MAX_SAFE_INTEGER) ||
             left.id - right.id,
         );
+      if (sql.includes('FROM dispatch_events e')) {
+        const dispatchIds = parameters?.[0] as number[];
+        const routeBatchId = parameters?.[1] as number;
+        const latest = new Map<number, CotejoEvent>();
+        for (const event of state.cotejoEvents
+          .filter(
+            (row) =>
+              dispatchIds.includes(row.dispatch_id) &&
+              row.metadata.routeBatchId === routeBatchId,
+          )
+          .sort(
+            (left, right) =>
+              Date.parse(right.created_at) - Date.parse(left.created_at) ||
+              right.dispatch_event_id - left.dispatch_event_id,
+          )) {
+          if (!latest.has(event.dispatch_id))
+            latest.set(event.dispatch_id, event);
+        }
+        return [...latest.values()];
+      }
       if (sql.includes('FROM dispatch_packages')) return state.packages;
       if (sql.includes('UPDATE route_batches'))
         return [{ updated_at: savedAt }];
@@ -114,6 +143,7 @@ describe('RouteBatchStartService.start', () => {
       routeBatchId: 7,
       status: RouteBatchStatusEnum.IN_EXECUTION,
       dispatchIds: [21, 22],
+      excludedDispatchIds: [],
     });
     expect(Date.parse(result.startedAt)).toBeGreaterThan(0);
     expect(ctx.runner.commitTransaction).toHaveBeenCalledOnce();
@@ -159,14 +189,22 @@ describe('RouteBatchStartService.start', () => {
         { id: 7, status: RouteBatchStatusEnum.IN_EXECUTION, driver_id: 9 },
       ],
       prior: [
-        { route_batch_id: 7, metadata: { dispatchIds: [21, 22], startedAt } },
+        {
+          route_batch_id: 7,
+          metadata: {
+            dispatchIds: [21],
+            excludedDispatchIds: [22],
+            startedAt,
+          },
+        },
       ],
     });
 
     await expect(ctx.service.start(7, { eventId }, 9)).resolves.toEqual({
       routeBatchId: 7,
       status: RouteBatchStatusEnum.IN_EXECUTION,
-      dispatchIds: [21, 22],
+      dispatchIds: [21],
+      excludedDispatchIds: [22],
       startedAt,
     });
     expect(ctx.outbox.enqueue).not.toHaveBeenCalled();
@@ -189,9 +227,122 @@ describe('RouteBatchStartService.start', () => {
       expect.stringContaining('ORDER BY d.sequence_order, d.dispatch_id'),
       [7],
     );
-    expect(ctx.manager.query.mock.calls.find(([sql]) =>
+    expect(
+      ctx.manager.query.mock.calls.find(([sql]) =>
+        sql.includes('INSERT INTO route_batch_events'),
+      )?.[1]?.[2],
+    ).toContain('"dispatchIds":[22,21]');
+  });
+
+  it('excludes a dispatch with a current cotejo failure and validates only departures', async () => {
+    const ctx = setup({
+      dispatches: [
+        dispatches[0],
+        {
+          ...dispatches[1],
+          status: DispatchStatusEnum.SCHEDULED,
+          tracking_code: null,
+        },
+      ],
+      packages: [{ dispatch_id: 21, external_package_id: 'PKG-21-A' }],
+      cotejoEvents: [
+        {
+          dispatch_id: 22,
+          dispatch_event_id: 1,
+          event_type: 'cotejo_failed',
+          created_at: '2026-10-18T11:00:00.000Z',
+          metadata: { routeBatchId: 7, packageIds: ['PKG-22-A'] },
+        },
+      ],
+    });
+
+    const result = await ctx.service.start(7, { eventId }, 9);
+
+    expect(result).toMatchObject({
+      dispatchIds: [21],
+      excludedDispatchIds: [22],
+    });
+    expect(ctx.outbox.enqueue).toHaveBeenCalledOnce();
+    expect(ctx.events.emit).toHaveBeenCalledOnce();
+    expect(
+      ctx.manager.query.mock.calls.some(
+        ([sql, parameters]) =>
+          sql.includes('UPDATE dispatches') && parameters?.[0] === 22,
+      ),
+    ).toBe(false);
+    const routeStarted = ctx.manager.query.mock.calls.find(([sql]) =>
       sql.includes('INSERT INTO route_batch_events'),
-    )?.[1]?.[2]).toContain('"dispatchIds":[22,21]');
+    );
+    expect(routeStarted?.[1]?.[2]).toContain('"dispatchIds":[21]');
+    expect(routeStarted?.[1]?.[2]).toContain('"excludedDispatchIds":[22]');
+  });
+
+  it('includes a failed dispatch when a later cotejo resolution exists for the same batch', async () => {
+    const ctx = setup({
+      cotejoEvents: [
+        {
+          dispatch_id: 22,
+          dispatch_event_id: 1,
+          event_type: 'cotejo_failed',
+          created_at: '2026-10-18T11:00:00.000Z',
+          metadata: { routeBatchId: 7, packageIds: ['PKG-22-A'] },
+        },
+        {
+          dispatch_id: 22,
+          dispatch_event_id: 2,
+          event_type: 'cotejo_resolved',
+          created_at: '2026-10-18T11:01:00.000Z',
+          metadata: { routeBatchId: 7, packageIds: ['PKG-22-A'] },
+        },
+      ],
+    });
+
+    const result = await ctx.service.start(7, { eventId }, 9);
+
+    expect(result.dispatchIds).toEqual([21, 22]);
+    expect(result.excludedDispatchIds).toEqual([]);
+    expect(ctx.outbox.enqueue).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not apply a cotejo failure recorded for a different batch', async () => {
+    const ctx = setup({
+      cotejoEvents: [
+        {
+          dispatch_id: 22,
+          dispatch_event_id: 1,
+          event_type: 'cotejo_failed',
+          created_at: '2026-10-18T11:00:00.000Z',
+          metadata: { routeBatchId: 99, packageIds: ['PKG-22-A'] },
+        },
+      ],
+    });
+
+    const result = await ctx.service.start(7, { eventId }, 9);
+
+    expect(result.dispatchIds).toEqual([21, 22]);
+    expect(result.excludedDispatchIds).toEqual([]);
+    expect(ctx.outbox.enqueue).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns a dedicated conflict when every dispatch has an unresolved cotejo failure', async () => {
+    const ctx = setup({
+      cotejoEvents: dispatches.map((dispatch, index) => ({
+        dispatch_id: dispatch.id,
+        dispatch_event_id: index + 1,
+        event_type: 'cotejo_failed' as const,
+        created_at: `2026-10-18T11:0${index}:00.000Z`,
+        metadata: { routeBatchId: 7, packageIds: [`PKG-${dispatch.id}-A`] },
+      })),
+    });
+
+    await expect(ctx.service.start(7, { eventId }, 9)).rejects.toMatchObject({
+      response: expect.objectContaining({
+        error: 'ROUTE_BATCH_ALL_DISPATCHES_EXCLUDED',
+      }),
+    });
+    expect(ctx.outbox.enqueue).not.toHaveBeenCalled();
+    expect(ctx.events.emit).not.toHaveBeenCalled();
+    expect(ctx.runner.rollbackTransaction).toHaveBeenCalledOnce();
   });
 
   it('rejects a non-confirmed batch without changing data', async () => {
