@@ -14,10 +14,13 @@ import { ApproveRouteBatchPromisesResponseDto } from '../dto/approve-route-batch
 import { ApproveFinalRouteBatchDto } from '../dto/approve-final-route-batch.dto.js';
 import { ApproveFinalRouteBatchResponseDto } from '../dto/approve-final-route-batch-response.dto.js';
 import { RouteBatchFinalApprovalService } from '../services/route-batch-final-approval.service.js';
+import { RouteBatchStartService } from '../services/route-batch-start.service.js';
 import { RouteBatchQueryService } from '../services/route-batch-query.service.js';
 import { FindRouteBatchesParamsDto } from '../dto/find-route-batches-params.dto.js';
 import { FindRouteBatchesResponseDto } from '../dto/find-route-batches-response.dto.js';
 import { RouteBatchDetailDto } from '../dto/route-batch-detail.dto.js';
+import { StartRouteBatchDto } from '../dto/start-route-batch.dto.js';
+import { StartRouteBatchResponseDto } from '../dto/start-route-batch-response.dto.js';
 import { Roles } from '../../../../app/auth/decorators/index.js';
 import { CurrentUser } from '../../../../shared/decorators/current-user.decorator.js';
 import { ParseIdPipe } from '../../../../shared/pipes/index.js';
@@ -53,6 +56,7 @@ export class RouteBatchesController {
     private readonly promiseApprovalService: RouteBatchPromiseApprovalService,
     private readonly finalApprovalService: RouteBatchFinalApprovalService,
     private readonly queryService: RouteBatchQueryService,
+    private readonly startService: RouteBatchStartService,
   ) {}
 
   @Get()
@@ -153,6 +157,36 @@ export class RouteBatchesController {
     @CurrentUser('id') actorUserId: number,
   ): Promise<ApproveFinalRouteBatchResponseDto> {
     return await this.finalApprovalService.approve(id, dto, actorUserId);
+  }
+
+  @Post(':id/start')
+  @HttpCode(HttpStatus.OK)
+  @Roles(RoleEnum.DRIVER)
+  @ApiOperation({
+    summary: 'Start a confirmed route batch',
+    description: 'The assigned driver starts the route with an idempotent UUID v7 eventId. In one transaction it moves the batch to in_execution, moves all assigned dispatches to out_for_delivery, records custody and queues one dispatch.shipment.departed outbox message per dispatch. Status-change notifications are emitted after commit. A retry with the same eventId returns the original result without repeating transitions.',
+  })
+  @ApiIdParam('Route batch')
+  @ApiOkResponse({ type: StartRouteBatchResponseDto })
+  @ApiBadRequests({ validation: true, id: true, example: ['eventId must be a UUID'] })
+  @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+  @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
+  @ApiNotFound({ code: 'ROUTE_BATCH_NOT_FOUND', message: 'Route batch not found.' })
+  @ApiConflict(
+    { code: 'ROUTE_BATCH_NOT_CONFIRMED', message: 'Only a confirmed route batch can start.' },
+    { code: 'ROUTE_BATCH_DRIVER_REQUIRED', message: 'Assign a driver before starting the route.' },
+    { code: 'ROUTE_BATCH_HAS_NO_DISPATCHES', message: 'The route batch has no dispatches to start.' },
+    { code: 'DISPATCH_NOT_ASSIGNED', message: 'All dispatches must be assigned before starting the route.' },
+    { code: 'DISPATCH_PACKAGES_REQUIRED', message: 'Every dispatch must have registered packages.' },
+    { code: 'DISPATCH_TRACKING_CODE_REQUIRED', message: 'Every dispatch must have a tracking code for the outbound contract.' },
+    { code: 'ROUTE_START_EVENT_ID_ALREADY_USED', message: 'This eventId was already used to start another route batch.' },
+  )
+  async start(
+    @Param('id', ParseIdPipe) id: number,
+    @Body() dto: StartRouteBatchDto,
+    @CurrentUser('id') driverId: number,
+  ): Promise<StartRouteBatchResponseDto> {
+    return await this.startService.start(id, dto, driverId);
   }
 
   @Patch(':id/reviewer')
