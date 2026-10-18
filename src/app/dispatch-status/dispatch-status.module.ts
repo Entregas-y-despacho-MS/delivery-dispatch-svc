@@ -1,0 +1,14 @@
+import { Module } from '@nestjs/common';
+import { DispatchEventsModule } from '../../modules/dispatch/dispatch-events/dispatch-events.module.js';
+import { DeliveryEvidencesModule } from '../../modules/dispatch/delivery-evidences/delivery-evidences.module.js';
+import { DispatchesModule } from '../../modules/dispatch/dispatches/dispatches.module.js';
+import { DispatchStatusController } from './controllers/dispatch-status.controller.js';
+import { DispatchStatusSocketListener } from './dispatch-status.socket-listener.js';
+import { DispatchStatusService } from './services/dispatch-status.service.js';
+
+@Module({
+    imports: [DispatchesModule, DispatchEventsModule, DeliveryEvidencesModule],
+    controllers: [DispatchStatusController],
+    providers: [DispatchStatusService, DispatchStatusSocketListener],
+})
+export class DispatchStatusModule {}

@@ -1,0 +1,202 @@
+// ST-30.3 — Real HTTP/PostgreSQL acceptance checks for driver dispatch status transitions.
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { Test, TestingModule } from '@nestjs/testing';
+import { INestApplication, ValidationPipe } from '@nestjs/common';
+import request from 'supertest';
+import { v7 as uuidv7 } from 'uuid';
+import { DataSource } from 'typeorm';
+import { AppModule } from '../src/app.module.js';
+import { AppConfig } from '../src/config/services/app.config.js';
+import { hashPassword } from '../src/shared/utils/crypto.util.js';
+import { HttpExceptionFilter } from '../src/shared/filters/index.js';
+import { withEventPurge } from './helpers/purge-append-only-events.js';
+
+describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
+    let app: INestApplication;
+    let dataSource: DataSource;
+    let apiPrefix: string;
+    const tokens: Record<'driver1' | 'driver2', string> = { driver1: '', driver2: '' };
+    const users: Record<'driver1' | 'driver2', number> = { driver1: 0, driver2: 0 };
+    const statusIds: Record<string, number> = {};
+    const dispatchRefs: string[] = [];
+    const batchIds: number[] = [];
+    const run = Date.now().toString(36).toUpperCase();
+    const prefix = `ST303-${run}`;
+    let dispatchSequence = 0;
+    let batchSequence = 0;
+    let deliveryTypeId: number;
+
+    const auth = (driver: 'driver1' | 'driver2') => ({ Authorization: `Bearer ${tokens[driver]}` });
+    const patch = (id: number, body: object, driver: 'driver1' | 'driver2' = 'driver1') =>
+        request(app.getHttpServer()).patch(`/${apiPrefix}/dispatches/${id}/status`).set(auth(driver)).send(body);
+    const body = (status: string, eventId = uuidv7()) => ({
+        status, eventId, occurredAt: new Date().toISOString(), lat: -16.5, lng: -68.1, accuracy: 8.4,
+    });
+
+    const newBatch = async (driver: 'driver1' | 'driver2') => {
+        const [{ route_batch_id: id }] = await dataSource.query(
+            `INSERT INTO route_batches (driver_id, shift_date, status)
+             VALUES ($1, DATE '2040-01-01' + $2::int, 'in_execution') RETURNING route_batch_id`,
+            [users[driver], batchSequence++],
+        );
+        batchIds.push(id);
+        return id as number;
+    };
+
+    const newDispatch = async (
+        batchId: number,
+        status = 'out_for_delivery',
+        evidencePolicy = 'hand_delivery_standard',
+    ) => {
+        const sequenceOrder = ++dispatchSequence;
+        const sourceOrderRef = `${prefix}-${sequenceOrder}`;
+        dispatchRefs.push(sourceOrderRef);
+        const [{ dispatch_id: id }] = await dataSource.query(
+            `INSERT INTO dispatches (dispatch_type_id, dispatch_status_id, route_batch_id, sequence_order,
+                                    source_order_ref, delivery_address, evidence_policy)
+             VALUES ($1, $2, $3, $4, $5, 'Dirección E2E ST-30.3', $6) RETURNING dispatch_id`,
+            [deliveryTypeId, statusIds[status], batchId, sequenceOrder, sourceOrderRef, evidencePolicy],
+        );
+        return id as number;
+    };
+
+    const addEvidence = async (dispatchId: number, type: 'signature' | 'photo' | 'otp') => {
+        await dataSource.query(
+            `INSERT INTO delivery_evidences (delivery_evidence_id, dispatch_id, type, file_url, otp_code)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [uuidv7(), dispatchId, type, type === 'otp' ? null : 'https://example.test/e2e-evidence', type === 'otp' ? '123456' : null],
+        );
+    };
+
+    const dispatchRow = async (id: number) => (await dataSource.query(
+        `SELECT ds.name AS status, d.version, d.last_latitude, d.last_longitude, d.last_location_at
+           FROM dispatches d JOIN dispatch_statuses ds USING (dispatch_status_id)
+          WHERE d.dispatch_id = $1`, [id]))[0];
+
+    const eventsFor = async (id: number) => dataSource.query(
+        `SELECT event_type, actor_user_id, actor_type, client_event_id, metadata
+           FROM dispatch_events WHERE dispatch_id = $1 AND event_type = 'status_changed'
+          ORDER BY dispatch_event_id`, [id]);
+
+    beforeAll(async () => {
+        const moduleRef: TestingModule = await Test.createTestingModule({ imports: [AppModule] }).compile();
+        app = moduleRef.createNestApplication();
+        apiPrefix = app.get(AppConfig).apiPrefix;
+        app.setGlobalPrefix(apiPrefix);
+        app.useGlobalPipes(new ValidationPipe({
+            transform: true, whitelist: true, forbidNonWhitelisted: true,
+            transformOptions: { enableImplicitConversion: false },
+        }));
+        app.useGlobalFilters(new HttpExceptionFilter());
+        await app.init();
+        dataSource = moduleRef.get(DataSource);
+
+        const passwordHash = await hashPassword('E2eTest1234');
+        for (const driver of ['driver1', 'driver2'] as const) {
+            const [{ role_id: roleId }] = await dataSource.query(`SELECT role_id FROM roles WHERE name = 'driver'`);
+            const [{ user_id: userId }] = await dataSource.query(
+                `INSERT INTO users (role_id, full_name, username, password_hash, requires_pwd_change)
+                 VALUES ($1, $2, $3, $4, false) RETURNING user_id`,
+                [roleId, `ST-30.3 ${driver} ${run}`, `e2e_st303_${driver}_${run}`, passwordHash],
+            );
+            users[driver] = userId;
+            const login = await request(app.getHttpServer()).post(`/${apiPrefix}/auth/login`).send({
+                username: `e2e_st303_${driver}_${run}`, password: 'E2eTest1234',
+            });
+            expect(login.status, `login ${driver}`).toBe(200);
+            tokens[driver] = login.body.accessToken as string;
+        }
+
+        for (const row of await dataSource.query(`SELECT dispatch_status_id, name FROM dispatch_statuses`)) statusIds[row.name] = row.dispatch_status_id;
+        [{ dispatch_type_id: deliveryTypeId }] = await dataSource.query(`SELECT dispatch_type_id FROM dispatch_types WHERE name = 'delivery'`);
+    });
+
+    afterAll(async () => {
+        if (dataSource?.isInitialized) {
+            await withEventPurge(dataSource, {
+                dispatchRefs: dispatchRefs.map((ref) => `${ref}%`),
+                routeBatchIds: batchIds,
+                userNames: [`e2e_st303_%_${run}`],
+            }, async (manager) => {
+                await manager.query(`DELETE FROM dispatches WHERE source_order_ref LIKE $1`, [`${prefix}%`]);
+                if (batchIds.length) await manager.query(`DELETE FROM route_batches WHERE route_batch_id = ANY($1::int[])`, [batchIds]);
+                await manager.query(`DELETE FROM users WHERE username LIKE $1`, [`e2e_st303_%_${run}`]);
+            });
+        }
+        await app?.close();
+    });
+
+    it('permite out_for_delivery → in_transit, audita actor/GPS y no cambia version ni GPS del despacho', async () => {
+        const batch = await newBatch('driver1');
+        const id = await newDispatch(batch);
+        const before = await dispatchRow(id);
+        const event = body('in_transit');
+
+        const response = await patch(id, event);
+
+        expect(response.status).toBe(200);
+        expect(response.body).toMatchObject({ dispatchId: id, status: 'in_transit', previousStatus: 'out_for_delivery', version: before.version });
+        expect(await dispatchRow(id)).toMatchObject({ status: 'in_transit', version: before.version, last_latitude: before.last_latitude, last_longitude: before.last_longitude, last_location_at: before.last_location_at });
+        expect(await eventsFor(id)).toMatchObject([{
+            actor_user_id: users.driver1, actor_type: 'user', client_event_id: event.eventId,
+            metadata: { previousStatus: 'out_for_delivery', status: 'in_transit', version: before.version, occurredAt: event.occurredAt, lat: event.lat, lng: event.lng, accuracy: event.accuracy },
+        }]);
+    });
+
+    it('rechaza una transición ilegal con 409 y conserva el estado', async () => {
+        const id = await newDispatch(await newBatch('driver1'));
+        const response = await patch(id, body('delivered'));
+        expect(response.status).toBe(409);
+        expect(response.body.error).toBe('DISPATCH_STATUS_TRANSITION_NOT_ALLOWED');
+        expect(await dispatchRow(id)).toMatchObject({ status: 'out_for_delivery' });
+        expect(await eventsFor(id)).toHaveLength(0);
+    });
+
+    it('rechaza delivered con 422 si falta la evidencia de la política', async () => {
+        const id = await newDispatch(await newBatch('driver1'), 'in_transit', 'contactless_delivery');
+        const response = await patch(id, body('delivered'));
+        expect(response.status).toBe(422);
+        expect(response.body.error).toBe('DISPATCH_EVIDENCE_REQUIRED');
+        expect(await dispatchRow(id)).toMatchObject({ status: 'in_transit' });
+        expect(await eventsFor(id)).toHaveLength(0);
+    });
+
+    it.each([
+        ['hand_delivery_standard', 'signature'],
+        ['contactless_delivery', 'photo'],
+        ['high_value_control', 'otp'],
+    ] as const)('requiere la evidencia %s → %s para confirmar entrega', async (policy, evidenceType) => {
+        const id = await newDispatch(await newBatch('driver1'), 'in_transit', policy);
+        await addEvidence(id, evidenceType);
+        const response = await patch(id, body('delivered'));
+        expect(response.status).toBe(200);
+        expect(response.body.status).toBe('delivered');
+    });
+
+    it('permite reintentar el mismo eventId sin duplicar el evento', async () => {
+        const id = await newDispatch(await newBatch('driver1'));
+        const event = body('in_transit');
+        expect((await patch(id, event)).status).toBe(200);
+        expect((await patch(id, event)).status).toBe(200);
+        expect(await eventsFor(id)).toHaveLength(1);
+    });
+
+    it('rechaza un evento de otro repartidor con 403 y no cambia el despacho', async () => {
+        const id = await newDispatch(await newBatch('driver1'));
+        const response = await patch(id, body('in_transit'), 'driver2');
+        expect(response.status).toBe(403);
+        expect(response.body.error).toBe('INSUFFICIENT_PERMISSIONS');
+        expect(await dispatchRow(id)).toMatchObject({ status: 'out_for_delivery' });
+    });
+
+    it('impide iniciar una segunda parada mientras otra sigue in_transit', async () => {
+        const batch = await newBatch('driver1');
+        const first = await newDispatch(batch);
+        const second = await newDispatch(batch);
+        expect((await patch(first, body('in_transit'))).status).toBe(200);
+        const blocked = await patch(second, body('in_transit'));
+        expect(blocked.status).toBe(409);
+        expect(blocked.body.error).toBe('ANOTHER_DISPATCH_IN_TRANSIT');
+        expect(await dispatchRow(second)).toMatchObject({ status: 'out_for_delivery' });
+    });
+});
