@@ -35,7 +35,7 @@ describe('DispatchDetailService', () => {
         const { service } = build({ events: [{
             id: 1, eventType: 'status_changed', detail: null, reason: null, actorType: 'user', actorUser: { id: 3, fullName: 'Op', passwordHash: 'x' },
             createdAt: at('2026-10-18T10:00:00Z'),
-            metadata: { status: 'in_transit', latitude: -16.5, longitude: -68.1, occurredAt: '2026-10-18T09:59:00.000Z', outboundRecordVersion: 7, otp: '123456' },
+            metadata: { status: 'in_transit', lat: -16.5, lng: -68.1, accuracy: 8, occurredAt: '2026-10-18T09:59:00.000Z', outboundRecordVersion: 7, otp: '123456' },
         }] });
         const { timeline } = await service.findDetail(5);
         expect(timeline[0]).toEqual({

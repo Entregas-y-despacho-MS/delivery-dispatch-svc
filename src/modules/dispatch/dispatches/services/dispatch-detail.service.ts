@@ -20,6 +20,8 @@ export const EVIDENCE_ACCESS_TTL_SECONDS = 300;
 
 const iso = (date: Date | null): string | null => (date ? date.toISOString() : null);
 const num = (value: string | number | null | undefined): number | null => (value === null || value === undefined ? null : Number(value));
+// PATCH /dispatches/:id/status (ST-30.3) stores the device position as `lat`/`lng` in the event metadata.
+const coordinate = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null);
 const user = (u: { id: number; fullName: string } | null | undefined): DispatchDetailUserDto | null => (u ? { id: u.id, fullName: u.fullName } : null);
 
 /**
@@ -117,8 +119,8 @@ export class DispatchDetailService {
         return {
             id: e.id, eventType: e.eventType, detail: e.detail, status, reason: e.reason,
             occurredAt: occurredAt.toISOString(),
-            latitude: typeof meta.latitude === 'number' ? meta.latitude : null,
-            longitude: typeof meta.longitude === 'number' ? meta.longitude : null,
+            latitude: coordinate(meta.lat ?? meta.latitude),
+            longitude: coordinate(meta.lng ?? meta.longitude),
             actorType: e.actorType,
             operator: user(e.actorUser),
         };

@@ -144,7 +144,7 @@ describe('GET /dispatches/:id/detail (e2e, ST-56.2)', () => {
             );
 
             // Fuera de orden a propósito: la ficha los devuelve por hora.
-            await insertEvent(dispatchId, 'status_changed', '2040-01-01T10:00:00Z', driverId, { status: 'delivered', latitude: -16.51, longitude: -68.16, outboundRecordVersion: 9, secret: 'no-debe-salir' }, 'entregado');
+            await insertEvent(dispatchId, 'status_changed', '2040-01-01T10:00:00Z', driverId, { status: 'delivered', lat: -16.51, lng: -68.16, accuracy: 5, outboundRecordVersion: 9, secret: 'no-debe-salir' }, 'entregado');
             await insertEvent(dispatchId, 'created', '2040-01-01T08:00:00Z', null, null);
             await insertEvent(dispatchId, 'assigned', '2040-01-01T09:00:00Z', coordinatorId, { status: 'assigned' });
 
