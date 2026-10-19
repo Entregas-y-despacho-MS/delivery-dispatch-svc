@@ -1,16 +1,17 @@
 /// <reference types="multer" />
-import { Body, Controller, Param, Post, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, HttpCode, Param, Post, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiCreatedResponse, ApiOkResponse, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator.js';
 import { ParseIdPipe } from '../../shared/pipes/index.js';
-import { ApiBadRequests, ApiConflict, ApiForbidden, ApiIdParam, ApiNotFound, ApiUnauthorized } from '../../shared/utils/swagger/index.js';
+import { ApiBadRequests, ApiConflict, ApiForbidden, ApiIdParam, ApiNotFound, ApiUnauthorized, ApiUnprocessableEntity } from '../../shared/utils/swagger/index.js';
 import { DriverOnly } from '../auth/decorators/index.js';
 import { MAX_EVIDENCE_FILE_BYTES } from './domain/evidence-file.js';
 import { DispatchEvidenceService } from './dispatch-evidence.service.js';
 import { DeliveryEvidenceDto } from './dto/delivery-evidence.dto.js';
 import { RegisterEvidenceDto } from './dto/register-evidence.dto.js';
+import { ValidateOtpDto } from './dto/validate-otp.dto.js';
 
 /**
  * Error dictionary: VALIDATION_FAILED 400, EVIDENCE_FILE_REQUIRED 400, INVALID_CAPTURE_TIME 400,
@@ -76,5 +77,39 @@ export class DispatchEvidenceController {
         const { evidence, created } = await this.service.register(id, driverId, dto, file);
         response.status(created ? 201 : 200);
         return evidence;
+    }
+
+    @Post(':id/otp/validate')
+    @HttpCode(200)
+    @DriverOnly()
+    @ApiIdParam('Dispatch')
+    @ApiOperation({
+        summary:     'Validate the delivery OTP and register its evidence',
+        description: 'The driver types the code the customer received by SMS (online only; there is no offline path). Only for an in-transit `high_value_control` dispatch on the driver\'s route. A correct code is consumed (one use) and an `otp` evidence is registered without the code. A wrong code answers 422 and counts as an attempt; the third consecutive failure locks the dispatch and answers 423: only an incident (ES-32) lets Dispatch authorize the delivery. 409 `OTP_EXPIRED`, `OTP_REPLACED` or `OTP_CONSUMED` tell the app to request a resend, use the newest code or stop. Registering the evidence does not deliver the dispatch: the status change is a separate call. Requires driver role.',
+    })
+    @ApiOkResponse({ type: DeliveryEvidenceDto, description: 'The code was correct: the `otp` evidence was registered.' })
+    @ApiBadRequests({ validation: true, id: true, example: ['code must be 4 to 10 digits'] })
+    @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+    @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'Dispatch is not assigned to your route.' })
+    @ApiNotFound({ code: 'DISPATCH_NOT_FOUND', message: 'Dispatch not found.' })
+    @ApiConflict(
+        { code: 'OTP_NOT_APPLICABLE', message: 'OTP requires an in-transit high-value dispatch.' },
+        { code: 'OTP_EXPIRED', message: 'The code expired or was never sent. Request a resend.' },
+        { code: 'OTP_REPLACED', message: 'A newer code was sent. Ask the customer for the latest one.' },
+        { code: 'OTP_CONSUMED', message: 'The code was already used.' },
+    )
+    @ApiUnprocessableEntity({ code: 'OTP_INVALID', message: 'The code is incorrect.' })
+    @ApiResponse({
+        status:      423,
+        description: 'Three consecutive wrong codes: new attempts are blocked and an incident (ES-32) is required.',
+        schema:      { type: 'object', properties: { statusCode: { type: 'integer', example: 423 }, error: { type: 'string', example: 'OTP_LOCKED' }, message: { type: 'string', example: 'Too many failed attempts. Report an incident (ES-32) so Dispatch can authorize the delivery.' }, path: { type: 'string', example: '/api/dispatches/42/otp/validate' }, timestamp: { type: 'string', format: 'date-time', example: '2026-10-18T14:05:00.000Z' } } },
+    })
+    @ApiResponse({ status: 503, description: 'OTP_UNAVAILABLE: the code store (Redis) is down, try again.' })
+    async validateOtp(
+        @Param('id', ParseIdPipe) id: number,
+        @CurrentUser('id') driverId: number,
+        @Body() dto: ValidateOtpDto,
+    ): Promise<DeliveryEvidenceDto> {
+        return await this.service.validateOtp(id, driverId, dto.code);
     }
 }

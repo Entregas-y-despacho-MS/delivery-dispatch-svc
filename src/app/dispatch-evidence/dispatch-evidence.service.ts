@@ -1,11 +1,13 @@
 /// <reference types="multer" />
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { v7 as uuidv7 } from 'uuid';
 import { DeliveryEvidence } from '../../modules/dispatch/delivery-evidences/entities/delivery-evidence.entity.js';
 import { DeliveryEvidencesService } from '../../modules/dispatch/delivery-evidences/services/delivery-evidences.service.js';
 import { DispatchNotFoundException } from '../../modules/dispatch/dispatches/exceptions/dispatch-not-found.exception.js';
 import { DispatchesService } from '../../modules/dispatch/dispatches/services/dispatches.service.js';
 import { StoragePort } from '../../plugins/storage/storage.port.js';
 import { isUniqueViolation } from '../../shared/orm/unique-violation.js';
+import { DispatchOtpService } from '../dispatch-otp/dispatch-otp.service.js';
 import { assertEvidenceFile } from './domain/evidence-file.js';
 import { DeliveryEvidenceDto } from './dto/delivery-evidence.dto.js';
 import { RegisterEvidenceDto } from './dto/register-evidence.dto.js';
@@ -24,11 +26,30 @@ export interface RegisteredEvidence {
 // `delivered`: that happens only through the status endpoint (ST-30.3), which checks this evidence.
 @Injectable()
 export class DispatchEvidenceService {
+    private readonly logger = new Logger(DispatchEvidenceService.name);
+
     constructor(
         private readonly evidences: DeliveryEvidencesService,
         private readonly dispatches: DispatchesService,
         private readonly storage: StoragePort,
+        private readonly otp: DispatchOtpService,
     ) {}
+
+    /**
+     * Checks the delivery OTP and, only when it is correct, registers an `otp` evidence. The code is consumed by the
+     * check (one use) and is never stored: the evidence is a row without file, coordinates or code.
+     */
+    async validateOtp(dispatchId: number, driverId: number, code: string): Promise<DeliveryEvidenceDto> {
+        await this.otp.validate(dispatchId, driverId, code);
+        try {
+            const saved = await this.evidences.create({ id: uuidv7(), dispatchId, type: 'otp', capturedAt: new Date() });
+            return this.toDto(saved);
+        } catch (err) {
+            // The code is already spent: leave a trace, since Dispatch must authorize this delivery by hand.
+            this.logger.error({ event: 'otp_verified_evidence_not_saved', dispatchId });
+            throw err;
+        }
+    }
 
     async register(dispatchId: number, driverId: number, dto: RegisterEvidenceDto, file: Express.Multer.File | undefined): Promise<RegisteredEvidence> {
         if (!(await this.dispatches.existsById(dispatchId))) throw new DispatchNotFoundException();

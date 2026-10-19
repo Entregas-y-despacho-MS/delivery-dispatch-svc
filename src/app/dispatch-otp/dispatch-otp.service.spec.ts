@@ -93,3 +93,34 @@ describe('delivery OTP lifecycle', () => {
         expect(x.store.invalidate).toHaveBeenCalledTimes(1);
     });
 });
+
+describe('delivery OTP validation for the driver (ST-31.3)', () => {
+    it('returns when the code is correct', async () => {
+        const x = setup();
+        x.store.readHash.mockResolvedValue('hash');
+        x.store.verify.mockResolvedValue('verified');
+        await expect(x.service.validate(12, 7, '123456')).resolves.toBeUndefined();
+    });
+    it.each([
+        ['invalid', 422, 'OTP_INVALID'],
+        ['locked', 423, 'OTP_LOCKED'],
+        ['expired', 409, 'OTP_EXPIRED'],
+        ['replaced', 409, 'OTP_REPLACED'],
+        ['consumed', 409, 'OTP_CONSUMED'],
+    ])('maps the %s verdict to %i %s', async (verdict, status, code) => {
+        const x = setup();
+        x.store.readHash.mockResolvedValue(null);
+        x.store.verify.mockResolvedValue(verdict);
+        await expect(x.service.validate(12, 7, '123456')).rejects.toMatchObject({ status, response: { error: code } });
+    });
+    it('does not touch the code when the dispatch is not the driver\'s', async () => {
+        const x = setup();
+        await expect(x.service.validate(12, 99, '123456')).rejects.toMatchObject({ status: 403 });
+        expect(x.store.verify).not.toHaveBeenCalled();
+    });
+    it.each([{ status: 'delivered' }, { evidence_policy: 'hand_delivery_standard' }])('does not check a code outside applicability %j', async (override) => {
+        const x = setup(override);
+        await expect(x.service.validate(12, 7, '123456')).rejects.toMatchObject({ status: 409, response: { error: 'OTP_NOT_APPLICABLE' } });
+        expect(x.store.verify).not.toHaveBeenCalled();
+    });
+});

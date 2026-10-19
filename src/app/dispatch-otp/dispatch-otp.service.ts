@@ -17,6 +17,16 @@ interface DispatchContact {
     driver_id: number | null;
 }
 
+// What the driver's app is told for each way a code can fail. The third wrong code answers `locked`,
+// like every attempt after it: only an incident (ES-32) lets Dispatch authorize that delivery.
+const VERIFY_FAILURES: Record<string, { code: string; message: string; status: number }> = {
+    invalid:  { code: 'OTP_INVALID',  message: 'The code is incorrect.', status: 422 },
+    locked:   { code: 'OTP_LOCKED',   message: 'Too many failed attempts. Report an incident (ES-32) so Dispatch can authorize the delivery.', status: 423 },
+    expired:  { code: 'OTP_EXPIRED',  message: 'The code expired or was never sent. Request a resend.', status: 409 },
+    replaced: { code: 'OTP_REPLACED', message: 'A newer code was sent. Ask the customer for the latest one.', status: 409 },
+    consumed: { code: 'OTP_CONSUMED', message: 'The code was already used.', status: 409 },
+};
+
 @Injectable()
 export class DispatchOtpService {
     private readonly logger = new Logger(DispatchOtpService.name);
@@ -50,7 +60,24 @@ export class DispatchOtpService {
         return result;
     }
 
-    /** Integration seam for ST-31.3; no delivery-evidence or public verification endpoint is added here. */
+    /**
+     * Checks the code the customer gave the assigned driver (ST-31.3). Returns only when it is correct, and by then it is
+     * already consumed (one use); every other verdict is an error the driver's app can tell apart. It registers nothing.
+     */
+    async validate(dispatchId: number, driverId: number, code: string): Promise<void> {
+        const row = await this.contact(dispatchId);
+        if (!row) throw new DispatchNotFoundException();
+        if (row.driver_id !== driverId) throw new DispatchOtpException('INSUFFICIENT_PERMISSIONS', 'Dispatch is not assigned to your route.', 403);
+        if (row.status !== 'in_transit' || row.evidence_policy !== 'high_value_control') {
+            throw new DispatchOtpException('OTP_NOT_APPLICABLE', 'OTP requires an in-transit high-value dispatch.');
+        }
+        const verdict = await this.verify(dispatchId, code);
+        if (verdict === 'verified') return;
+        const failure = VERIFY_FAILURES[verdict] ?? VERIFY_FAILURES.invalid;
+        throw new DispatchOtpException(failure.code, failure.message, failure.status);
+    }
+
+    /** The raw verdict of the atomic Redis check. Prefer `validate`, which also checks the driver and the dispatch. */
     async verify(dispatchId: number, code: string): Promise<string> {
         try {
             const hash = await this.store.readHash(dispatchId);
