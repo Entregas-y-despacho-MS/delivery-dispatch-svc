@@ -78,13 +78,19 @@ export class SyncService {
                 fileUrl = uploaded.url;
             }
 
-            await this.deliveryEvidencesService.create({
+            const evidence = await this.deliveryEvidencesService.create({
                 id:         dto.clientEventId,
                 dispatchId: dto.dispatchId,
                 type:       dto.type,
                 fileUrl,
                 // OTP evidence is accepted only by the server validation flow.
                 otpCode:    null,
+            });
+            this.events.emit('dispatch.evidence_registered', {
+                dispatchId: dto.dispatchId,
+                evidenceId: evidence.id,
+                type: evidence.type,
+                registeredAt: evidence.createdAt.toISOString(),
             });
             return { clientEventId: dto.clientEventId, outcome: SyncEventOutcome.APPLIED };
         } catch (err) {
@@ -103,6 +109,7 @@ export class SyncService {
 
     private async processOne(event: SyncEventDto, driverId: number): Promise<SyncEventOutcome> {
         let statusChangedEvent: DispatchStatusChangedEvent | undefined;
+        let incidentReportedEvent: { dispatchId: number; incidentId: string; reasonCode: string; reportedAt: string } | undefined;
         const outcome = await this.dataSource.transaction(async (manager) => {
             const options = { manager };
 
@@ -159,7 +166,7 @@ export class SyncService {
                         ...(outboundRecordVersion !== null && { outboundRecordVersion }),
                     },
                 }, options);
-                if (current !== target && target === 'in_transit') {
+                if (current !== target) {
                     const [updated]: { version: number; updated_at: Date | string }[] = await manager.query(
                         'SELECT version, updated_at FROM dispatches WHERE dispatch_id = $1', [event.dispatchId],
                     );
@@ -214,6 +221,12 @@ export class SyncService {
                 description:      event.detail ?? null,
                 occurredAt:       new Date(event.occurredAt),
             }, options);
+            incidentReportedEvent = {
+                dispatchId: event.dispatchId,
+                incidentId: event.clientEventId,
+                reasonCode: reason.code,
+                reportedAt: new Date().toISOString(),
+            };
             await this.dispatchEventsService.create({
                 dispatchId: event.dispatchId,
                 eventType: 'status_changed',
@@ -229,10 +242,23 @@ export class SyncService {
                     ...(outboundRecordVersion !== null && { outboundRecordVersion }),
                 },
             }, options);
+            if (current !== 'incident') {
+                const [updated]: { version: number; updated_at: Date | string }[] = await manager.query(
+                    'SELECT version, updated_at FROM dispatches WHERE dispatch_id = $1', [event.dispatchId],
+                );
+                statusChangedEvent = {
+                    dispatchId: event.dispatchId,
+                    status: 'incident',
+                    previousStatus: current,
+                    version: updated.version,
+                    updatedAt: new Date(updated.updated_at).toISOString(),
+                };
+            }
             return SyncEventOutcome.APPLIED;
         });
         // Emit only after the transaction commits so OTP never observes a rolled-back transition.
         if (statusChangedEvent) this.events.emit(DISPATCH_STATUS_CHANGED_EVENT, statusChangedEvent);
+        if (incidentReportedEvent) this.events.emit('dispatch.incident_reported', incidentReportedEvent);
         return outcome;
     }
 

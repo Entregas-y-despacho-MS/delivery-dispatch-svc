@@ -378,13 +378,24 @@ describe('SyncService.syncEvidence', () => {
     const dto = (over: object = {}) => ({ clientEventId: ID1, dispatchId: 42, type: 'photo', ...over }) as any;
 
     it('a photo with its file is stored and recorded', async () => {
-        const { service, storage, evidences } = build();
+        const { service, storage, evidences, emitter } = build();
+        evidences.create.mockResolvedValue({
+            id: ID1,
+            type: 'photo',
+            createdAt: new Date('2026-10-19T12:00:00.000Z'),
+        });
 
         const result = await service.syncEvidence(dto(), png, DRIVER);
 
         expect(result.outcome).toBe('applied');
         expect(storage.upload).toHaveBeenCalledWith({ buffer: png.buffer, filename: 'a.png', mimeType: 'image/png' });
         expect(evidences.create).toHaveBeenCalledWith(expect.objectContaining({ id: ID1, dispatchId: 42, type: 'photo', fileUrl: 'http://x/uploads/a.png' }));
+        expect(emitter.emit).toHaveBeenCalledWith('dispatch.evidence_registered', {
+            dispatchId: 42,
+            evidenceId: ID1,
+            type: 'photo',
+            registeredAt: '2026-10-19T12:00:00.000Z',
+        });
     });
 
     it('a photo or signature without a file is failed (there is nothing to record)', async () => {
