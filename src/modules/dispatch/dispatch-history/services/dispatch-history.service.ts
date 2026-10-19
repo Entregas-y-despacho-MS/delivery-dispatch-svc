@@ -74,9 +74,13 @@ export class DispatchHistoryService {
     }
 
     /**
-     * Reads the history through a Postgres cursor, `EXPORT_BATCH_SIZE` rows at a time, inside one read-only
-     * transaction (so the file is a consistent snapshot) on its own connection. The `finally` runs also when the
-     * client leaves halfway: Node closes the stream, the generator is returned and the connection goes back to the pool.
+     * Reads the history through a Postgres cursor, `EXPORT_BATCH_SIZE` rows at a time, on its own connection and inside
+     * one `REPEATABLE READ`, `READ ONLY` transaction. Under the default `READ COMMITTED` the cursor keeps the snapshot of
+     * its own query, but every later query (the departures of each batch) takes a new one: a dispatch that changed
+     * halfway would come out with a row from the old state and a departure from the new one. `REPEATABLE READ` takes the
+     * snapshot once, at the first query (the `DECLARE`), and the cursor and every departure lookup read from it, so the
+     * file is the history as it was at that moment. The `finally` runs also when the client leaves halfway: Node closes
+     * the stream, the generator is returned and the connection goes back to the pool.
      */
     private async *generateCsv(whereSql: string, orderSql: string, args: unknown[]): AsyncGenerator<string> {
         // The header leaves together with the first batch: if the database fails before that, nothing was sent yet
@@ -86,7 +90,9 @@ export class DispatchHistoryService {
         const runner = this.dataSource.createQueryRunner();
         await runner.connect();
         try {
-            await runner.startTransaction();
+            await runner.startTransaction('REPEATABLE READ');
+            // Allowed here because nothing has run in the transaction yet; it also makes any accidental write fail.
+            await runner.query('SET TRANSACTION READ ONLY');
             await runner.query(
                 `DECLARE dispatch_history_export NO SCROLL CURSOR FOR ${ROW_SELECT_SQL} ${HISTORY_FROM_SQL} ${whereSql} ${orderSql}`,
                 args,

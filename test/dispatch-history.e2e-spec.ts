@@ -12,6 +12,8 @@ import { AppModule } from '../src/app.module.js';
 import { AppConfig } from '../src/config/services/app.config.js';
 import { HttpExceptionFilter } from '../src/shared/filters/index.js';
 import { hashPassword } from '../src/shared/utils/crypto.util.js';
+import { DispatchHistoryService } from '../src/modules/dispatch/dispatch-history/services/dispatch-history.service.js';
+import { ExportDispatchHistoryParamsDto } from '../src/modules/dispatch/dispatch-history/dto/find-dispatch-history-params.dto.js';
 import { withEventPurge } from './helpers/purge-append-only-events.js';
 
 describe('GET /dispatches/history (e2e, ST-55.2)', () => {
@@ -428,6 +430,45 @@ describe('GET /dispatches/history (e2e, ST-55.2)', () => {
             expect(codes[0]).toBe(`${code}BULK${String(total).padStart(5, '0')}`); // most recent first
             expect(codes.at(-1)).toBe(`${code}BULK00001`);
             expect((await history({ search: `${code}BULK`, limit: 1 })).body.total).toBe(total);
+        });
+
+        // The cursor keeps the snapshot of its own query, but each batch looks up its departures with a new query: under
+        // READ COMMITTED a departure committed halfway shows up in the rows that are still to come, next to a row that
+        // was read before. REPEATABLE READ gives the whole file one snapshot. The stream is read straight from the
+        // service so the test controls the moment between the first batch and the rest (a socket would buffer it all).
+        it('es una sola instantánea: una salida registrada mientras se exporta no aparece en las filas que faltan', async () => {
+            const total = 3100; // seven batches of 500
+            const [{ route_batch_id }] = await db.query(`SELECT route_batch_id FROM route_batches WHERE route_batch_id = ANY($1::int[]) ORDER BY route_batch_id LIMIT 1`, [batchIds]);
+            await db.query(
+                `INSERT INTO dispatches (dispatch_type_id, dispatch_status_id, route_batch_id, source_order_ref, tracking_code, delivery_address, contact_name, closed_at)
+                 SELECT $1, $2, $3, 'DH-' || $4 || '-SNAP' || g, $5 || 'SNAP' || lpad(g::text, 5, '0'), 'Av. e2e', 'Cliente snap', '2042-01-01T12:00:00Z'::timestamptz + g * interval '1 minute'
+                   FROM generate_series(1, $6::int) g`,
+                [deliveryTypeId, statusIds['delivered'], route_batch_id, run, code, total],
+            );
+            // The oldest one comes last in the default order (most recent first): it is in the seventh batch.
+            const [{ dispatch_id: lastId }] = await db.query(`SELECT dispatch_id FROM dispatches WHERE tracking_code = $1`, [`${code}SNAP00001`]);
+            const departure = (departedAt: string) => db.query(
+                `INSERT INTO dispatch_events (dispatch_id, event_type, actor_type, metadata, created_at)
+                 VALUES ($1, 'status_changed', 'system', $2::jsonb, $3::timestamptz)`,
+                [lastId, JSON.stringify({ status: 'out_for_delivery', departedAt }), departedAt],
+            );
+            await departure('2042-01-01T10:00:00.000Z');
+
+            const stream = app.get(DispatchHistoryService, { strict: false }).exportCsv(Object.assign(new ExportDispatchHistoryParamsDto(), { search: `${code}SNAP` }));
+            const batches = stream[Symbol.asyncIterator]();
+            let csv = String((await batches.next()).value); // the first batch is read; the last one is not yet
+            await departure('2042-01-02T10:00:00.000Z'); // another route start commits meanwhile
+            for (let chunk = await batches.next(); !chunk.done; chunk = await batches.next()) csv += String(chunk.value);
+
+            const rows = csv.split('\r\n').filter(Boolean);
+            const row = rows.find((line) => line.startsWith(`${code}SNAP00001,`))!;
+            expect(rows).toHaveLength(1 + total);
+            expect(row).toContain('2042-01-01 06:00:00'); // the departure of the snapshot (10:00Z = 06:00 in La Paz)
+            expect(row).not.toContain('2042-01-02');
+
+            // A new export is a new snapshot and does see it.
+            const fresh = await exportCsv({ search: `${code}SNAP00001` });
+            expect(lines(fresh)[1]).toContain('2042-01-02 06:00:00');
         });
     });
 
