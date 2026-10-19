@@ -34,6 +34,11 @@ export class DeliveryEvidencesService {
         return repo.existsBy({ id });
     }
 
+    async findById(id: string, options?: MutationOptions): Promise<DeliveryEvidence | null> {
+        const repo = options?.manager?.getRepository(DeliveryEvidence) ?? this.rawRepo;
+        return repo.findOneBy({ id });
+    }
+
     async existsByDispatchAndType(dispatchId: number, type: string, options?: MutationOptions): Promise<boolean> {
         const repo = options?.manager?.getRepository(DeliveryEvidence) ?? this.rawRepo;
         return repo.existsBy({ dispatchId, type });

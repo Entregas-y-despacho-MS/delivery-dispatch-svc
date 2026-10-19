@@ -46,6 +46,7 @@ import { RouteCutoffModule } from './app/route-cutoff/route-cutoff.module.js';
 import { PublicTrackingModule } from './app/public-tracking/public-tracking.module.js';
 import { DispatchStatusModule } from './app/dispatch-status/dispatch-status.module.js';
 import { DispatchOtpModule } from './app/dispatch-otp/dispatch-otp.module.js';
+import { DispatchEvidenceModule } from './app/dispatch-evidence/dispatch-evidence.module.js';
 import { AuditLogsModule } from './modules/audit/audit-logs/audit-logs.module.js';
 
 @Module({
@@ -71,6 +72,7 @@ import { AuditLogsModule } from './modules/audit/audit-logs/audit-logs.module.js
     RouteCutoffModule,
     DispatchStatusModule,
     DispatchOtpModule,
+    DispatchEvidenceModule,
     AuditLogsModule,
     RouteBatchCorrectionModule,
     FinalReviewModule,
