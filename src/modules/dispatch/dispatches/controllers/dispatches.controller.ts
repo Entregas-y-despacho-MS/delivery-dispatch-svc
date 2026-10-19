@@ -14,6 +14,9 @@ import { CurrentUser } from '../../../../shared/decorators/current-user.decorato
 import { ParseIdPipe } from '../../../../shared/pipes/index.js';
 import { RoleEnum } from '../../../../shared/enums/index.js';
 import { ApiBadRequests, ApiConflict, ApiForbidden, ApiIdParam, ApiNotFound, ApiUnauthorized } from '../../../../shared/utils/swagger/index.js';
+import { FindKanbanParamsDto } from '../dto/find-kanban-params.dto.js';
+import { DispatchKanbanResponseDto } from '../dto/dispatch-kanban.dto.js';
+import { DispatchKanbanService } from '../services/dispatch-kanban.service.js';
 
 /**
  * RF-U02 — "Mi Jornada": the stops the driver has to visit today, in the order Dispatch decided.
@@ -31,7 +34,22 @@ export class DispatchesController {
         private readonly dispatchesService: DispatchesService,
         private readonly priorityService: DispatchPriorityService,
         private readonly detailService: DispatchDetailService,
+        private readonly kanbanService: DispatchKanbanService,
     ) {}
+
+    @Get('kanban')
+    @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
+    @ApiOperation({
+        summary: 'List dispatches grouped for the coordinator kanban board',
+        description: 'Returns non-cancelled dispatches grouped into the operational kanban columns for the requested day, with order, logistics, retry, reservation and volume data for each card. Filters can narrow the board by delivery zone, driver or dispatch type. The date defaults to today in America/La_Paz. Only coordinators and supervisors may access this board (or root).',
+    })
+    @ApiOkResponse({ type: DispatchKanbanResponseDto })
+    @ApiBadRequests({ validation: true, example: ['date must be a valid date in YYYY-MM-DD format.'] })
+    @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+    @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
+    async findKanban(@Query() params: FindKanbanParamsDto, @CurrentUser('id') viewerId: number): Promise<DispatchKanbanResponseDto> {
+        return await this.kanbanService.findAll(params, viewerId);
+    }
 
     @Get('my-assignments')
     @DriverOnly()
