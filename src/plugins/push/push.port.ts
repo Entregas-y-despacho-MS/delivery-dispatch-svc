@@ -1,5 +1,5 @@
 export interface PushMessage {
-    to:     string; // Expo push token, registered by the mobile app on login
+    to:     string; // Token format depends on the selected provider.
     title:  string;
     body:   string;
     data?:  Record<string, unknown>;
