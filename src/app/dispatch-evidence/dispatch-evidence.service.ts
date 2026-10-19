@@ -1,6 +1,8 @@
 /// <reference types="multer" />
 import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { InjectDataSource } from '@nestjs/typeorm';
+import { DataSource, EntityManager } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 import { DeliveryEvidence } from '../../modules/dispatch/delivery-evidences/entities/delivery-evidence.entity.js';
 import { DeliveryEvidencesService } from '../../modules/dispatch/delivery-evidences/services/delivery-evidences.service.js';
@@ -9,6 +11,7 @@ import { DispatchesService } from '../../modules/dispatch/dispatches/services/di
 import { StoragePort } from '../../plugins/storage/storage.port.js';
 import { DispatchStatusEnum } from '../../shared/enums/dispatch-status.enum.js';
 import { isUniqueViolation } from '../../shared/orm/unique-violation.js';
+import { DispatchOtpException, OTP_CONSUMED_MESSAGE } from '../dispatch-otp/exceptions/dispatch-otp.exception.js';
 import { DispatchOtpService } from '../dispatch-otp/dispatch-otp.service.js';
 import { DISPATCH_EVIDENCE_REGISTERED_EVENT, type DispatchEvidenceRegisteredEvent } from './dispatch-evidence-registered.event.js';
 import { assertEvidenceFile } from './domain/evidence-file.js';
@@ -37,20 +40,35 @@ export class DispatchEvidenceService {
         private readonly storage: StoragePort,
         private readonly otp: DispatchOtpService,
         private readonly events: EventEmitter2,
+        @InjectDataSource() private readonly dataSource: DataSource,
     ) {}
 
     /**
      * Checks the delivery OTP and, only when it is correct, registers an `otp` evidence. The code is consumed by the
      * check (one use) and is never stored: the evidence is a row without file, coordinates or code.
+     *
+     * Consuming the code (Redis) and saving the evidence (PostgreSQL) cannot be one transaction, so the id the evidence
+     * will have is recorded with the consumption. If the save fails, the code stays spent but the driver sends it again:
+     * the check finds the recorded id, sees there is no row yet and finishes the registration (a true second use finds
+     * the row and is refused). A dispatch-level lock makes simultaneous requests wait for the one that is saving, so none
+     * of them mistakes work in progress for work that failed. If the save keeps failing, Dispatch sees an
+     * `otp_resolution_required` marker.
      */
     async validateOtp(dispatchId: number, driverId: number, code: string): Promise<DeliveryEvidenceDto> {
-        await this.otp.validate(dispatchId, driverId, code);
+        let owesEvidence = false;
         let saved: DeliveryEvidence;
         try {
-            saved = await this.evidences.create({ id: uuidv7(), dispatchId, type: 'otp', capturedAt: new Date() });
+            saved = await this.dataSource.transaction(async (manager) => {
+                await this.lock(manager, `dispatch-otp-evidence:${dispatchId}`);
+                const validation = await this.otp.validate(dispatchId, driverId, code, uuidv7(), manager);
+                if (await this.evidences.findById(validation.evidenceId, { manager })) {
+                    throw new DispatchOtpException('OTP_CONSUMED', OTP_CONSUMED_MESSAGE, 409);
+                }
+                owesEvidence = true;
+                return await this.evidences.create({ id: validation.evidenceId, dispatchId, type: 'otp', capturedAt: new Date() }, { manager });
+            });
         } catch (err) {
-            // The code is already spent: leave a trace, since Dispatch must authorize this delivery by hand.
-            this.logger.error({ event: 'otp_verified_evidence_not_saved', dispatchId });
+            if (owesEvidence) await this.reportUnsavedOtpEvidence(dispatchId);
             throw err;
         }
         this.publish(saved);
@@ -72,31 +90,54 @@ export class DispatchEvidenceService {
         const capturedAt = new Date(dto.capturedAt);
         if (capturedAt.getTime() > Date.now() + MAX_FUTURE_MS) throw new InvalidCaptureTimeException();
         const validFile = assertEvidenceFile(dto.type, file);
-
-        const { url } = await this.storage.upload({ buffer: validFile.buffer, filename: `${dto.evidenceId}`, mimeType: validFile.mimetype });
         const isSignature = dto.type === 'signature';
-        let saved: DeliveryEvidence;
+
+        let outcome: { original: DeliveryEvidence } | { saved: DeliveryEvidence };
         try {
-            saved = await this.evidences.create({
-                id:               dto.evidenceId,
-                dispatchId,
-                type:             dto.type,
-                fileUrl:          url,
-                capturedAt,
-                latitude:         dto.lat,
-                longitude:        dto.lng,
-                receiverName:     isSignature ? dto.receiverName : null,
-                receiverDocument: isSignature ? dto.receiverDocument : null,
+            outcome = await this.dataSource.transaction(async (manager) => {
+                // Requests with the same evidenceId go through here one at a time: the second one finds the first one's row
+                // and neither uploads another file nor touches the row. The insert below never updates an existing row either.
+                await this.lock(manager, `dispatch-evidence:${dto.evidenceId}`);
+                const original = await this.evidences.findById(dto.evidenceId, { manager });
+                if (original) return { original };
+                const { url } = await this.storage.upload({ buffer: validFile.buffer, filename: dto.evidenceId, mimeType: validFile.mimetype });
+                const saved = await this.evidences.create({
+                    id:               dto.evidenceId,
+                    dispatchId,
+                    type:             dto.type,
+                    fileUrl:          url,
+                    capturedAt,
+                    latitude:         dto.lat,
+                    longitude:        dto.lng,
+                    receiverName:     isSignature ? dto.receiverName : null,
+                    receiverDocument: isSignature ? dto.receiverDocument : null,
+                }, { manager });
+                return { saved };
             });
         } catch (err) {
-            // Two requests with the same evidenceId at once: the primary key lets one in, the other gets the original.
+            // Another writer that does not take the lock (the legacy sync) got the same id in first: answer with its row.
             if (!isUniqueViolation(err)) throw err;
             const original = await this.evidences.findById(dto.evidenceId);
             if (!original) throw err;
             return this.replay(original, dispatchId);
         }
-        this.publish(saved);
-        return { evidence: this.toDto(saved), created: true };
+        if ('original' in outcome) return this.replay(outcome.original, dispatchId);
+        this.publish(outcome.saved);
+        return { evidence: this.toDto(outcome.saved), created: true };
+    }
+
+    /** Transaction-scoped advisory lock: waits for whoever holds the same key and is released on commit or rollback. */
+    private async lock(manager: EntityManager, key: string): Promise<void> {
+        await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key]);
+    }
+
+    private async reportUnsavedOtpEvidence(dispatchId: number): Promise<void> {
+        this.logger.error({ event: 'otp_verified_evidence_not_saved', dispatchId });
+        try {
+            await this.otp.markEvidenceNotSaved(dispatchId);
+        } catch (err) {
+            this.logger.error({ event: 'otp_resolution_marker_not_saved', dispatchId, message: (err as Error).message });
+        }
     }
 
     /**

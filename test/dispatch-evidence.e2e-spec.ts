@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -13,6 +13,7 @@ import { HttpExceptionFilter } from '../src/shared/filters/index.js';
 import { SmsSender, type SmsMessage } from '../src/plugins/sms/sms.port.js';
 import { StoragePort } from '../src/plugins/storage/storage.port.js';
 import { DispatchOtpService } from '../src/app/dispatch-otp/dispatch-otp.service.js';
+import { DeliveryEvidencesService } from '../src/modules/dispatch/delivery-evidences/services/delivery-evidences.service.js';
 import { DISPATCH_EVIDENCE_REGISTERED_EVENT } from '../src/app/dispatch-evidence/dispatch-evidence-registered.event.js';
 import { withEventPurge } from './helpers/purge-append-only-events.js';
 
@@ -28,6 +29,9 @@ describe('delivery evidence: signature, photo and OTP over HTTP + PostgreSQL (ST
     let db: DataSource;
     let redis: RedisClientType | undefined;
     let otp: DispatchOtpService;
+    let evidencesService: DeliveryEvidencesService;
+    // While set, every upload waits for it: lets a test hold one request inside the storage while others arrive.
+    let hold: Promise<void> | null = null;
     let prefix: string;
     const run = Date.now().toString(36);
     const sourcePrefix = `ST313-${run}`;
@@ -81,7 +85,7 @@ describe('delivery evidence: signature, photo and OTP over HTTP + PostgreSQL (ST
             .overrideProvider(SmsSender).useValue({ send: async (message: SmsMessage) => { messages.push(message); } })
             // Never write test files to the real storage (local disk or Cloudinary).
             .overrideProvider(StoragePort).useValue({
-                upload: async ({ filename }: { filename: string }) => { uploads.push(filename); return { url: `https://files.test/${filename}` }; },
+                upload: async ({ filename }: { filename: string }) => { if (hold) await hold; uploads.push(filename); return { url: `https://files.test/${filename}` }; },
                 getAccessUrl: async (url: string) => ({ url, expiresAt: new Date() }),
             })
             .compile();
@@ -93,6 +97,7 @@ describe('delivery evidence: signature, photo and OTP over HTTP + PostgreSQL (ST
         await app.init();
         db = moduleRef.get(DataSource);
         otp = moduleRef.get(DispatchOtpService);
+        evidencesService = moduleRef.get(DeliveryEvidencesService);
         app.get(EventEmitter2).on(DISPATCH_EVIDENCE_REGISTERED_EVENT, (event: Record<string, unknown>) => { announced.push(event); });
         const passwordHash = await hashPassword('E2eTest1234');
         for (const [name, role] of [['driver', 'driver'], ['foreign', 'driver'], ['coordinator', 'coordinator']]) {
@@ -107,6 +112,8 @@ describe('delivery evidence: signature, photo and OTP over HTTP + PostgreSQL (ST
         for (const row of await db.query('SELECT name, dispatch_status_id FROM dispatch_statuses')) statuses[row.name] = row.dispatch_status_id;
         [{ dispatch_type_id: deliveryTypeId }] = await db.query(`SELECT dispatch_type_id FROM dispatch_types WHERE name='delivery'`);
     }, 30000);
+
+    afterEach(() => { vi.restoreAllMocks(); hold = null; });
 
     afterAll(async () => {
         if (db?.isInitialized) await withEventPurge(db, { dispatchRefs: [`${sourcePrefix}%`], routeBatchIds: batchIds, userNames: [`e2e_st313_%_${run}`] }, async (manager) => {
@@ -243,6 +250,63 @@ describe('delivery evidence: signature, photo and OTP over HTTP + PostgreSQL (ST
         expect((await upload(other, values, signature)).status).toBe(409);
     });
 
+    /** Starts the request now (supertest sends on .then) and resolves with the response. */
+    const send = (id: number, values: Record<string, string>, file = signature) => upload(id, values, file).then((response) => response);
+    async function holdUploads(): Promise<() => void> {
+        let release!: () => void;
+        hold = new Promise<void>((resolve) => { release = resolve; });
+        return () => { hold = null; release(); };
+    }
+
+    it('keeps the first record when two dispatches race for one evidenceId, and uploads only once', async () => {
+        const a = await dispatch();
+        const b = await dispatch();
+        const values = fields('signature');
+        const stored = uploads.length;
+        const release = await holdUploads();
+        const first = send(a, values);
+        const second = send(b, { ...values, receiverName: 'Intruder Name' });
+        await new Promise((resolve) => setTimeout(resolve, 400)); // one is inside the storage, the other waits for the lock
+        release();
+        const responses = await Promise.all([first, second]);
+        expect(responses.map((r) => r.status).sort()).toEqual([201, 409]);
+        const winner = responses.find((r) => r.status === 201)!;
+        const rowsOfBoth = [...(await rows(a)), ...(await rows(b))];
+        expect(rowsOfBoth).toHaveLength(1);
+        expect(rowsOfBoth[0]).toMatchObject({ delivery_evidence_id: values.evidenceId, dispatch_id: winner.body.dispatchId, receiver_name: winner.body.receiverName });
+        expect(uploads.length).toBe(stored + 1);
+        expect(announced.filter((event) => event.evidenceId === values.evidenceId)).toHaveLength(1);
+    });
+
+    it('answers the same dispatch\'s racing retry with the original record, even with different metadata', async () => {
+        const id = await dispatch();
+        const values = fields('signature');
+        const stored = uploads.length;
+        const release = await holdUploads();
+        const first = send(id, values);
+        const second = send(id, { ...values, receiverName: 'Another Name', receiverDocument: '999' });
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        release();
+        const responses = await Promise.all([first, second]);
+        expect(responses.map((r) => r.status).sort()).toEqual([200, 201]);
+        const created = responses.find((r) => r.status === 201)!;
+        expect(responses.find((r) => r.status === 200)!.body).toEqual(created.body);
+        const [row] = await rows(id);
+        expect(row).toMatchObject({ receiver_name: created.body.receiverName, receiver_document: created.body.receiverDocument });
+        expect(await rows(id)).toHaveLength(1);
+        expect(uploads.length).toBe(stored + 1);
+    });
+
+    it('never overwrites a stored evidence: a second insert with the same id fails and leaves the row as it was', async () => {
+        const a = await dispatch();
+        const b = await dispatch();
+        const id = uuidv7();
+        await evidencesService.create({ id, dispatchId: a, type: 'photo', fileUrl: 'https://files.test/first.jpg', capturedAt: new Date() });
+        await expect(evidencesService.create({ id, dispatchId: b, type: 'signature', fileUrl: 'https://files.test/second.png', receiverName: 'Intruder' })).rejects.toMatchObject({ driverError: { code: '23505' } });
+        const [row] = await db.query('SELECT * FROM delivery_evidences WHERE delivery_evidence_id=$1', [id]);
+        expect(row).toMatchObject({ dispatch_id: a, type: 'photo', file_url: 'https://files.test/first.jpg', receiver_name: null });
+    });
+
     it('accepts concurrent retries of one evidenceId and keeps a single row', async () => {
         const id = await dispatch();
         const values = fields('photo');
@@ -284,6 +348,46 @@ describe('delivery evidence: signature, photo and OTP over HTTP + PostgreSQL (ST
         it('lets only one of two simultaneous validations of the right code through', async () => {
             const id = await dispatch('in_transit', 'high_value_control');
             const code = await issuedCode(id);
+            const results = await Promise.all([validate(id, code), validate(id, code), validate(id, code)]);
+            expect(results.filter((r) => r.status === 200)).toHaveLength(1);
+            expect(results.filter((r) => r.status === 409).every((r) => r.body.error === 'OTP_CONSUMED')).toBe(true);
+            expect(await rows(id)).toHaveLength(1);
+        });
+
+        it('finishes the registration, without a second code, when the evidence could not be saved the first time', async () => {
+            const id = await dispatch('in_transit', 'high_value_control');
+            const code = await issuedCode(id);
+            vi.spyOn(evidencesService, 'create').mockRejectedValueOnce(new Error('db blip'));
+            const failed = await validate(id, code);
+            expect(failed.status).toBe(500);
+            expect(await rows(id)).toHaveLength(0);
+            // The code is spent and nothing was lost: Redis keeps the id the evidence will have, and attempts are untouched.
+            const recorded = await redis!.hGet(`dispatch-otp:{${id}}:limits`, 'evidence_id');
+            expect(recorded).toMatch(/^[0-9a-f-]{36}$/);
+            expect(await redis!.hGet(`dispatch-otp:{${id}}:limits`, 'failures')).toBe('0');
+            // Dispatch can see something went wrong.
+            const markers = await db.query("SELECT metadata FROM dispatch_events WHERE dispatch_id=$1 AND event_type='otp_resolution_required'", [id]);
+            expect(markers).toHaveLength(1);
+            expect(markers[0].metadata).toMatchObject({ reason: 'otp_evidence_not_saved', recovery: 'retry_validate' });
+            // The driver sends the code again: the registration is completed under the recorded id.
+            const events = announced.length;
+            const retry = await validate(id, code);
+            expect(retry.status).toBe(200);
+            expect(retry.body).toMatchObject({ id: recorded, dispatchId: id, type: 'otp' });
+            expect(await rows(id)).toHaveLength(1);
+            expect(announced.length).toBe(events + 1);
+            // From here on it is a true second use.
+            const again = await validate(id, code);
+            expect(again.status).toBe(409);
+            expect(again.body.error).toBe('OTP_CONSUMED');
+            expect(await rows(id)).toHaveLength(1);
+        });
+
+        it('lets only one of several simultaneous retries complete a registration that failed', async () => {
+            const id = await dispatch('in_transit', 'high_value_control');
+            const code = await issuedCode(id);
+            vi.spyOn(evidencesService, 'create').mockRejectedValueOnce(new Error('db blip'));
+            expect((await validate(id, code)).status).toBe(500);
             const results = await Promise.all([validate(id, code), validate(id, code), validate(id, code)]);
             expect(results.filter((r) => r.status === 200)).toHaveLength(1);
             expect(results.filter((r) => r.status === 409).every((r) => r.body.error === 'OTP_CONSUMED')).toBe(true);
