@@ -11,7 +11,7 @@ import { ManualTaskTriggerService } from './services/manual-task-trigger.service
 import { PlanningController } from './controllers/planning.controller.js';
 import { SchedulerTicker } from './services/scheduler-ticker.service.js';
 
-// No own table (runs are traced in audit_logs through raw SQL): "system logic", like app/sync.
+// No own table (runs are traced in audit_logs through raw SQL): app-level system logic.
 // @Global() so that the features that own a task (generator, cutoff, reminder...) only inject
 // ScheduledTaskRegistry and register it, without importing this module. See rules/plugins.md.
 @Global()

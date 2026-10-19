@@ -15,7 +15,7 @@ export interface CreateDispatchIncidentData {
 }
 
 // Generic, direct operations only — no business logic. Orchestration (idempotency, ordering,
-// transactions across modules) lives in app/sync, not here.
+// transactions across modules) lives in app/dispatch-incidents, not here.
 @Injectable()
 export class DispatchIncidentsService {
     constructor(

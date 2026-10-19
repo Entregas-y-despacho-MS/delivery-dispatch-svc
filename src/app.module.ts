@@ -18,7 +18,6 @@ import { WarehousesModule } from './modules/catalog/warehouses/warehouses.module
 import { VehicleIncidentTypesModule } from './modules/fleet/vehicle-incident-types/vehicle-incident-types.module.js';
 import { VehicleMaintenancesModule } from './modules/fleet/vehicle-maintenances/vehicle-maintenances.module.js';
 import { AuthModule } from './app/auth/auth.module.js';
-import { SyncModule } from './app/sync/sync.module.js';
 import { TrackingModule } from './app/tracking/tracking.module.js';
 import { MailerModule } from './plugins/mailer/mailer.module.js';
 import { SocketModule } from './plugins/socket/socket.module.js';
@@ -97,7 +96,6 @@ import { DispatchIncidentsAppModule } from './app/dispatch-incidents/dispatch-in
     VehicleIncidentTypesModule,
     VehicleMaintenancesModule,
     AuthModule,
-    SyncModule,
     TrackingModule,
     DispatchEventsAppModule,
     DispatchIncidentsAppModule,

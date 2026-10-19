@@ -10,6 +10,8 @@ import { AppConfig } from '../src/config/services/app.config.js';
 import { hashPassword } from '../src/shared/utils/crypto.util.js';
 import { HttpExceptionFilter } from '../src/shared/filters/index.js';
 import { withEventPurge } from './helpers/purge-append-only-events.js';
+import { SettingsService } from '../src/modules/settings/services/settings.service.js';
+import { SETTINGS_VERSION_HEADER } from '../src/modules/settings/settings.constants.js';
 
 type RawSocket = WebSocket;
 
@@ -97,12 +99,11 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
     let dispatchSequence = 0;
     let batchSequence = 0;
     let deliveryTypeId: number;
+    let settingsService: SettingsService;
 
     const auth = (driver: 'driver1' | 'driver2') => ({ Authorization: `Bearer ${tokens[driver]}` });
     const patch = (id: number, body: object, driver: 'driver1' | 'driver2' = 'driver1') =>
         request(app.getHttpServer()).patch(`/${apiPrefix}/dispatches/${id}/status`).set(auth(driver)).send(body);
-    const syncEvents = (events: object[], driver: 'driver1' | 'driver2' = 'driver1') =>
-        request(app.getHttpServer()).post(`/${apiPrefix}/sync/events`).set(auth(driver)).send({ events });
     const body = (status: string, eventId = uuidv7()) => ({
         status, eventId, occurredAt: new Date().toISOString(), lat: -16.5, lng: -68.1, accuracy: 8.4,
     });
@@ -187,6 +188,7 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
         if (!address || typeof address === 'string') throw new Error('The e2e HTTP server did not expose its ephemeral port.');
         socketUrl = `ws://127.0.0.1:${address.port}/socket.io/?EIO=4&transport=websocket`;
         dataSource = moduleRef.get(DataSource);
+        settingsService = moduleRef.get(SettingsService);
 
         const passwordHash = await hashPassword('E2eTest1234');
         for (const driver of ['driver1', 'driver2'] as const) {
@@ -253,6 +255,7 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
         const response = await patch(id, event);
 
         expect(response.status).toBe(200);
+        expect(response.headers[SETTINGS_VERSION_HEADER.toLowerCase()]).toBe(String(await settingsService.getVersion()));
         expect(response.body).toMatchObject({ dispatchId: id, status: 'in_transit', previousStatus: 'out_for_delivery', version: before.version });
         expect(await dispatchRow(id)).toMatchObject({ status: 'in_transit', version: before.version, last_latitude: before.last_latitude, last_longitude: before.last_longitude, last_location_at: before.last_location_at });
         expect(await eventsFor(id)).toMatchObject([{
@@ -313,64 +316,27 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
         }]);
     });
 
-    it('publica not_delivered desde la sincronización offline y no duplica al reintentar', async () => {
-        const id = await newDispatch(await newBatch('driver1'));
-        const event = {
-            type: 'status_change', clientEventId: uuidv7(), dispatchId: id,
-            occurredAt: new Date().toISOString(), dispatchStatusId: statusIds.not_delivered,
-            detail: 'Cliente ausente',
-        };
+    it('publica not_delivered y no duplica al reintentar el eventId', async () => {
+        const id = await newDispatch(await newBatch('driver1'), 'in_transit');
+        const event = body('not_delivered');
 
-        expect((await syncEvents([event])).body.results).toMatchObject([{ clientEventId: event.clientEventId, outcome: 'applied' }]);
-        expect((await syncEvents([event])).body.results).toMatchObject([{ clientEventId: event.clientEventId, outcome: 'already_processed' }]);
+        expect((await patch(id, event)).status).toBe(200);
+        expect((await patch(id, event)).status).toBe(200);
         expect(await dispatchRow(id)).toMatchObject({ status: 'not_delivered' });
         expect(await outboundFor(id)).toMatchObject([{
             status: 'pending', type: 'dispatch.transfer.status_changed',
-            data: expect.objectContaining({ status: 'not_delivered', previousStatus: 'out_for_delivery', recordVersion: 1 }),
+            data: expect.objectContaining({ status: 'not_delivered', previousStatus: 'in_transit', recordVersion: 1 }),
         }]);
     });
 
-    it('no permite que el móvil sincronice returned: es una decisión del coordinador', async () => {
+    it('no permite que el repartidor marque returned: es una decisión del coordinador', async () => {
         const id = await newDispatch(await newBatch('driver1'));
-        const event = {
-            type: 'status_change', clientEventId: uuidv7(), dispatchId: id,
-            occurredAt: new Date().toISOString(), dispatchStatusId: statusIds.returned,
-        };
+        const response = await patch(id, body('returned'));
 
-        const response = await syncEvents([event]);
-
-        expect(response.status).toBe(201);
-        expect(response.body.results).toMatchObject([{
-            clientEventId: event.clientEventId,
-            outcome: 'failed',
-            error: 'The driver cannot set dispatch status returned.',
-        }]);
+        expect(response.status).toBe(400);
         expect(await dispatchRow(id)).toMatchObject({ status: 'out_for_delivery' });
         expect(await eventsFor(id)).toHaveLength(0);
         expect(await outboundFor(id)).toHaveLength(0);
-    });
-
-    it('convierte y publica un incidente offline con su reasonCode', async () => {
-        const id = await newDispatch(await newBatch('driver1'));
-        const [{ incident_reason_id: incidentReasonId, code }] = await dataSource.query(
-            `SELECT incident_reason_id, code FROM incident_reasons WHERE active = true AND deleted_at IS NULL ORDER BY incident_reason_id LIMIT 1`,
-        );
-        const event = {
-            type: 'incident', clientEventId: uuidv7(), dispatchId: id,
-            occurredAt: new Date().toISOString(), incidentReasonId,
-            detail: 'Bulto dañado',
-        };
-
-        const response = await syncEvents([event]);
-
-        expect(response.body.results).toMatchObject([{ clientEventId: event.clientEventId, outcome: 'applied' }]);
-        expect(await dispatchRow(id)).toMatchObject({ status: 'incident' });
-        expect(await outboundFor(id)).toMatchObject([{
-            status: 'pending', type: 'dispatch.transfer.status_changed',
-            data: expect.objectContaining({
-                status: 'incident', previousStatus: 'out_for_delivery', reasonCode: code, recordVersion: 1,
-            }),
-        }]);
     });
 
     it('permite reintentar el mismo eventId sin duplicar el evento', async () => {

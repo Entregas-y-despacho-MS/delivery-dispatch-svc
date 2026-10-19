@@ -16,6 +16,8 @@ import { DispatchOtpService } from '../src/app/dispatch-otp/dispatch-otp.service
 import { DeliveryEvidencesService } from '../src/modules/dispatch/delivery-evidences/services/delivery-evidences.service.js';
 import { DISPATCH_EVIDENCE_REGISTERED_EVENT } from '../src/app/dispatch-evidence/dispatch-evidence-registered.event.js';
 import { withEventPurge } from './helpers/purge-append-only-events.js';
+import { SettingsService } from '../src/modules/settings/services/settings.service.js';
+import { SETTINGS_VERSION_HEADER } from '../src/modules/settings/settings.constants.js';
 
 const PNG  = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(200, 1)]);
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(200, 2)]);
@@ -30,6 +32,7 @@ describe('delivery evidence: signature, photo and OTP over HTTP + PostgreSQL (ST
     let redis: RedisClientType | undefined;
     let otp: DispatchOtpService;
     let evidencesService: DeliveryEvidencesService;
+    let settingsService: SettingsService;
     // While set, every upload waits for it: lets a test hold one request inside the storage while others arrive.
     let hold: Promise<void> | null = null;
     let prefix: string;
@@ -39,18 +42,20 @@ describe('delivery evidence: signature, photo and OTP over HTTP + PostgreSQL (ST
     const tokens: Record<string, string> = {};
     const batchIds: number[] = [];
     const dispatchIds: number[] = [];
+    const incidentReasonIds: number[] = [];
     const messages: SmsMessage[] = [];
     const uploads: string[] = [];
     const announced: Array<Record<string, unknown>> = [];
     const statuses: Record<string, number> = {};
     let deliveryTypeId: number;
+    let fifoReasonCode: string;
     let sequence = 0;
     const auth = (name = 'driver') => ({ Authorization: `Bearer ${tokens[name]}` });
 
     async function dispatch(status = 'in_transit', policy = 'hand_delivery_standard'): Promise<number> {
         const [{ route_batch_id: batchId }] = await db.query(`INSERT INTO route_batches (driver_id, shift_date, status) VALUES ($1, DATE '2046-01-01' + $2::int, 'in_execution') RETURNING route_batch_id`, [users.driver, ++sequence]);
         batchIds.push(batchId);
-        const [{ dispatch_id: id }] = await db.query(`INSERT INTO dispatches (dispatch_type_id, dispatch_status_id, route_batch_id, sequence_order, source_order_ref, tracking_code, delivery_address, evidence_policy, contact_phone) VALUES ($1,$2,$3,1,$4,$5,'Evidence test address',$6,'+59170000123') RETURNING dispatch_id`, [deliveryTypeId, statuses[status], batchId, `${sourcePrefix}-${sequence}`, `EV-${run}-${sequence}`, policy]);
+        const [{ dispatch_id: id }] = await db.query(`INSERT INTO dispatches (dispatch_type_id, dispatch_status_id, route_batch_id, sequence_order, source_order_ref, tracking_code, delivery_address, evidence_policy, contact_phone) VALUES ($1,$2,$3,1,$4,$5,'Evidence test address',$6,'+59170000123') RETURNING dispatch_id`, [deliveryTypeId, statuses[status], batchId, `${sourcePrefix}-${sequence}`, `DSP-2046-${String(sequence).padStart(5, '0')}`, policy]);
         dispatchIds.push(id);
         return id;
     }
@@ -98,6 +103,7 @@ describe('delivery evidence: signature, photo and OTP over HTTP + PostgreSQL (ST
         db = moduleRef.get(DataSource);
         otp = moduleRef.get(DispatchOtpService);
         evidencesService = moduleRef.get(DeliveryEvidencesService);
+        settingsService = moduleRef.get(SettingsService);
         app.get(EventEmitter2).on(DISPATCH_EVIDENCE_REGISTERED_EVENT, (event: Record<string, unknown>) => { announced.push(event); });
         const passwordHash = await hashPassword('E2eTest1234');
         for (const [name, role] of [['driver', 'driver'], ['foreign', 'driver'], ['coordinator', 'coordinator']]) {
@@ -111,6 +117,13 @@ describe('delivery evidence: signature, photo and OTP over HTTP + PostgreSQL (ST
         }
         for (const row of await db.query('SELECT name, dispatch_status_id FROM dispatch_statuses')) statuses[row.name] = row.dispatch_status_id;
         [{ dispatch_type_id: deliveryTypeId }] = await db.query(`SELECT dispatch_type_id FROM dispatch_types WHERE name='delivery'`);
+        fifoReasonCode = `${sourcePrefix}-FIFO`;
+        const [{ incident_reason_id: reasonId }] = await db.query(
+            `INSERT INTO incident_reasons (code, name, requires_evidence, counts_as_attempt, active)
+             VALUES ($1, $2, false, false, true) RETURNING incident_reason_id`,
+            [fifoReasonCode, `FIFO test ${run}`],
+        );
+        incidentReasonIds.push(reasonId);
     }, 30000);
 
     afterEach(() => { vi.restoreAllMocks(); hold = null; });
@@ -118,8 +131,10 @@ describe('delivery evidence: signature, photo and OTP over HTTP + PostgreSQL (ST
     afterAll(async () => {
         if (db?.isInitialized) await withEventPurge(db, { dispatchRefs: [`${sourcePrefix}%`], routeBatchIds: batchIds, userNames: [`e2e_st313_%_${run}`] }, async (manager) => {
             await manager.query('DELETE FROM delivery_evidences WHERE dispatch_id=ANY($1::int[])', [dispatchIds]);
+            await manager.query('DELETE FROM dispatch_incidents WHERE dispatch_id=ANY($1::int[])', [dispatchIds]);
             await manager.query('DELETE FROM dispatches WHERE source_order_ref LIKE $1', [`${sourcePrefix}%`]);
             await manager.query('DELETE FROM route_batches WHERE route_batch_id=ANY($1::int[])', [batchIds]);
+            await manager.query('DELETE FROM incident_reasons WHERE incident_reason_id=ANY($1::int[])', [incidentReasonIds]);
             await manager.query('DELETE FROM users WHERE username LIKE $1', [`e2e_st313_%_${run}`]);
         });
         if (redis?.isOpen) {
@@ -134,6 +149,7 @@ describe('delivery evidence: signature, photo and OTP over HTTP + PostgreSQL (ST
         const values = fields('signature');
         const response = await upload(id, values, signature);
         expect(response.status).toBe(201);
+        expect(response.headers[SETTINGS_VERSION_HEADER.toLowerCase()]).toBe(String(await settingsService.getVersion()));
         expect(response.body).toMatchObject({ id: values.evidenceId, dispatchId: id, type: 'signature', receiverName: 'Maria Lopez', receiverDocument: '1234567', latitude: -17.783327, longitude: -63.18214 });
         expect(response.body).not.toHaveProperty('fileUrl');
         const [row] = await rows(id);
@@ -157,6 +173,55 @@ describe('delivery evidence: signature, photo and OTP over HTTP + PostgreSQL (ST
         expect(response.status).toBe(201);
         expect(response.body).toMatchObject({ type: 'photo', receiverName: null, receiverDocument: null });
         expect(announced).toContainEqual(expect.objectContaining({ dispatchId: id, type: 'photo' }));
+    });
+
+    it('uploads evidence, delivers the dispatch, and safely retries the status request', async () => {
+        const id = await dispatch();
+        const evidence = await upload(id, fields('signature'), signature);
+        expect(evidence.status).toBe(201);
+
+        const status = { status: 'delivered', eventId: uuidv7(), occurredAt: new Date().toISOString(), lat: -17.78, lng: -63.18, accuracy: 5 };
+        const sendStatus = () => request(app.getHttpServer()).patch(`/${prefix}/dispatches/${id}/status`).set(auth()).send(status);
+        const first = await sendStatus();
+        expect(first.status).toBe(200);
+        expect(first.body.status).toBe('delivered');
+        expect(first.headers[SETTINGS_VERSION_HEADER.toLowerCase()]).toBe(String(await settingsService.getVersion()));
+
+        const retry = await sendStatus();
+        expect(retry.status).toBe(200);
+        expect(retry.body.status).toBe('delivered');
+        const [{ count }] = await db.query(`SELECT count(*)::int AS count FROM dispatch_events WHERE dispatch_id=$1 AND event_type='status_changed' AND client_event_id=$2`, [id, status.eventId]);
+        expect(count).toBe(1);
+        const [{ name }] = await db.query(`SELECT s.name FROM dispatches d JOIN dispatch_statuses s USING (dispatch_status_id) WHERE d.dispatch_id=$1`, [id]);
+        expect(name).toBe('delivered');
+    });
+
+    it('processes a FIFO queue through direct status, incident and evidence routes', async () => {
+        const statusDispatch = await dispatch('out_for_delivery');
+        const statusResponse = await request(app.getHttpServer())
+            .patch(`/${prefix}/dispatches/${statusDispatch}/status`)
+            .set(auth())
+            .send({ status: 'in_transit', eventId: uuidv7(), occurredAt: new Date().toISOString(), lat: -17.78, lng: -63.18, accuracy: 5 });
+        expect(statusResponse.status).toBe(200);
+        expect(statusResponse.headers[SETTINGS_VERSION_HEADER.toLowerCase()]).toBe(String(await settingsService.getVersion()));
+
+        const incidentDispatch = await dispatch();
+        const incidentResponse = await request(app.getHttpServer())
+            .post(`/${prefix}/dispatches/${incidentDispatch}/incidents`)
+            .set(auth())
+            .send({
+                incidentId: uuidv7(), reasonCode: fifoReasonCode,
+                observations: 'Access to the delivery location was blocked.',
+                occurredAt: new Date(Date.now() - 60_000).toISOString(), lat: -17.78, lng: -63.18,
+            });
+        expect(incidentResponse.status).toBe(201);
+        expect(incidentResponse.headers[SETTINGS_VERSION_HEADER.toLowerCase()]).toBe(String(await settingsService.getVersion()));
+
+        const evidenceDispatch = await dispatch();
+        const evidenceResponse = await upload(evidenceDispatch, fields('signature'), signature);
+        expect(evidenceResponse.status).toBe(201);
+        expect(evidenceResponse.headers[SETTINGS_VERSION_HEADER.toLowerCase()]).toBe(String(await settingsService.getVersion()));
+        expect(evidenceResponse.body.type).toBe('signature');
     });
 
     it('answers 413 for a file over 500 KB and stores nothing', async () => {

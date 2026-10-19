@@ -12,6 +12,8 @@ import { DispatchEvidenceService } from './dispatch-evidence.service.js';
 import { DeliveryEvidenceDto } from './dto/delivery-evidence.dto.js';
 import { RegisterEvidenceDto } from './dto/register-evidence.dto.js';
 import { ValidateOtpDto } from './dto/validate-otp.dto.js';
+import { SETTINGS_VERSION_HEADER } from '../../modules/settings/settings.constants.js';
+import { SettingsService } from '../../modules/settings/services/settings.service.js';
 
 // Without limits multer buffers the whole upload in memory: the cap rejects an oversized file with 413, and the
 // field limits stop a driver from filling memory with many or huge text fields (the form has 7 fields and 1 file).
@@ -26,7 +28,7 @@ const MULTIPART_LIMITS = { fileSize: MAX_EVIDENCE_FILE_BYTES, files: 1, fields: 
 @ApiBearerAuth('access-token')
 @Controller('dispatches')
 export class DispatchEvidenceController {
-    constructor(private readonly service: DispatchEvidenceService) {}
+    constructor(private readonly service: DispatchEvidenceService, private readonly settings: SettingsService) {}
 
     @Post(':id/evidences')
     @DriverOnly()
@@ -53,8 +55,8 @@ export class DispatchEvidenceController {
             required: ['file', 'evidenceId', 'type', 'capturedAt', 'lat', 'lng'],
         },
     })
-    @ApiCreatedResponse({ type: DeliveryEvidenceDto, description: 'The evidence was registered now.' })
-    @ApiOkResponse({ type: DeliveryEvidenceDto, description: 'The `evidenceId` was already registered: this is the original record, nothing changed.' })
+    @ApiCreatedResponse({ type: DeliveryEvidenceDto, description: 'The evidence was registered now.', headers: { [SETTINGS_VERSION_HEADER]: { description: 'Current operational settings version. Reload settings when this value changes.', schema: { type: 'integer' } } } })
+    @ApiOkResponse({ type: DeliveryEvidenceDto, description: 'The `evidenceId` was already registered: this is the original record, nothing changed.', headers: { [SETTINGS_VERSION_HEADER]: { description: 'Current operational settings version. Reload settings when this value changes.', schema: { type: 'integer' } } } })
     @ApiBadRequests({ validation: true, id: true, errors: [{ code: 'EVIDENCE_FILE_REQUIRED', message: 'A photo or signature evidence needs its file.' }, { code: 'INVALID_CAPTURE_TIME', message: 'capturedAt cannot be in the future.' }], example: ['evidenceId must be a UUID', 'receiverName must be longer than or equal to 3 characters'] })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'Dispatch is not assigned to your route.' })
@@ -82,6 +84,7 @@ export class DispatchEvidenceController {
     ): Promise<DeliveryEvidenceDto> {
         const { evidence, created } = await this.service.register(id, driverId, dto, file);
         response.status(created ? 201 : 200);
+        response.setHeader(SETTINGS_VERSION_HEADER, String(await this.settings.getVersion()));
         return evidence;
     }
 

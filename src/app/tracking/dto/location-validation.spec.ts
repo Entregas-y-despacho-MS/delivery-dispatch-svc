@@ -47,7 +47,7 @@ describe('LocationPointDto — latitude/longitude', () => {
 
 describe('LocationPointDto — recordedAt', () => {
     // Un string solo-fecha ("2026-09-29", sin hora) SÍ pasa @IsDateString() — mismo comportamiento
-    // ya aceptado en SyncEventDto.occurredAt, no una laxitud nueva de este DTO.
+    // ya aceptado por el formato UTC de los eventos de estado, no una laxitud nueva de este DTO.
     it.each(['not-a-date', 123, null, undefined])('rechaza recordedAt = %j (debe ser una fecha ISO 8601 válida)', async (recordedAt) => {
         const plain: Record<string, unknown> = { ...BASE_POINT, recordedAt };
         if (recordedAt === undefined) delete plain.recordedAt;

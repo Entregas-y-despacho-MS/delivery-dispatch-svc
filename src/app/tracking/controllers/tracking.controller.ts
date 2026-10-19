@@ -10,7 +10,7 @@ import { ApiUnauthorized, ApiBadRequests } from '../../../shared/utils/swagger/i
 /**
  * RF-U11 — telemetría GPS del repartidor en segundo plano. Ningún error de un punto puntual (un
  * despacho que no es suyo, un reloj de dispositivo mal puesto) aborta el resto del lote: cada uno
- * reporta su propio resultado, igual que /sync/events.
+ * reporta su propio resultado, igual que los endpoints de estado e incidentes.
  *
  * Error dictionary: ninguno a nivel HTTP del batch — todo se reporta por punto en `results`
  * (`failed` con su `error`) | INVALID_TOKEN 401 | INSUFFICIENT_PERMISSIONS 403.

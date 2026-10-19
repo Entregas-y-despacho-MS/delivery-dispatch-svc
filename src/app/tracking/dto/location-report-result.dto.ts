@@ -19,7 +19,7 @@ export class LocationReportResultDto {
 
 export class LocationsReportResultDto {
     // Same order as sent (not the chronological order they were applied in) — the device matches
-    // each result back to the point it sent by position, same convention as /sync/events.
+    // each result back to the point it sent by position, following the status endpoint's item-level response.
     @ApiProperty({ type: [LocationReportResultDto], description: 'One result per point sent, in the same order as the request' })
     results: LocationReportResultDto[];
 }

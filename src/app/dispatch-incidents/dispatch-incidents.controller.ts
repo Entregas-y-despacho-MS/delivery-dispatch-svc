@@ -8,12 +8,14 @@ import { ApiBadRequests, ApiConflict, ApiForbidden, ApiIdParam, ApiNotFound, Api
 import { CreateDispatchIncidentDto } from './dto/create-dispatch-incident.dto.js';
 import { DispatchIncidentResponseDto } from './dto/dispatch-incident-response.dto.js';
 import { DispatchIncidentsAppService } from './dispatch-incidents.service.js';
+import { SETTINGS_VERSION_HEADER } from '../../modules/settings/settings.constants.js';
+import { SettingsService } from '../../modules/settings/services/settings.service.js';
 
 @ApiTags('Dispatches')
 @ApiBearerAuth('access-token')
 @Controller('dispatches')
 export class DispatchIncidentsController {
-    constructor(private readonly incidents: DispatchIncidentsAppService) {}
+    constructor(private readonly incidents: DispatchIncidentsAppService, private readonly settings: SettingsService) {}
 
     @Post(':id/incidents')
     @DriverOnly()
@@ -22,8 +24,8 @@ export class DispatchIncidentsController {
         summary: 'Report an operational incident for a dispatch',
         description: 'The assigned driver reports an incident for an in-transit dispatch. The incident, status transition and history entry are committed together. `incidentId` makes retries idempotent: a new report returns 201, a replay returns the original resource with 200, and neither a replay nor a failed transaction sends another alert. Reasons requiring evidence need a previously uploaded photo for this dispatch, except INC-COMP-FAILURE. The control tower receives a high-criticality alert in the dispatch zone.',
     })
-    @ApiCreatedResponse({ type: DispatchIncidentResponseDto, description: 'The incident was recorded and the dispatch moved to incident.' })
-    @ApiOkResponse({ type: DispatchIncidentResponseDto, description: 'This incidentId was already recorded for the dispatch; the original result is returned.' })
+    @ApiCreatedResponse({ type: DispatchIncidentResponseDto, description: 'The incident was recorded and the dispatch moved to incident.', headers: { [SETTINGS_VERSION_HEADER]: { description: 'Current operational settings version. Reload settings when this value changes.', schema: { type: 'integer' } } } })
+    @ApiOkResponse({ type: DispatchIncidentResponseDto, description: 'This incidentId was already recorded for the dispatch; the original result is returned.', headers: { [SETTINGS_VERSION_HEADER]: { description: 'Current operational settings version. Reload settings when this value changes.', schema: { type: 'integer' } } } })
     @ApiBadRequests({ validation: true, id: true, errors: [{ code: 'INCIDENT_OBSERVATIONS_TOO_SHORT', message: 'Observations for the catalog reason Otro must contain at least 10 characters.' }, { code: 'INCIDENT_CAPTURE_TIME_INVALID', message: 'occurredAt must be within the last 30 days and no more than 1 hour in the future.' }], example: ['incidentId must be a UUID v7', 'lat must not be greater than 90'] })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'Dispatch is not assigned to your route.' })
@@ -41,6 +43,7 @@ export class DispatchIncidentsController {
     ): Promise<DispatchIncidentResponseDto> {
         const result = await this.incidents.report(dispatchId, driverId, dto);
         response.status(result.created ? 201 : 200);
+        response.setHeader(SETTINGS_VERSION_HEADER, String(await this.settings.getVersion()));
         return result.incident;
     }
 }

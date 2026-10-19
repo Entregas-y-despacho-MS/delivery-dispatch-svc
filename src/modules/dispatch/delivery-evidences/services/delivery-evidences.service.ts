@@ -10,7 +10,6 @@ export interface CreateDeliveryEvidenceData {
     dispatchId:  number;
     type:        string;
     fileUrl?:    string | null;
-    otpCode?:    string | null;
     capturedAt?:       Date | null;
     latitude?:         number | null;
     longitude?:        number | null;
@@ -21,7 +20,7 @@ export interface CreateDeliveryEvidenceData {
 }
 
 // Generic, direct operations only — no business logic. Orchestration (idempotency, uploading the
-// file via StoragePort) lives in app/sync, not here.
+// file via StoragePort) lives in app/dispatch-evidence, not here.
 @Injectable()
 export class DeliveryEvidencesService {
     constructor(
@@ -55,7 +54,9 @@ export class DeliveryEvidencesService {
             dispatchId:  data.dispatchId,
             type:        data.type,
             fileUrl:     data.fileUrl ?? null,
-            otpCode:     data.otpCode ?? null,
+            // OTP verification is handled by the dedicated OTP flow. Evidence creation must never
+            // persist a submitted plaintext code through this generic service.
+            otpCode:     null,
             capturedAt:       data.capturedAt ?? null,
             latitude:         data.latitude ?? null,
             longitude:        data.longitude ?? null,
