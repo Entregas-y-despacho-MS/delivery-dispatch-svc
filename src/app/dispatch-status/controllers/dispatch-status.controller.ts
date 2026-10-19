@@ -1,5 +1,6 @@
-import { Body, Controller, Param, Patch } from '@nestjs/common';
+import { Body, Controller, Param, Patch, Res } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import type { Response } from 'express';
 import { CurrentUser } from '../../../shared/decorators/current-user.decorator.js';
 import { ParseIdPipe } from '../../../shared/pipes/index.js';
 import { ApiBadRequests, ApiConflict, ApiForbidden, ApiNotFound, ApiUnauthorized } from '../../../shared/utils/swagger/index.js';
@@ -7,12 +8,14 @@ import { DriverOnly } from '../../auth/decorators/index.js';
 import { DispatchStatusResponseDto } from '../dto/dispatch-status-response.dto.js';
 import { UpdateDispatchStatusDto } from '../dto/update-dispatch-status.dto.js';
 import { DispatchStatusService } from '../services/dispatch-status.service.js';
+import { SETTINGS_VERSION_HEADER } from '../../../modules/settings/settings.constants.js';
+import { SettingsService } from '../../../modules/settings/services/settings.service.js';
 
 @ApiTags('Dispatches')
 @ApiBearerAuth('access-token')
 @Controller('dispatches')
 export class DispatchStatusController {
-    constructor(private readonly statusService: DispatchStatusService) {}
+    constructor(private readonly statusService: DispatchStatusService, private readonly settings: SettingsService) {}
 
     @Patch(':id/status')
     @DriverOnly()
@@ -21,7 +24,7 @@ export class DispatchStatusController {
         summary: 'Update a dispatch status from the driver app',
         description: 'The single-item status endpoint for mobile transitions. Accepts status by name, a UUID v7 eventId for safe offline retries, occurredAt in UTC and GPS coordinates. Only the driver assigned to the route can update it. `out_for_delivery` is set by the separate route-start flow (ST-51.5); incident registration uses POST /dispatches/:id/incidents. Marking a dispatch delivered requires the evidence type selected by its evidence policy to have already been registered.',
     })
-    @ApiOkResponse({ type: DispatchStatusResponseDto, description: 'Status updated, or this eventId was already processed.' })
+    @ApiOkResponse({ type: DispatchStatusResponseDto, description: 'Status updated, or this eventId was already processed.', headers: { [SETTINGS_VERSION_HEADER]: { description: 'Current operational settings version. Reload settings when this value changes.', schema: { type: 'integer' } } } })
     @ApiBadRequests({ validation: true, id: true, example: ['eventId must be a UUID v 7'] })
     @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'Dispatch is not assigned to your route.' })
     @ApiNotFound({ code: 'DISPATCH_NOT_FOUND', message: 'Dispatch not found.' })
@@ -41,7 +44,10 @@ export class DispatchStatusController {
         @Param('id', ParseIdPipe) dispatchId: number,
         @Body() dto: UpdateDispatchStatusDto,
         @CurrentUser('id') driverId: number,
+        @Res({ passthrough: true }) response: Response,
     ): Promise<DispatchStatusResponseDto> {
-        return this.statusService.update(dispatchId, dto, driverId);
+        const result = await this.statusService.update(dispatchId, dto, driverId);
+        response.setHeader(SETTINGS_VERSION_HEADER, String(await this.settings.getVersion()));
+        return result;
     }
 }
