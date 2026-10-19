@@ -107,7 +107,6 @@ export const envValidation = Joi.object({
 
     // -- Plugin: push -----------------------------------------------------------
     PUSH_PROVIDER:        Joi.string().valid('expo', 'firebase').default('expo'),
-    EXPO_PUSH_API_URL:    Joi.string().uri().default('https://exp.host/--/api/v2/push/send'),
     EXPO_ACCESS_TOKEN:    Joi.string().optional(),
     FIREBASE_PROJECT_ID:  Joi.string().optional(),
     FIREBASE_CLIENT_EMAIL:Joi.string().optional(),
