@@ -163,7 +163,7 @@ describe('POST /route-batches/:id/start (e2e, ST-51.5)', () => {
     };
   }
 
-  it('starts the confirmed route even when accepted_at is null, and persists custody and outbox data', async () => {
+  it('starts the accepted confirmed route and persists custody and outbox data', async () => {
     const { routeBatchId, dispatchId, sourceOrderRef, packageId } =
       await fixture();
     const eventId = uuidv7();
@@ -184,7 +184,7 @@ describe('POST /route-batches/:id/start (e2e, ST-51.5)', () => {
       [routeBatchId],
     );
     expect(batchStatus).toBe('in_execution');
-    expect(acceptedAt).toBeNull();
+    expect(acceptedAt).not.toBeNull();
     const [{ status: dispatchStatus }] = await db.query(
       `SELECT s.name AS status FROM dispatches d JOIN dispatch_statuses s USING (dispatch_status_id) WHERE d.dispatch_id = $1`,
       [dispatchId],

@@ -148,7 +148,7 @@ export class RouteBatchAcceptService {
           }),
         ],
       );
-      return { routeBatchId, ...metadata };
+      return { routeBatchId, acceptedAt: metadata.acceptedAt, failedDispatchIds };
     });
   }
 
