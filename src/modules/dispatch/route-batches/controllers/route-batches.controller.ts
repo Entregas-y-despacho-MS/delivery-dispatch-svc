@@ -278,6 +278,7 @@ export class RouteBatchesController {
     errors: [
       { code: 'COTEJO_FAILURE_DUPLICATED_DISPATCH', message: 'Send one failure per dispatch.' },
       { code: 'COTEJO_FAILURE_DISPATCH_NOT_IN_BATCH', message: 'A failure points to a dispatch outside the batch.' },
+      { code: 'COTEJO_FAILURE_DISPATCH_NOT_ASSIGNED', message: 'A failure points to a dispatch that is not assigned.' },
       { code: 'COTEJO_FAILURE_PACKAGE_NOT_IN_DISPATCH', message: 'A failure points to a package outside its dispatch.' },
       { code: 'COTEJO_PHOTO_NOT_FOUND', message: 'A failure uses a photo not uploaded for this batch.' },
     ],

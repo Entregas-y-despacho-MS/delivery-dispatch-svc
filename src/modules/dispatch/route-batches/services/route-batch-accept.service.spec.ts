@@ -19,7 +19,7 @@ interface Options {
     accepted_at: Date | null;
   }[];
   prior?: { route_batch_id: number; metadata: Record<string, unknown> }[];
-  dispatches?: { dispatch_id: number }[];
+  dispatches?: { dispatch_id: number; status: string }[];
   packages?: { dispatch_id: number; external_package_id: string }[];
   photos?: { photo_id: string; photo_url: string }[];
   updated?: number;
@@ -38,7 +38,7 @@ function setup(options: Options = {}) {
       if (sql.includes('pg_advisory_xact_lock')) return [];
       if (sql.includes("metadata->>'eventId'")) return options.prior ?? [];
       if (sql.includes('FROM dispatches'))
-        return options.dispatches ?? [{ dispatch_id: 21 }];
+        return options.dispatches ?? [{ dispatch_id: 21, status: 'assigned' }];
       if (sql.includes('FROM dispatch_packages'))
         return (
           options.packages ?? [
@@ -168,6 +168,11 @@ describe('RouteBatchAcceptService', () => {
     });
     await expect(send({ dispatches: [] })).rejects.toMatchObject({
       response: { error: 'COTEJO_FAILURE_DISPATCH_NOT_IN_BATCH' },
+    });
+    await expect(
+      send({ dispatches: [{ dispatch_id: 21, status: 'cancelled' }] }),
+    ).rejects.toMatchObject({
+      response: { error: 'COTEJO_FAILURE_DISPATCH_NOT_ASSIGNED' },
     });
     await expect(send({ packages: [] })).rejects.toMatchObject({
       response: { error: 'COTEJO_FAILURE_PACKAGE_NOT_IN_DISPATCH' },

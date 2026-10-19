@@ -13,6 +13,7 @@ export class RouteBatchAcceptConflictException extends ConflictException {
 export type CotejoFailureInvalidCode =
   | 'COTEJO_FAILURE_DUPLICATED_DISPATCH'
   | 'COTEJO_FAILURE_DISPATCH_NOT_IN_BATCH'
+  | 'COTEJO_FAILURE_DISPATCH_NOT_ASSIGNED'
   | 'COTEJO_FAILURE_PACKAGE_NOT_IN_DISPATCH'
   | 'COTEJO_PHOTO_NOT_FOUND';
 

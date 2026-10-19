@@ -2,7 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { InsufficientPermissionsException } from '../../../../app/auth/exceptions/index.js';
-import { RouteBatchStatusEnum } from '../../../../shared/enums/index.js';
+import {
+  DispatchStatusEnum,
+  RouteBatchStatusEnum,
+} from '../../../../shared/enums/index.js';
 import { assertDriverCanAcceptBatch } from '../domain/batch-acceptance.js';
 import {
   AcceptRouteBatchDto,
@@ -168,16 +171,29 @@ export class RouteBatchAcceptService {
         'Send one failure per dispatch; list every affected package in its packageIds.',
       );
 
-    const inBatch: { dispatch_id: number }[] = await manager.query(
-      `SELECT dispatch_id FROM dispatches WHERE route_batch_id = $1 AND dispatch_id = ANY($2::int[])`,
-      [routeBatchId, dispatchIds],
-    );
+    const inBatch: { dispatch_id: number; status: string }[] =
+      await manager.query(
+        `SELECT d.dispatch_id, s.name AS status
+           FROM dispatches d
+           JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
+          WHERE d.route_batch_id = $1 AND d.dispatch_id = ANY($2::int[])`,
+        [routeBatchId, dispatchIds],
+      );
     const known = new Set(inBatch.map(({ dispatch_id }) => dispatch_id));
     const outside = dispatchIds.filter((id) => !known.has(id));
     if (outside.length)
       throw new CotejoFailureInvalidException(
         'COTEJO_FAILURE_DISPATCH_NOT_IN_BATCH',
         `Dispatches ${outside.join(', ')} do not belong to this route batch.`,
+      );
+    // Only a stop that is still waiting to leave can fail the check: a cancelled or rescheduled one has no load to check.
+    const notAssigned = inBatch.filter(
+      ({ status }) => status !== DispatchStatusEnum.ASSIGNED,
+    );
+    if (notAssigned.length)
+      throw new CotejoFailureInvalidException(
+        'COTEJO_FAILURE_DISPATCH_NOT_ASSIGNED',
+        `Dispatches ${notAssigned.map(({ dispatch_id }) => dispatch_id).join(', ')} are not assigned, so they cannot fail the check.`,
       );
 
     const packages: { dispatch_id: number; external_package_id: string }[] =

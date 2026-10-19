@@ -27,6 +27,9 @@ describe('Route batch acceptance and cotejo (e2e, ST-210.1)', () => {
     driver1: 0,
     driver2: 0,
   };
+  let coordinatorToken = '';
+  let coordinatorId = 0;
+  let rescheduleReasonCode = '';
   const sourceRefs: string[] = [];
   const batchIds: number[] = [];
   const userIds: number[] = [];
@@ -87,6 +90,26 @@ describe('Route batch acceptance and cotejo (e2e, ST-210.1)', () => {
     users.driver1 = Number(created[0].user_id);
     users.driver2 = Number(created[1].user_id);
     userIds.push(users.driver1, users.driver2);
+    const [{ role_id: coordinatorRoleId }] = await db.query(
+      `SELECT role_id FROM roles WHERE name = 'coordinator'`,
+    );
+    const [coordinator] = await db.query(
+      `INSERT INTO users (role_id, full_name, username, password_hash, active, requires_pwd_change)
+       VALUES ($1, $2, $3, $4, TRUE, FALSE) RETURNING user_id, username`,
+      [coordinatorRoleId, `ST2101 coordinator ${run}`, `st2101_coord_${run}`, passwordHash],
+    );
+    coordinatorId = Number(coordinator.user_id);
+    userIds.push(coordinatorId);
+    coordinatorToken = (
+      await http()
+        .post(api('/auth/login'))
+        .send({ username: coordinator.username, password })
+    ).body.accessToken;
+    rescheduleReasonCode = `RES-C${run}`.slice(0, 30);
+    await db.query(
+      `INSERT INTO reschedule_reasons (code, name, category, active) VALUES ($1, $2, 'operations', TRUE)`,
+      [rescheduleReasonCode, `ST2101 motivo ${run}`],
+    );
     for (const [index, driver] of (['driver1', 'driver2'] as const).entries()) {
       tokens[driver] = (
         await http()
@@ -103,8 +126,16 @@ describe('Route batch acceptance and cotejo (e2e, ST-210.1)', () => {
         { dispatchRefs: sourceRefs, routeBatchIds: batchIds },
         async (manager) => {
           await manager.query(
-            `DELETE FROM outbound_messages WHERE type = 'dispatch.shipment.departed' AND payload #>> '{data,salesOrderId}' = ANY($1::text[])`,
+            `DELETE FROM outbound_messages WHERE payload #>> '{data,salesOrderId}' = ANY($1::text[])`,
             [sourceRefs],
+          );
+          await manager.query(
+            `DELETE FROM dispatch_reschedules WHERE dispatch_id IN (SELECT dispatch_id FROM dispatches WHERE source_order_ref = ANY($1::text[]))`,
+            [sourceRefs],
+          );
+          await manager.query(
+            `DELETE FROM reschedule_reasons WHERE code = $1`,
+            [rescheduleReasonCode],
           );
           await manager.query(
             `DELETE FROM dispatch_packages WHERE dispatch_id IN (SELECT dispatch_id FROM dispatches WHERE source_order_ref = ANY($1::text[]))`,
@@ -383,6 +414,83 @@ describe('Route batch acceptance and cotejo (e2e, ST-210.1)', () => {
     expect(start.status).toBe(200);
     expect(start.body.dispatchIds).toEqual([failed.dispatchId, ok.dispatchId]);
     expect(start.body.excludedDispatchIds).toEqual([]);
+  });
+
+  it('rejects a failure on a dispatch that is not assigned and accepts nothing', async () => {
+    const { routeBatchId, dispatches } = await fixture();
+    const [{ dispatchId, packageId }] = dispatches;
+    await db.query(
+      `UPDATE dispatches SET dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = 'cancelled') WHERE dispatch_id = $1`,
+      [dispatchId],
+    );
+    const photoId = uuidv7();
+    await uploadPhoto(routeBatchId, 'driver1', photoId);
+    const response = await accept(routeBatchId, {
+      eventId: uuidv7(),
+      failures: [{ dispatchId, packageIds: [packageId], reason: 'missing', photoId }],
+    });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('COTEJO_FAILURE_DISPATCH_NOT_ASSIGNED');
+    expect(await acceptedAt(routeBatchId)).toBeNull();
+  });
+
+  it('full flow: failed cotejo, route start, then the coordinator reschedules the excluded stop and the batch closes', async () => {
+    const { routeBatchId, dispatches } = await fixture('confirmed', 'driver1', 2);
+    const [failed, ok] = dispatches;
+    const photoId = uuidv7();
+    await uploadPhoto(routeBatchId, 'driver1', photoId);
+    expect(
+      (
+        await accept(routeBatchId, {
+          eventId: uuidv7(),
+          failures: [{ dispatchId: failed.dispatchId, packageIds: [failed.packageId], reason: 'does_not_fit', photoId }],
+        })
+      ).status,
+    ).toBe(200);
+    const start = await http()
+      .post(api(`/route-batches/${routeBatchId}/start`))
+      .set(auth('driver1'))
+      .send({ eventId: uuidv7() });
+    expect(start.status).toBe(200);
+    expect(start.body.excludedDispatchIds).toEqual([failed.dispatchId]);
+
+    const statusOf = async (id: number) =>
+      (
+        await db.query(
+          `SELECT s.name AS status FROM dispatches d JOIN dispatch_statuses s USING (dispatch_status_id) WHERE d.dispatch_id = $1`,
+          [id],
+        )
+      )[0].status;
+    const batchStatus = async () =>
+      (await db.query(`SELECT status FROM route_batches WHERE route_batch_id = $1`, [routeBatchId]))[0].status;
+    // The excluded stop keeps the batch open (D-50) while the departing one is still on the road.
+    expect(await statusOf(failed.dispatchId)).toBe('assigned');
+    expect(await statusOf(ok.dispatchId)).toBe('out_for_delivery');
+    await db.query(
+      `UPDATE dispatches SET dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = 'delivered') WHERE dispatch_id = $1`,
+      [ok.dispatchId],
+    );
+    expect(await batchStatus()).toBe('in_execution');
+
+    const [{ d: date }] = await db.query(
+      `SELECT ((NOW() AT TIME ZONE 'America/La_Paz')::date + 3)::text AS d`,
+    );
+    const reschedule = await http()
+      .post(api(`/dispatches/${failed.dispatchId}/reschedule`))
+      .set({ Authorization: `Bearer ${coordinatorToken}` })
+      .send({
+        reasonCode: rescheduleReasonCode,
+        windowStart: `${date}T13:00:00Z`,
+        windowEnd: `${date}T15:00:00Z`,
+      });
+    expect(reschedule.status).toBe(200);
+    expect(await statusOf(failed.dispatchId)).toBe('rescheduled');
+    expect(await batchStatus()).toBe('closed');
+    const [{ route_batch_id: leftBatch }] = await db.query(
+      `SELECT route_batch_id FROM dispatches WHERE dispatch_id = $1`,
+      [failed.dispatchId],
+    );
+    expect(leftBatch).toBeNull();
   });
 
   it('rejects failures that do not match the batch and accepts nothing', async () => {
