@@ -23,6 +23,9 @@ import { ApproveFinalRouteBatchResponseDto } from '../dto/approve-final-route-ba
 import { RouteBatchFinalApprovalService } from '../services/route-batch-final-approval.service.js';
 import { RouteBatchStartService } from '../services/route-batch-start.service.js';
 import { RouteBatchCotejoPhotoService } from '../services/route-batch-cotejo-photo.service.js';
+import { RouteBatchAcceptService } from '../services/route-batch-accept.service.js';
+import { AcceptRouteBatchDto } from '../dto/accept-route-batch.dto.js';
+import { AcceptRouteBatchResponseDto } from '../dto/accept-route-batch-response.dto.js';
 import { UploadCotejoPhotoDto } from '../dto/upload-cotejo-photo.dto.js';
 import { CotejoPhotoDto } from '../dto/cotejo-photo.dto.js';
 import { MAX_EVIDENCE_FILE_BYTES } from '../../../../app/dispatch-evidence/domain/evidence-file.js';
@@ -72,6 +75,7 @@ export class RouteBatchesController {
     private readonly queryService: RouteBatchQueryService,
     private readonly startService: RouteBatchStartService,
     private readonly cotejoPhotoService: RouteBatchCotejoPhotoService,
+    private readonly acceptService: RouteBatchAcceptService,
   ) {}
 
   @Get()
@@ -247,6 +251,43 @@ export class RouteBatchesController {
     const { photo, created } = await this.cotejoPhotoService.upload(id, driverId, dto, file);
     response.status(created ? HttpStatus.CREATED : HttpStatus.OK);
     return photo;
+  }
+
+  @Post(':id/accept')
+  @HttpCode(HttpStatus.OK)
+  @Roles(RoleEnum.DRIVER)
+  @ApiOperation({
+    summary: 'Accept a confirmed route batch and report cotejo failures',
+    description:
+      'The assigned driver accepts the batch after checking the physical packages against the expected ones (RF-U24). It records `accepted_at` and a `batch_accepted` event in the batch log, which "Start the day route" (`POST /route-batches/:id/start`) then requires. `failures` lists the packages that are missing, damaged or do not fit: for each one the stop is marked as "does not leave" with a `cotejo_failed` dispatch event (reason, photo and driver), so the route start skips it and the coordinator resolves it by hand; `dispatch_incidents` is not used. Each failure needs a `photoId` uploaded with `POST /route-batches/:id/cotejo-photos`. Only a `confirmed` batch of the authenticated driver can be accepted, once. `eventId` (UUID v7) is the idempotency key: a retry returns the original result without writing again. Requires driver role.',
+  })
+  @ApiIdParam('Route batch')
+  @ApiOkResponse({ type: AcceptRouteBatchResponseDto })
+  @ApiBadRequests({
+    validation: true,
+    id: true,
+    errors: [
+      { code: 'COTEJO_FAILURE_DUPLICATED_DISPATCH', message: 'Send one failure per dispatch.' },
+      { code: 'COTEJO_FAILURE_DISPATCH_NOT_IN_BATCH', message: 'A failure points to a dispatch outside the batch.' },
+      { code: 'COTEJO_FAILURE_PACKAGE_NOT_IN_DISPATCH', message: 'A failure points to a package outside its dispatch.' },
+      { code: 'COTEJO_PHOTO_NOT_FOUND', message: 'A failure uses a photo not uploaded for this batch.' },
+    ],
+    example: ['eventId must be a UUID', 'failures.0.photoId must be a UUID'],
+  })
+  @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+  @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
+  @ApiNotFound({ code: 'ROUTE_BATCH_NOT_FOUND', message: 'Route batch not found.' })
+  @ApiConflict(
+    { code: 'ROUTE_BATCH_NOT_CONFIRMED', message: 'The driver can only accept a confirmed batch.' },
+    { code: 'ROUTE_BATCH_ALREADY_ACCEPTED', message: 'The route batch was already accepted.' },
+    { code: 'ROUTE_ACCEPT_EVENT_ID_ALREADY_USED', message: 'This eventId was already used to accept another route batch.' },
+  )
+  async accept(
+    @Param('id', ParseIdPipe) id: number,
+    @Body() dto: AcceptRouteBatchDto,
+    @CurrentUser('id') driverId: number,
+  ): Promise<AcceptRouteBatchResponseDto> {
+    return await this.acceptService.accept(id, dto, driverId);
   }
 
   @Patch(':id/reviewer')
