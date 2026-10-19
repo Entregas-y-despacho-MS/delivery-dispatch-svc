@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DispatchOtpService } from './dispatch-otp.service.js';
 import { matchesOtp } from './domain/otp-code.js';
+import { CacheUnavailableException } from '../../plugins/cache/exceptions/index.js';
 
 function setup(overrides = {}) {
     const row = { id: 12, status: 'in_transit', evidence_policy: 'high_value_control', contact_phone: '+59170000000', driver_id: 7, ...overrides };
     const query = vi.fn(async (sql: string) => sql.trimStart().startsWith('SELECT') ? [row] : [{ dispatch_event_id: 1 }]);
     const db = { query, transaction: vi.fn(async (operation: (manager: { query: typeof query }) => Promise<unknown>) => await operation({ query })) };
-    const store = { issue: vi.fn().mockResolvedValue('issued'), readHash: vi.fn(), verify: vi.fn(), invalidate: vi.fn() };
+    const store = { issue: vi.fn().mockResolvedValue('issued'), readHash: vi.fn(), verify: vi.fn(), invalidate: vi.fn(), readVerifiedEvidenceId: vi.fn().mockResolvedValue(null) };
     const sms = { send: vi.fn().mockResolvedValue(undefined) };
     const settings = { getNumber: vi.fn(async (key: string) => key === 'otp_code_length' ? 8 : 15) };
     return { row, db, store, sms, settings, service: new DispatchOtpService(db as any, store as any, sms as any, settings as any) };
@@ -80,7 +81,7 @@ describe('delivery OTP lifecycle', () => {
         x.store.readHash.mockResolvedValue(null);
         x.store.verify.mockResolvedValue(verdict);
         expect(await x.service.verify(12, '123456')).toBe(verdict);
-        expect(x.store.verify).toHaveBeenCalledWith(12, '', false);
+        expect(x.store.verify).toHaveBeenCalledWith(12, '', false, undefined);
     });
     it('invalidates precisely the failed generation and records no provider error content', async () => {
         const x = setup();
@@ -91,5 +92,72 @@ describe('delivery OTP lifecycle', () => {
         // Failed SMS retains the issued generation's consumed budget: no compensating issue/reset.
         expect(x.store.issue).toHaveBeenCalledTimes(1);
         expect(x.store.invalidate).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('delivery OTP validation for the driver (ST-31.3)', () => {
+    it('returns the evidence id it recorded when the code is correct', async () => {
+        const x = setup();
+        x.store.readHash.mockResolvedValue('hash');
+        x.store.verify.mockResolvedValue('verified');
+        await expect(x.service.validate(12, 7, '123456', 'E1')).resolves.toEqual({ evidenceId: 'E1', alreadyConsumed: false });
+        expect(x.store.verify).toHaveBeenCalledWith(12, 'hash', false, 'E1');
+    });
+    it.each([
+        ['invalid', 422, 'OTP_INVALID'],
+        ['locked', 423, 'OTP_LOCKED'],
+        ['expired', 409, 'OTP_EXPIRED'],
+        ['replaced', 409, 'OTP_REPLACED'],
+    ])('maps the %s verdict to %i %s', async (verdict, status, code) => {
+        const x = setup();
+        x.store.readHash.mockResolvedValue(null);
+        x.store.verify.mockResolvedValue(verdict);
+        await expect(x.service.validate(12, 7, '123456', 'E1')).rejects.toMatchObject({ status, response: { error: code } });
+    });
+    it('hands back the recorded evidence id of a consumed code so an unfinished registration can be completed', async () => {
+        const x = setup();
+        x.store.readHash.mockResolvedValue(null);
+        x.store.verify.mockResolvedValue('consumed');
+        x.store.readVerifiedEvidenceId.mockResolvedValue('earlier-id');
+        await expect(x.service.validate(12, 7, '123456', 'E1')).resolves.toEqual({ evidenceId: 'earlier-id', alreadyConsumed: true });
+    });
+    it('answers 409 OTP_CONSUMED when the consumed code has no recorded evidence id', async () => {
+        const x = setup();
+        x.store.readHash.mockResolvedValue(null);
+        x.store.verify.mockResolvedValue('consumed');
+        await expect(x.service.validate(12, 7, '123456', 'E1')).rejects.toMatchObject({ status: 409, response: { error: 'OTP_CONSUMED' } });
+    });
+    it('answers 503 when the store is down while reading the recorded id', async () => {
+        const x = setup();
+        x.store.readHash.mockResolvedValue(null);
+        x.store.verify.mockResolvedValue('consumed');
+        x.store.readVerifiedEvidenceId.mockRejectedValue(new CacheUnavailableException());
+        await expect(x.service.validate(12, 7, '123456', 'E1')).rejects.toMatchObject({ status: 503 });
+    });
+    it('runs the dispatch lookup on the caller\'s transaction when it gets one', async () => {
+        const x = setup();
+        const manager = { query: vi.fn(async () => [x.row]) };
+        x.store.readHash.mockResolvedValue(null);
+        x.store.verify.mockResolvedValue('invalid');
+        await expect(x.service.validate(12, 7, '123456', 'E1', manager as any)).rejects.toMatchObject({ status: 422 });
+        expect(manager.query).toHaveBeenCalledTimes(1);
+        expect(x.db.query).not.toHaveBeenCalled();
+    });
+    it('does not touch the code when the dispatch is not the driver\'s', async () => {
+        const x = setup();
+        await expect(x.service.validate(12, 99, '123456', 'E1')).rejects.toMatchObject({ status: 403 });
+        expect(x.store.verify).not.toHaveBeenCalled();
+    });
+    it.each([{ status: 'delivered' }, { evidence_policy: 'hand_delivery_standard' }])('does not check a code outside applicability %j', async (override) => {
+        const x = setup(override);
+        await expect(x.service.validate(12, 7, '123456', 'E1')).rejects.toMatchObject({ status: 409, response: { error: 'OTP_NOT_APPLICABLE' } });
+        expect(x.store.verify).not.toHaveBeenCalled();
+    });
+    it('records a retry-validate marker when the evidence of a spent code was not saved', async () => {
+        const x = setup();
+        await x.service.markEvidenceNotSaved(12);
+        const insert = x.db.query.mock.calls.find(([sql]: [string]) => sql.includes('INSERT INTO dispatch_events')) ?? x.db.transaction.mock.calls.length;
+        expect(insert).toBeTruthy();
+        expect(JSON.stringify(x.db.query.mock.calls)).toContain('otp_evidence_not_saved');
     });
 });

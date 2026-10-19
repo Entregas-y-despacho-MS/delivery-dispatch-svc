@@ -56,6 +56,20 @@ describe.skipIf(!port)('OTP atomic store against disposable Redis', () => {
         expect(results.filter((r) => r === 'consumed')).toHaveLength(9);
         expect(await store.issue(n, 'again', 20, true)).toBe('consumed');
     });
+    it('records the evidence id with the consumption and never overwrites it', async () => {
+        const n = id();
+        await store.issue(n, 'hash', 20);
+        expect(await store.readVerifiedEvidenceId(n)).toBeNull();
+        expect(await store.verify(n, 'hash', false, 'ignored-on-failure')).toBe('invalid');
+        expect(await store.readVerifiedEvidenceId(n)).toBeNull();
+        const results = await Promise.all(['e1', 'e2', 'e3', 'e4'].map((evidenceId) => store.verify(n, 'hash', true, evidenceId)));
+        expect(results.filter((r) => r === 'verified')).toHaveLength(1);
+        const recorded = await store.readVerifiedEvidenceId(n);
+        expect(['e1', 'e2', 'e3', 'e4']).toContain(recorded);
+        expect(await store.verify(n, 'hash', true, 'late')).toBe('consumed');
+        expect(await store.readVerifiedEvidenceId(n)).toBe(recorded);
+        expect(await client.ttl(`dispatch-otp:{${n}}:limits`)).toBe(-1);
+    });
     it('resets code TTL on resend and leaves budget metadata without TTL', async () => {
         const n = id();
         await store.issue(n, 'old', 1);

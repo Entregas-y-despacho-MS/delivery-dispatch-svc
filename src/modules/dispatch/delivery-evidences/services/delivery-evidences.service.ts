@@ -11,6 +11,11 @@ export interface CreateDeliveryEvidenceData {
     type:        string;
     fileUrl?:    string | null;
     otpCode?:    string | null;
+    capturedAt?:       Date | null;
+    latitude?:         number | null;
+    longitude?:        number | null;
+    receiverName?:     string | null;
+    receiverDocument?: string | null;
     /** When set, backdates createdAt to when the evidence was actually captured on the device. */
     occurredAt?: Date;
 }
@@ -29,11 +34,20 @@ export class DeliveryEvidencesService {
         return repo.existsBy({ id });
     }
 
+    async findById(id: string, options?: MutationOptions): Promise<DeliveryEvidence | null> {
+        const repo = options?.manager?.getRepository(DeliveryEvidence) ?? this.rawRepo;
+        return repo.findOneBy({ id });
+    }
+
     async existsByDispatchAndType(dispatchId: number, type: string, options?: MutationOptions): Promise<boolean> {
         const repo = options?.manager?.getRepository(DeliveryEvidence) ?? this.rawRepo;
         return repo.existsBy({ dispatchId, type });
     }
 
+    /**
+     * Inserts the evidence and never updates an existing one: a second insert with the same id fails with a unique
+     * violation (23505) instead of overwriting the first record's dispatch, file or receiver.
+     */
     async create(data: CreateDeliveryEvidenceData, options?: MutationOptions): Promise<DeliveryEvidence> {
         const repo = options?.manager?.getRepository(DeliveryEvidence) ?? this.rawRepo;
         const evidence = repo.create({
@@ -42,8 +56,14 @@ export class DeliveryEvidencesService {
             type:        data.type,
             fileUrl:     data.fileUrl ?? null,
             otpCode:     data.otpCode ?? null,
+            capturedAt:       data.capturedAt ?? null,
+            latitude:         data.latitude ?? null,
+            longitude:        data.longitude ?? null,
+            receiverName:     data.receiverName ?? null,
+            receiverDocument: data.receiverDocument ?? null,
             ...(data.occurredAt && { createdAt: data.occurredAt }),
         });
-        return repo.save(evidence);
+        await repo.insert(evidence);
+        return repo.findOneByOrFail({ id: data.id });
     }
 }

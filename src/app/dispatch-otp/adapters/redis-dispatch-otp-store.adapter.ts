@@ -27,7 +27,7 @@ local hash=redis.call('GET',KEYS[2])
 if not hash then return 'expired' end
 if hash~=ARGV[1] then return 'replaced' end
 if ARGV[2]=='1' then
- redis.call('HSET',KEYS[1],'consumed',1)
+ redis.call('HSET',KEYS[1],'consumed',1,'evidence_id',ARGV[3])
  redis.call('DEL',KEYS[2])
  return 'verified'
 end
@@ -75,10 +75,15 @@ export class RedisDispatchOtpStore extends DispatchOtpStore implements OnModuleI
         return await this.guard(async () => await this.client.get(keys(dispatchId)[1]));
     }
 
-    async verify(dispatchId: number, expectedHash: string, matches: boolean): Promise<OtpVerifyResult> {
+    async verify(dispatchId: number, expectedHash: string, matches: boolean, evidenceId = ''): Promise<OtpVerifyResult> {
         return await this.guard(async () => await this.client.eval(VERIFY, {
-            keys: keys(dispatchId), arguments: [expectedHash, matches ? '1' : '0'],
+            keys: keys(dispatchId), arguments: [expectedHash, matches ? '1' : '0', evidenceId],
         }) as OtpVerifyResult);
+    }
+
+    async readVerifiedEvidenceId(dispatchId: number): Promise<string | null> {
+        const value = await this.guard(async () => await this.client.hGet(keys(dispatchId)[0], 'evidence_id'));
+        return value ? value : null;
     }
 
     private async guard<T>(operation: () => Promise<T>): Promise<T> {

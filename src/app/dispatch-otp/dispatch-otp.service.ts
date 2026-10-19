@@ -1,13 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
+import { DataSource, EntityManager } from 'typeorm';
 import { SettingsService } from '../../modules/settings/services/settings.service.js';
 import { DispatchNotFoundException } from '../../modules/dispatch/dispatches/exceptions/dispatch-not-found.exception.js';
 import { SmsSender } from '../../plugins/sms/sms.port.js';
 import { CacheUnavailableException } from '../../plugins/cache/exceptions/index.js';
 import { DispatchOtpStore } from './ports/dispatch-otp-store.port.js';
 import { createOtp, matchesOtp, otpOptions, OTP_CODE_LENGTH_KEY, OTP_EXPIRY_MINUTES_KEY } from './domain/otp-code.js';
-import { DispatchOtpException } from './exceptions/dispatch-otp.exception.js';
+import { DispatchOtpException, OTP_CONSUMED_MESSAGE } from './exceptions/dispatch-otp.exception.js';
 
 interface DispatchContact {
     id: number;
@@ -15,6 +15,23 @@ interface DispatchContact {
     evidence_policy: string;
     status: string;
     driver_id: number | null;
+}
+
+// What the driver's app is told for each way a code can fail. The third wrong code answers `locked`,
+// like every attempt after it: only an incident (ES-32) lets Dispatch authorize that delivery.
+const VERIFY_FAILURES: Record<string, { code: string; message: string; status: number }> = {
+    invalid:  { code: 'OTP_INVALID',  message: 'The code is incorrect.', status: 422 },
+    locked:   { code: 'OTP_LOCKED',   message: 'Too many failed attempts. Report an incident (ES-32) so Dispatch can authorize the delivery.', status: 423 },
+    expired:  { code: 'OTP_EXPIRED',  message: 'The code expired or was never sent. Request a resend.', status: 409 },
+    replaced: { code: 'OTP_REPLACED', message: 'A newer code was sent. Ask the customer for the latest one.', status: 409 },
+    consumed: { code: 'OTP_CONSUMED', message: OTP_CONSUMED_MESSAGE, status: 409 },
+};
+
+/** What a validation settled: the evidence id the OTP evidence must have, and whether the code was already spent before. */
+export interface OtpValidation {
+    evidenceId: string;
+    /** True when an earlier validation consumed the code but never finished saving its evidence: this call completes it. */
+    alreadyConsumed: boolean;
 }
 
 @Injectable()
@@ -30,6 +47,14 @@ export class DispatchOtpService {
 
     async markProcessingFailure(dispatchId: number): Promise<void> {
         await this.record(dispatchId, 'otp_resolution_required', { reason: 'otp_processing_failed', recovery: 'controlled_resend' });
+    }
+
+    /**
+     * The code was consumed but its evidence could not be saved. The same driver completes it by sending the code again
+     * (`validate` finds the recorded evidence id); this marker is what Dispatch sees if that does not happen.
+     */
+    async markEvidenceNotSaved(dispatchId: number): Promise<void> {
+        await this.record(dispatchId, 'otp_resolution_required', { reason: 'otp_evidence_not_saved', recovery: 'retry_validate' });
     }
 
     async onInTransit(dispatchId: number): Promise<void> {
@@ -50,19 +75,52 @@ export class DispatchOtpService {
         return result;
     }
 
-    /** Integration seam for ST-31.3; no delivery-evidence or public verification endpoint is added here. */
-    async verify(dispatchId: number, code: string): Promise<string> {
+    /**
+     * Checks the code the customer gave the assigned driver (ST-31.3). Returns only when it is correct, and by then it is
+     * consumed (one use) with `evidenceId` recorded next to it; every other verdict is an error the driver's app can tell
+     * apart. It registers nothing. A code already consumed whose evidence id was recorded returns that id with
+     * `alreadyConsumed`, so the caller can finish a registration that failed halfway (or reject a true second use).
+     * `manager` runs the dispatch lookup on the caller's transaction instead of taking another connection.
+     */
+    async validate(dispatchId: number, driverId: number, code: string, evidenceId: string, manager?: EntityManager): Promise<OtpValidation> {
+        const row = await this.contact(dispatchId, manager);
+        if (!row) throw new DispatchNotFoundException();
+        if (row.driver_id !== driverId) throw new DispatchOtpException('INSUFFICIENT_PERMISSIONS', 'Dispatch is not assigned to your route.', 403);
+        if (row.status !== 'in_transit' || row.evidence_policy !== 'high_value_control') {
+            throw new DispatchOtpException('OTP_NOT_APPLICABLE', 'OTP requires an in-transit high-value dispatch.');
+        }
+        const verdict = await this.verify(dispatchId, code, evidenceId);
+        if (verdict === 'verified') return { evidenceId, alreadyConsumed: false };
+        if (verdict === 'consumed') {
+            const recorded = await this.readVerifiedEvidenceId(dispatchId);
+            if (recorded) return { evidenceId: recorded, alreadyConsumed: true };
+        }
+        const failure = VERIFY_FAILURES[verdict] ?? VERIFY_FAILURES.invalid;
+        throw new DispatchOtpException(failure.code, failure.message, failure.status);
+    }
+
+    /** The raw verdict of the atomic Redis check. Prefer `validate`, which also checks the driver and the dispatch. */
+    async verify(dispatchId: number, code: string, evidenceId?: string): Promise<string> {
         try {
             const hash = await this.store.readHash(dispatchId);
-            return await this.store.verify(dispatchId, hash ?? '', hash !== null && await matchesOtp(code, hash));
+            return await this.store.verify(dispatchId, hash ?? '', hash !== null && await matchesOtp(code, hash), evidenceId);
         } catch (error) {
             if (error instanceof CacheUnavailableException) throw new DispatchOtpException('OTP_UNAVAILABLE', 'OTP is temporarily unavailable.', 503);
             throw error;
         }
     }
 
-    private async contact(dispatchId: number): Promise<DispatchContact | undefined> {
-        const [row]: DispatchContact[] = await this.dataSource.query(
+    private async readVerifiedEvidenceId(dispatchId: number): Promise<string | null> {
+        try {
+            return await this.store.readVerifiedEvidenceId(dispatchId);
+        } catch (error) {
+            if (error instanceof CacheUnavailableException) throw new DispatchOtpException('OTP_UNAVAILABLE', 'OTP is temporarily unavailable.', 503);
+            throw error;
+        }
+    }
+
+    private async contact(dispatchId: number, manager?: EntityManager): Promise<DispatchContact | undefined> {
+        const [row]: DispatchContact[] = await (manager ?? this.dataSource).query(
             `SELECT d.dispatch_id AS id, d.contact_phone, d.evidence_policy, ds.name AS status, b.driver_id
              FROM dispatches d JOIN dispatch_statuses ds ON ds.dispatch_status_id = d.dispatch_status_id
              LEFT JOIN route_batches b ON b.route_batch_id = d.route_batch_id

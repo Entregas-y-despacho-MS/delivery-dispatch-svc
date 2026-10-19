@@ -5,3 +5,5 @@ export class DispatchOtpException extends HttpException {
         super({ error: code, message }, status);
     }
 }
+
+export const OTP_CONSUMED_MESSAGE = 'The code was already used.';
