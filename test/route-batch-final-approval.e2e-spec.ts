@@ -126,7 +126,15 @@ describe('POST /route-batches/:id/approve-final (e2e)', () => {
       .toEqual(expect.arrayContaining([expect.objectContaining({ event_type: 'final_approved' })]));
     expect(await db.query(`SELECT event_type FROM dispatch_events WHERE dispatch_id = $1`, [dispatchId]))
       .toEqual(expect.arrayContaining([expect.objectContaining({ event_type: 'assigned' })]));
-    expect(emitted).toHaveBeenCalledWith(ROUTE_ASSIGNED_EVENT, { routeId: routeBatchId, driverId, vehicleId, dispatchIds: [dispatchId], version: 5 });
+    expect(emitted).toHaveBeenCalledWith(ROUTE_ASSIGNED_EVENT, {
+      routeId: routeBatchId,
+      driverId,
+      vehicleId,
+      dispatchIds: [dispatchId],
+      dispatches: [{ dispatchId, priority: 'normal' }],
+      zoneName: 'Zona sin especificar',
+      version: 5,
+    });
   });
 
   it('rejects a load above capacity without changing the batch', async () => {

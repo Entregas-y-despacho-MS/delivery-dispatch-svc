@@ -5,7 +5,15 @@ const SETTINGS: Record<string, string> = {
     plan_working_days: '1,2,3,4,5', plan_non_working_dates: '',
     final_review_end_time: '16:00', route_reminder_time: '16:30', final_review_escalation_time: '07:00',
 };
-const EVENT = { routeId: 11, driverId: 4, vehicleId: 2, dispatchIds: [1, 2], version: 3 };
+const EVENT = {
+    routeId: 11,
+    driverId: 4,
+    vehicleId: 2,
+    dispatchIds: [1, 2],
+    dispatches: [{ dispatchId: 1, priority: 'normal' }, { dispatchId: 2, priority: 'urgent' }],
+    zoneName: 'Centro',
+    version: 3,
+};
 
 function build(batch: { routeBatchId: number; status: string; shiftDate: string } | null, settings: Record<string, string> = SETTINGS) {
     const settingsService = { getString: vi.fn(async (key: string) => settings[key] ?? '') };
