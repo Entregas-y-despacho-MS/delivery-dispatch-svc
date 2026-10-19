@@ -86,5 +86,8 @@ export class FindDispatchHistoryParamsDto extends IntersectionType(
     PaginationParamsDto,
 ) {}
 
-/** The CSV export: the same filters and sort as the listing, never paginated. */
-export class ExportDispatchHistoryParamsDto extends IntersectionType(DispatchHistoryFiltersDto, DispatchHistorySortDto) {}
+/**
+ * The CSV export: the same filters and sort as the listing, never paginated. It also accepts `page` and `limit`
+ * (and ignores them) so the screen can send the query it already has and download exactly what it is showing.
+ */
+export class ExportDispatchHistoryParamsDto extends FindDispatchHistoryParamsDto {}

@@ -1,8 +1,9 @@
-import { Controller, Get, Query } from '@nestjs/common';
-import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Controller, Get, Query, StreamableFile } from '@nestjs/common';
+import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiProduces, ApiTags } from '@nestjs/swagger';
 import { DispatchHistoryService } from '../services/dispatch-history.service.js';
-import { FindDispatchHistoryParamsDto } from '../dto/find-dispatch-history-params.dto.js';
+import { ExportDispatchHistoryParamsDto, FindDispatchHistoryParamsDto } from '../dto/find-dispatch-history-params.dto.js';
 import { FindDispatchHistoryResponseDto } from '../dto/dispatch-history.dto.js';
+import { todayInOperatingTimeZone } from '../../dispatches/utils/operating-date.util.js';
 import { Roles } from '../../../../app/auth/decorators/index.js';
 import { RoleEnum } from '../../../../shared/enums/index.js';
 import { ApiBadRequests, ApiForbidden, ApiUnauthorized } from '../../../../shared/utils/swagger/index.js';
@@ -35,5 +36,31 @@ export class DispatchHistoryController {
     @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
     async findAll(@Query() params: FindDispatchHistoryParamsDto): Promise<FindDispatchHistoryResponseDto> {
         return await this.history.findAll(params);
+    }
+
+    // Declared in the same controller as the listing; `export` is a fixed segment, so it never competes with an `:id`.
+    @Get('export')
+    @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
+    @ApiOperation({
+        summary:     'Export the history of finished dispatches as CSV',
+        description: "Downloads, as a CSV file, every dispatch that matches the same filters and sort as `GET /dispatches/history` (`from`, `to`, `driverId`, `plate`, `status`, `search`, `sortBy`, `order`), without pagination: `page` and `limit` are accepted so the screen can send the query it already has, and are ignored. The file is UTF-8 with a byte-order mark (so Excel reads the accents), comma-separated, with CRLF line ends and one header row: `Código de traslado`, `Cliente`, `Repartidor`, `Vehículo`, `Hora de partida`, `Hora de entrega`, `Estado`. Times are ISO 8601 in Bolivia time with their offset (e.g. `2026-10-10T11:30:00-04:00`); `Hora de entrega` is empty unless the status is `delivered`; `Estado` is the status code. A cell that starts with `=`, `+`, `-` or `@` is prefixed with a quote so a spreadsheet never runs it as a formula. The rows are streamed as they are read, so a large history does not load in memory. Invalid filters answer 400 before anything is sent. Requires coordinator or supervisor role, or root.",
+    })
+    @ApiProduces('text/csv')
+    @ApiOkResponse({
+        description: 'The CSV file (`Content-Disposition: attachment; filename="historial-despachos-YYYY-MM-DD.csv"`).',
+        content: { 'text/csv': { schema: { type: 'string', format: 'binary' } } },
+    })
+    @ApiBadRequests({
+        validation: true,
+        errors: [{ code: 'INVALID_DATE_RANGE', message: "The 'from' date must not be after the 'to' date." }],
+        example: ["The 'from' parameter must be a valid date in YYYY-MM-DD format.", "The 'status' parameter must be one of: delivered, not_delivered, returned, returned_to_warehouse, cancelled."],
+    })
+    @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+    @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
+    exportCsv(@Query() params: ExportDispatchHistoryParamsDto): StreamableFile {
+        return new StreamableFile(this.history.exportCsv(params), {
+            type: 'text/csv; charset=utf-8',
+            disposition: `attachment; filename="historial-despachos-${todayInOperatingTimeZone()}.csv"`,
+        });
     }
 }
