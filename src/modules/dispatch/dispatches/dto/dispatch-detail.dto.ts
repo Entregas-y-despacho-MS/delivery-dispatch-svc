@@ -1,4 +1,12 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { applyDecorators } from '@nestjs/common';
+import { ApiExtraModels, ApiProperty, ApiPropertyOptional, getSchemaPath } from '@nestjs/swagger';
+
+// A nested object that can be null. `type: Dto, nullable: true` is published as a bare "object", so the
+// schema is referenced with allOf instead (Swagger shows it as the DTO, nullable).
+const NullableRef = (dto: new () => object, description: string) => applyDecorators(
+    ApiExtraModels(dto),
+    ApiPropertyOptional({ nullable: true, allOf: [{ $ref: getSchemaPath(dto) }], description }),
+);
 
 export class DispatchDetailRefDto {
     @ApiProperty({ type: 'integer', example: 1, description: 'Id of the catalog row' })
@@ -50,7 +58,7 @@ export class DispatchDetailDestinationDto {
     @ApiPropertyOptional({ type: String, nullable: true, example: '+59170000000', description: 'Contact phone; `null` if none' })
     contactPhone!: string | null;
 
-    @ApiPropertyOptional({ type: DispatchDetailRefDto, nullable: true, description: 'Delivery zone; `null` when the dispatch type has none' })
+    @NullableRef(DispatchDetailRefDto, 'Delivery zone; `null` when the dispatch type has none')
     zone!: DispatchDetailRefDto | null;
 }
 
@@ -89,10 +97,10 @@ export class DispatchDetailRouteDto {
     @ApiPropertyOptional({ type: 'integer', nullable: true, example: 2, description: 'Visit order of this dispatch within the route; `null` if not sequenced' })
     sequenceOrder!: number | null;
 
-    @ApiPropertyOptional({ type: DispatchDetailUserDto, nullable: true, description: 'Driver of the route; `null` until assigned' })
+    @NullableRef(DispatchDetailUserDto, 'Driver of the route; `null` until assigned')
     driver!: DispatchDetailUserDto | null;
 
-    @ApiPropertyOptional({ type: DispatchDetailVehicleDto, nullable: true, description: 'Vehicle of the route; `null` until assigned' })
+    @NullableRef(DispatchDetailVehicleDto, 'Vehicle of the route; `null` until assigned')
     vehicle!: DispatchDetailVehicleDto | null;
 }
 
@@ -124,7 +132,7 @@ export class DispatchDetailEventDto {
     @ApiPropertyOptional({ type: String, nullable: true, enum: ['user', 'system', 'customer'], description: 'Who originated the event; `null` for old events with no recorded author' })
     actorType!: string | null;
 
-    @ApiPropertyOptional({ type: DispatchDetailUserDto, nullable: true, description: 'Operator who originated the event; `null` when it was the system, the customer or unknown' })
+    @NullableRef(DispatchDetailUserDto, 'Operator who originated the event; `null` when it was the system, the customer or unknown')
     operator!: DispatchDetailUserDto | null;
 }
 
@@ -158,7 +166,7 @@ export class DispatchDetailRescheduleDto {
     @ApiProperty({ type: String, enum: ['customer', 'coordinator', 'system'], description: 'Who asked for the change' })
     rescheduledByType!: string;
 
-    @ApiPropertyOptional({ type: DispatchDetailUserDto, nullable: true, description: 'User who made the change; `null` when it was the customer or the system' })
+    @NullableRef(DispatchDetailUserDto, 'User who made the change; `null` when it was the customer or the system')
     rescheduledBy!: DispatchDetailUserDto | null;
 
     @ApiPropertyOptional({ type: 'integer', nullable: true, description: 'Route batch before the change; `null` if there was none' })
@@ -231,7 +239,7 @@ export class DispatchDetailDto {
     @ApiProperty({ type: String, enum: ['urgent', 'normal'], description: 'Priority of the dispatch' })
     priority!: string;
 
-    @ApiPropertyOptional({ type: DispatchDetailRefDto, nullable: true, description: 'Service level; `null` if none' })
+    @NullableRef(DispatchDetailRefDto, 'Service level; `null` if none')
     serviceLevel!: DispatchDetailRefDto | null;
 
     @ApiProperty({ type: String, example: 'hand_delivery_standard', description: 'Evidence policy the delivery had to meet' })
@@ -255,10 +263,10 @@ export class DispatchDetailDto {
     @ApiProperty({ type: [DispatchDetailPackageDto], description: 'Packages of the dispatch' })
     packages!: DispatchDetailPackageDto[];
 
-    @ApiPropertyOptional({ type: DispatchDetailRouteDto, nullable: true, description: 'Route, driver and vehicle; `null` while the dispatch is not assigned to a route' })
+    @NullableRef(DispatchDetailRouteDto, 'Route, driver and vehicle; `null` while the dispatch is not assigned to a route')
     route!: DispatchDetailRouteDto | null;
 
-    @ApiPropertyOptional({ type: DispatchDetailEvidenceDto, nullable: true, description: 'Signature evidence that carries the receiver, i.e. who got the order; `null` if nobody has signed' })
+    @NullableRef(DispatchDetailEvidenceDto, 'Signature evidence that carries the receiver, i.e. who got the order; `null` if nobody has signed')
     receiver!: DispatchDetailEvidenceDto | null;
 
     @ApiProperty({ type: [DispatchDetailEventDto], description: 'Timeline, oldest first' })
