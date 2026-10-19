@@ -11,6 +11,11 @@ export interface CreateDeliveryEvidenceData {
     type:        string;
     fileUrl?:    string | null;
     otpCode?:    string | null;
+    capturedAt?:       Date | null;
+    latitude?:         number | null;
+    longitude?:        number | null;
+    receiverName?:     string | null;
+    receiverDocument?: string | null;
     /** When set, backdates createdAt to when the evidence was actually captured on the device. */
     occurredAt?: Date;
 }
@@ -42,6 +47,11 @@ export class DeliveryEvidencesService {
             type:        data.type,
             fileUrl:     data.fileUrl ?? null,
             otpCode:     data.otpCode ?? null,
+            capturedAt:       data.capturedAt ?? null,
+            latitude:         data.latitude ?? null,
+            longitude:        data.longitude ?? null,
+            receiverName:     data.receiverName ?? null,
+            receiverDocument: data.receiverDocument ?? null,
             ...(data.occurredAt && { createdAt: data.occurredAt }),
         });
         return repo.save(evidence);
