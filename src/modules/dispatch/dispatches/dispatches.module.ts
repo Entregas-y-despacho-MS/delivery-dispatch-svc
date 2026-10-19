@@ -2,6 +2,11 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Dispatch } from './entities/dispatch.entity.js';
 import { DispatchesService } from './services/dispatches.service.js';
+import { DispatchDetailService } from './services/dispatch-detail.service.js';
+import { DispatchEvent } from '../dispatch-events/entities/dispatch-event.entity.js';
+import { DispatchIncident } from '../dispatch-incidents/entities/dispatch-incident.entity.js';
+import { DispatchReschedule } from '../dispatch-reschedules/entities/dispatch-reschedule.entity.js';
+import { DeliveryEvidence } from '../delivery-evidences/entities/delivery-evidence.entity.js';
 import { DispatchPriorityService } from './services/dispatch-priority.service.js';
 import { DispatchesController } from './controllers/dispatches.controller.js';
 import { DispatchType } from '../dispatch-types/entities/dispatch-type.entity.js';
@@ -23,10 +28,10 @@ import { RouteBatchEvent } from '../route-batches/entities/route-batch-event.ent
 // DeliveryZone isn't listed here — already registered by DeliveryZonesModule.
 @Module({
     imports: [
-        TypeOrmModule.forFeature([Dispatch, DispatchPackage, DispatchType, DispatchStatus, ServiceLevel, RouteBatch, RouteBatchEvent, Vehicle, VehicleStatus]),
+        TypeOrmModule.forFeature([Dispatch, DispatchPackage, DispatchType, DispatchStatus, ServiceLevel, RouteBatch, RouteBatchEvent, Vehicle, VehicleStatus, DispatchEvent, DispatchIncident, DispatchReschedule, DeliveryEvidence]),
     ],
     controllers: [DispatchesController],
-    providers: [DispatchesService, DispatchPriorityService, { provide: DispatchGenerator, useClass: TypeOrmDispatchGenerator }],
+    providers: [DispatchesService, DispatchPriorityService, DispatchDetailService, { provide: DispatchGenerator, useClass: TypeOrmDispatchGenerator }],
     exports:   [DispatchesService, DispatchGenerator],
 })
 export class DispatchesModule {}

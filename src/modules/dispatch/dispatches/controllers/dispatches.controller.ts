@@ -1,6 +1,8 @@
 import { Body, Controller, Get, Param, Patch, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { DispatchesService } from '../services/dispatches.service.js';
+import { DispatchDetailService } from '../services/dispatch-detail.service.js';
+import { DispatchDetailDto } from '../dto/dispatch-detail.dto.js';
 import { DispatchPriorityService } from '../services/dispatch-priority.service.js';
 import { FindDriverAssignmentsParamsDto } from '../dto/find-driver-assignments-params.dto.js';
 import { DriverAssignmentsResponseDto } from '../dto/driver-assignments-response.dto.js';
@@ -16,6 +18,7 @@ import { ApiBadRequests, ApiConflict, ApiForbidden, ApiIdParam, ApiNotFound, Api
 /**
  * RF-U02 — "Mi Jornada": the stops the driver has to visit today, in the order Dispatch decided.
  * RF-A11 — manual change of a dispatch's priority.
+ * RF-A09 — unified 360° view of a dispatch.
  *
  * Error dictionary: VALIDATION_FAILED 400 (invalid `date` / `priority` / `:id`) | INVALID_TOKEN 401 |
  * INSUFFICIENT_PERMISSIONS 403 | DISPATCH_NOT_FOUND 404 | DISPATCH_PRIORITY_NOT_CHANGEABLE 409.
@@ -27,6 +30,7 @@ export class DispatchesController {
     constructor(
         private readonly dispatchesService: DispatchesService,
         private readonly priorityService: DispatchPriorityService,
+        private readonly detailService: DispatchDetailService,
     ) {}
 
     @Get('my-assignments')
@@ -41,6 +45,22 @@ export class DispatchesController {
     @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
     async findMyAssignments(@Query() params: FindDriverAssignmentsParamsDto, @CurrentUser('id') driverId: number): Promise<DriverAssignmentsResponseDto> {
         return await this.dispatchesService.findDriverAssignments(driverId, params.date ?? todayInOperatingTimeZone());
+    }
+
+    @Get(':id/detail')
+    @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
+    @ApiOperation({
+        summary:     'Unified 360° view of a dispatch (RF-A09)',
+        description: "Returns in one response the dispatch and its destination, packages, the driver and vehicle of its route, the timeline (`dispatch_events`, oldest first, with time, status, coordinates and operator), the incidents, the reschedules and the delivery evidence. Evidence files are never returned by their stored path: each one carries `accessUrl`, a signed URL that stops working at `accessUrlExpiresAt` (5 minutes); call this endpoint again to get a new one. An event shows `latitude`/`longitude` only if it recorded them, otherwise `null`. A dispatch with no evidence answers 200 with an empty `evidences` list. The number of queries does not depend on how many events or evidences the dispatch has. Requires coordinator or supervisor role, or root.",
+    })
+    @ApiIdParam('Dispatch')
+    @ApiOkResponse({ type: DispatchDetailDto })
+    @ApiBadRequests({ id: true })
+    @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+    @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
+    @ApiNotFound({ code: 'DISPATCH_NOT_FOUND', message: 'Dispatch not found.' })
+    async findDetail(@Param('id', ParseIdPipe) id: number): Promise<DispatchDetailDto> {
+        return await this.detailService.findDetail(id);
     }
 
     @Patch(':id/priority')
