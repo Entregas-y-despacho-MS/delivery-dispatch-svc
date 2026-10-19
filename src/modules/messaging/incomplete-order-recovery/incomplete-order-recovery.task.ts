@@ -6,8 +6,6 @@ import { ScheduledTaskRegistry } from '../../../app/scheduler/services/scheduled
 import { MessageBus } from '../../../plugins/messaging/message-bus.port.js';
 import { buildEnvelope } from '../../../plugins/messaging/envelope/message-envelope.js';
 import { SettingsService } from '../../settings/services/settings.service.js';
-import type { ChangeRequiresAttention } from '../sales-order-intake/ports/existing-dispatch-changes.port.js';
-import { DISPATCH_CHANGE_REQUIRES_ATTENTION } from '../sales-order-intake/services/dispatch-change-events.service.js';
 
 const TASK_NAME = 'incomplete-order-recovery';
 const RETRY_INTERVAL_MINUTES = 15;
@@ -39,12 +37,12 @@ interface RecoveryProgress {
   alerted: boolean;
 }
 
-type RecoveryAlert = Required<
-  Pick<
-    ChangeRequiresAttention,
-    'salesOrderId' | 'source' | 'receivedAt' | 'changeType'
-  >
->;
+interface RecoveryAlert {
+  salesOrderId: string;
+  missingSource: RecoverySource;
+  attempts: number;
+  detectedAt: string;
+}
 
 @Injectable()
 export class IncompleteOrderRecoveryTask implements OnModuleInit {
@@ -118,7 +116,7 @@ export class IncompleteOrderRecoveryTask implements OnModuleInit {
   ): Promise<void> {
     try {
       const delivered = this.events.emit(
-        DISPATCH_CHANGE_REQUIRES_ATTENTION,
+        'integration.order_incomplete',
         alert,
       );
       if (delivered) return;
@@ -245,9 +243,9 @@ export class IncompleteOrderRecoveryTask implements OnModuleInit {
   private toAlert(candidate: RecoveryCandidate, now: Date): RecoveryAlert {
     return {
       salesOrderId: candidate.sales_order_id,
-      source: candidate.source,
-      changeType: 'incomplete_order',
-      receivedAt: now.toISOString(),
+      missingSource: candidate.source,
+      attempts: MAX_ATTEMPTS,
+      detectedAt: now.toISOString(),
     };
   }
 }

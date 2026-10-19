@@ -1,17 +1,18 @@
 import { Injectable } from '@nestjs/common';
-import { OnEvent } from '@nestjs/event-emitter';
+import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { DispatchesService } from '../../../modules/dispatch/dispatches/services/dispatches.service.js';
 import { SocketService } from '../../../plugins/socket/socket.service.js';
 import { SOCKET_CONNECTED_EVENT } from '../../../plugins/socket/events/socket-connected.event.js';
 import type { SocketConnectedEvent } from '../../../plugins/socket/events/socket-connected.event.js';
 import { RoleEnum } from '../../../shared/enums/index.js';
+import { dispatchRoleRooms } from '../../dispatch-events/dispatch-events.socket-listener.js';
 import { LocationPointDto } from '../dto/location-point.dto.js';
 import { LocationReportOutcome, LocationReportResultDto, LocationsReportResultDto } from '../dto/location-report-result.dto.js';
 
 // Everyone who watches the live dispatch board (RF-A06/A13) — auto-joined on connect, see
 // handleSocketConnected() below. The plugin itself never sees this name or this role list.
 export const DISPATCH_BOARD_ROOM = 'dispatch-board';
-const DISPATCH_BOARD_ROLES: RoleEnum[] = [RoleEnum.ROOT, RoleEnum.ADMIN, RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR];
+const DISPATCH_BOARD_ROLES: RoleEnum[] = [RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR];
 
 // A device clock is never exact, but a point from the future is not a real one — it would win the
 // "newest wins" guardrail forever, blocking every real point that comes after it.
@@ -27,14 +28,14 @@ export class TrackingService {
     constructor(
         private readonly dispatchesService: DispatchesService,
         private readonly socketService:     SocketService,
+        private readonly events: EventEmitter2,
     ) {}
 
     /** Who gets to see the live map — the socket plugin has no idea this room or this rule exist. */
     @OnEvent(SOCKET_CONNECTED_EVENT)
-    handleSocketConnected({ socketId, role }: SocketConnectedEvent): void {
-        if (DISPATCH_BOARD_ROLES.includes(role)) {
-            this.socketService.joinRoom(socketId, DISPATCH_BOARD_ROOM);
-        }
+    handleSocketConnected({ socketId, role, userId }: SocketConnectedEvent): void {
+        if (DISPATCH_BOARD_ROLES.includes(role)) this.socketService.joinRoom(socketId, DISPATCH_BOARD_ROOM);
+        for (const room of dispatchRoleRooms(role, userId)) this.socketService.joinRoom(socketId, room);
     }
 
     /**
@@ -72,7 +73,7 @@ export class TrackingService {
         });
         if (!applied) return { dispatchId: point.dispatchId, outcome: LocationReportOutcome.STALE };
 
-        this.socketService.emitToRoom(DISPATCH_BOARD_ROOM, 'dispatch.location.updated', {
+        this.events.emit('dispatch.location.updated', {
             dispatchId: point.dispatchId,
             latitude:   point.latitude,
             longitude:  point.longitude,
