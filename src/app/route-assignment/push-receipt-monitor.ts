@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Cron } from '@nestjs/schedule';
 import { PushTokensService } from '../../modules/auth/push-tokens/services/push-tokens.service.js';
 import { PushPort, type PushReceiptReference } from '../../plugins/push/push.port.js';
 
@@ -34,7 +34,7 @@ export class PushReceiptMonitor {
         }
     }
 
-    @Cron(CronExpression.EVERY_15_MINUTES)
+    @Cron('0 */15 * * * *')
     async poll(now: Date = new Date()): Promise<void> {
         if (this.polling) return;
         const timestamp = now.getTime();
