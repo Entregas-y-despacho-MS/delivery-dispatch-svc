@@ -4,6 +4,7 @@
 // suite so the list can be narrowed to it; everything carries a per-run tag and is removed in afterAll.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { DataSource } from 'typeorm';
@@ -24,6 +25,7 @@ describe('Customer change requests list (e2e, ST-224.1 extension)', () => {
     let otherZoneId = 0;
     let warehouseId = 0;
     const tokens: Record<string, string> = {};
+    let webUrl = '';
 
     const run = Date.now().toString(36).toUpperCase();
     const http = () => request(app.getHttpServer());
@@ -85,6 +87,7 @@ describe('Customer change requests list (e2e, ST-224.1 extension)', () => {
             tokens[role] = res.body.accessToken as string;
         }
 
+        webUrl = app.get(ConfigService).get<string>('PUBLIC_WEB_URL', 'http://localhost:5173')!.replace(/\/$/, '');
         warehouseId = (await fixtures.warehouses())[0].id;
         zoneId = await fixtures.createZone('A');
         otherZoneId = await fixtures.createZone('B');
@@ -211,6 +214,96 @@ describe('Customer change requests list (e2e, ST-224.1 extension)', () => {
                 expect(bodies).not.toContain(secret);
             }
             expect(bodies).not.toMatch(/seguimiento\/|trackingUrl|tracking_token|trackingToken/);
+        });
+    });
+
+    describe('the tracking link endpoint', () => {
+        const reveal = (role: string, id: number | string) =>
+            http().post(`/${prefix}/dispatches/change-requests/${id}/tracking-link`).set({ Authorization: `Bearer ${tokens[role]}` });
+        const revealedEvents = async (id: number) => await db.query(
+            `SELECT actor_user_id, actor_type, reason, detail, metadata FROM dispatch_events WHERE dispatch_id = $1 AND event_type = 'tracking_link_revealed' ORDER BY dispatch_event_id`, [id]);
+        const coordinatorId = async () => (await db.query(`SELECT user_id FROM users WHERE username = $1`, [`e2e_chgreq_coordinator_${run}`]))[0].user_id as number;
+
+        it('needs a token and is only for the coordinator: the supervisor, the admin and the driver get a 403 and nothing is recorded', async () => {
+            const target = await requested({ email: null });
+
+            expect((await http().post(`/${prefix}/dispatches/change-requests/${target.dispatchId}/tracking-link`)).status).toBe(401);
+            for (const role of ['supervisor', 'admin', 'driver']) expect((await reveal(role, target.dispatchId)).status, role).toBe(403);
+
+            expect(await revealedEvents(target.dispatchId)).toHaveLength(0);
+        });
+
+        it('gives the real tracking page of the customer, and that page opens with it', async () => {
+            const target = await requested({ email: null });
+
+            const res = await reveal('coordinator', target.dispatchId);
+
+            expect(res.status).toBe(200);
+            expect(res.headers['cache-control']).toBe('no-store');
+            expect(res.body).toEqual({ dispatchId: target.dispatchId, trackingUrl: `${webUrl}/seguimiento/${target.token}` });
+            // The page the link points at is the public one, and the token is what opens it.
+            const page = await http().get(`/${prefix}/public/tracking/${target.token}`);
+            expect(page.status).toBe(200);
+            expect(page.body).toMatchObject({ trackingCode: target.trackingCode, customerConfirmation: 'change_requested' });
+        });
+
+        it('records every time it is shown, with the coordinator, and never with the token or the link', async () => {
+            const target = await requested({ email: null });
+
+            await reveal('coordinator', target.dispatchId);
+            await reveal('coordinator', target.dispatchId);
+
+            const events = await revealedEvents(target.dispatchId);
+            expect(events).toHaveLength(2);
+            expect(events[0]).toMatchObject({ actor_user_id: await coordinatorId(), actor_type: 'user', metadata: {} });
+            expect(JSON.stringify(events)).not.toContain(target.token);
+            expect(JSON.stringify(events)).not.toMatch(/seguimiento|http/);
+            const [{ n }] = await db.query(
+                `SELECT COUNT(*)::int AS n FROM dispatch_events WHERE dispatch_id = $1 AND (reason LIKE $2 OR detail LIKE $2 OR metadata::text LIKE $2)`,
+                [target.dispatchId, `%${target.token}%`],
+            );
+            expect(n).toBe(0);
+        });
+
+        it('refuses a customer who has an email, a token that expired and a request that is not pending, and records nothing', async () => {
+            const withEmail = await requested({ email: 'customer@example.test' });
+            const expired = await requested({ email: null, tokenExpiresAt: new Date(Date.now() - MIN) });
+            const confirmed = await requested({ email: null, confirmation: 'confirmed' });
+            const resolved = await requested({ email: null, confirmation: 'rescheduled' });
+            const onTheRoad = await requested({ email: null, status: 'out_for_delivery' });
+
+            expect((await reveal('coordinator', withEmail.dispatchId)).body).toMatchObject({ statusCode: 409, error: 'TRACKING_LINK_NOT_AVAILABLE', details: { reason: 'has_contact_email' } });
+            expect((await reveal('coordinator', expired.dispatchId)).body).toMatchObject({ statusCode: 409, error: 'TRACKING_LINK_NOT_AVAILABLE', details: { reason: 'no_live_token' } });
+            for (const other of [confirmed, resolved, onTheRoad]) {
+                expect((await reveal('coordinator', other.dispatchId)).body).toMatchObject({ statusCode: 409, error: 'CHANGE_REQUEST_NOT_PENDING' });
+            }
+
+            for (const target of [withEmail, expired, confirmed, resolved, onTheRoad]) expect(await revealedEvents(target.dispatchId)).toHaveLength(0);
+        });
+
+        it('does not show the link once the coordinator resolved the request', async () => {
+            const target = await requested({ email: null });
+            expect((await reveal('coordinator', target.dispatchId)).status).toBe(200);
+
+            await db.query(`UPDATE dispatches SET customer_confirmation = 'rescheduled' WHERE dispatch_id = $1`, [target.dispatchId]);
+
+            expect((await reveal('coordinator', target.dispatchId)).body.error).toBe('CHANGE_REQUEST_NOT_PENDING');
+        });
+
+        it('answers a dispatch that does not exist with 404 and a bad id with 400', async () => {
+            expect((await reveal('coordinator', 2000000000)).body).toMatchObject({ statusCode: 404, error: 'DISPATCH_NOT_FOUND' });
+            for (const id of ['abc', '0', '-1', '99999999999']) expect((await reveal('coordinator', id)).status, id).toBe(400);
+        });
+
+        it('agrees with the list: it works exactly for the requests where the list says it can', async () => {
+            const withoutEmail = await requested({ email: null });
+            const withEmail = await requested({ email: 'customer@example.test' });
+            const items = (await list('coordinator', inZone('limit=100'))).body.data as { dispatchId: number; canRevealTrackingLink: boolean }[];
+
+            for (const target of [withoutEmail, withEmail]) {
+                const flag = items.find((item) => item.dispatchId === target.dispatchId)!.canRevealTrackingLink;
+                expect((await reveal('coordinator', target.dispatchId)).status === 200).toBe(flag);
+            }
         });
     });
 
