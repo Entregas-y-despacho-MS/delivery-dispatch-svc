@@ -102,8 +102,9 @@ export class ExpoPushAdapter extends PushPort {
 
 function isTransientProviderError(error: unknown): boolean {
     const value = error as { statusCode?: number; code?: string; cause?: { code?: string }; errors?: { code?: string }[] };
-    if (value.statusCode === 429 || (value.statusCode !== undefined && value.statusCode >= 500)) return true;
-    if (value.code === 'TOO_MANY_REQUESTS' || value.errors?.some(({ code }) => code === 'TOO_MANY_REQUESTS')) return true;
+    // expo-server-sdk already retries HTTP 429 twice with exponential backoff (three requests total).
+    if (value.statusCode === 429 || value.code === 'TOO_MANY_REQUESTS' || value.errors?.some(({ code }) => code === 'TOO_MANY_REQUESTS')) return false;
+    if (value.statusCode !== undefined && value.statusCode >= 500) return true;
     return ['ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN', 'ECONNREFUSED', 'ENETUNREACH', 'ECONNABORTED']
         .includes(value.code ?? value.cause?.code ?? '');
 }

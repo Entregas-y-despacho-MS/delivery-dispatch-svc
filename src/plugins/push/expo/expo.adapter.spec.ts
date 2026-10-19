@@ -80,4 +80,15 @@ describe('ExpoPushAdapter', () => {
             error: 'unavailable',
         }]);
     });
+
+    it('does not add another retry cycle after the SDK exhausts its HTTP 429 retries', async () => {
+        const { adapter, client } = build();
+        client.sendPushNotificationsAsync.mockRejectedValue({ statusCode: 429, message: 'too many requests' });
+
+        await expect(adapter.send([{ to: TOKEN, title: 'a', body: 'b' }])).resolves.toEqual([{
+            token: TOKEN,
+            status: 'permanent-error',
+            error: 'too many requests',
+        }]);
+    });
 });
