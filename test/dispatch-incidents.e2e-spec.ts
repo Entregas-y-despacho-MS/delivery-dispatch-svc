@@ -11,6 +11,8 @@ import { hashPassword } from '../src/shared/utils/crypto.util.js';
 import { HttpExceptionFilter } from '../src/shared/filters/index.js';
 import { withEventPurge } from './helpers/purge-append-only-events.js';
 import { DispatchEventsService } from '../src/modules/dispatch/dispatch-events/services/dispatch-events.service.js';
+import { SETTINGS_VERSION_HEADER } from '../src/modules/settings/settings.constants.js';
+import { SettingsService } from '../src/modules/settings/services/settings.service.js';
 
 describe('POST /dispatches/:id/incidents (ST-32.2)', () => {
     let app: INestApplication;
@@ -28,6 +30,7 @@ describe('POST /dispatches/:id/incidents (ST-32.2)', () => {
     const statusIds: Record<string, number> = {};
     let deliveryTypeId: number;
     let dispatchEvents: DispatchEventsService;
+    let settingsService: SettingsService;
 
     const auth = (who = 'driver') => ({ Authorization: `Bearer ${tokens[who]}` });
     const url = (dispatchId: number) => `/${prefix}/dispatches/${dispatchId}/incidents`;
@@ -48,7 +51,7 @@ describe('POST /dispatches/:id/incidents (ST-32.2)', () => {
     }
     const reasonCodes: Record<string, string> = {};
 
-    async function dispatch(): Promise<number> {
+    async function dispatch(initialStatus = 'in_transit'): Promise<number> {
         const [{ route_batch_id: batchId }] = await db.query(
             `INSERT INTO route_batches (driver_id, shift_date, status) VALUES ($1, DATE '2040-01-01' + $2::int, 'in_execution') RETURNING route_batch_id`,
             [users.driver, batchIds.length],
@@ -58,7 +61,7 @@ describe('POST /dispatches/:id/incidents (ST-32.2)', () => {
             `INSERT INTO dispatches (dispatch_type_id, dispatch_status_id, route_batch_id, sequence_order,
                                     source_order_ref, tracking_code, delivery_address)
              VALUES ($1,$2,$3,1,$4,$5,'ST-32.2 incident test address') RETURNING dispatch_id`,
-            [deliveryTypeId, statusIds.in_transit, batchId, `${tag}-${batchId}`, `I${run.slice(-5)}${batchId}`.slice(0, 20)],
+            [deliveryTypeId, statusIds[initialStatus], batchId, `${tag}-${batchId}`, `I${run.slice(-5)}${batchId}`.slice(0, 20)],
         );
         dispatchIds.push(id);
         return id;
@@ -81,6 +84,7 @@ describe('POST /dispatches/:id/incidents (ST-32.2)', () => {
         await app.init();
         db = moduleRef.get(DataSource);
         dispatchEvents = moduleRef.get(DispatchEventsService);
+        settingsService = moduleRef.get(SettingsService);
         moduleRef.get(EventEmitter2).on('dispatch.incident_reported', (event: Record<string, unknown>) => announcements.push(event));
 
         const passwordHash = await hashPassword('E2eTest1234');
@@ -128,6 +132,7 @@ describe('POST /dispatches/:id/incidents (ST-32.2)', () => {
         const response = await requestIncident(id, report);
 
         expect(response.status).toBe(201);
+        expect(response.headers[SETTINGS_VERSION_HEADER.toLowerCase()]).toBe(String(await settingsService.getVersion()));
         expect(response.body).toMatchObject({ dispatchId: id, incidentId: report.incidentId, reasonCode: reasonCodes.ABSENT, status: 'incident' });
         expect(await status(id)).toBe('incident');
         const [incident] = await db.query('SELECT description FROM dispatch_incidents WHERE dispatch_incident_id=$1', [report.incidentId]);
@@ -194,5 +199,22 @@ describe('POST /dispatches/:id/incidents (ST-32.2)', () => {
         expect((await requestIncident(id, body(reasonCodes.COMPFAIL), 'foreign')).status).toBe(403);
         expect((await requestIncident(2_000_000_000, body(reasonCodes.COMPFAIL))).status).toBe(404);
         expect(await status(id)).toBe('in_transit');
+    });
+
+    it('applies the FIFO status then incident requests using their direct routes', async () => {
+        const id = await dispatch('out_for_delivery');
+        const statusResponse = await request(app.getHttpServer())
+            .patch(`/${prefix}/dispatches/${id}/status`)
+            .set(auth())
+            .send({ status: 'in_transit', eventId: uuidv7(), occurredAt: new Date().toISOString(), lat: -16.5, lng: -68.1, accuracy: 8 });
+        expect(statusResponse.status).toBe(200);
+        expect(statusResponse.headers[SETTINGS_VERSION_HEADER.toLowerCase()]).toBe(String(await settingsService.getVersion()));
+        expect(await status(id)).toBe('in_transit');
+
+        const report = body(reasonCodes.COMPFAIL);
+        const response = await requestIncident(id, report);
+        expect(response.status).toBe(201);
+        expect(response.body.status).toBe('incident');
+        expect(await status(id)).toBe('incident');
     });
 });
