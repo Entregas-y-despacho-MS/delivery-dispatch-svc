@@ -18,6 +18,9 @@ import { FindKanbanParamsDto } from '../dto/find-kanban-params.dto.js';
 import { DispatchKanbanResponseDto } from '../dto/dispatch-kanban.dto.js';
 import { DispatchKanbanService } from '../services/dispatch-kanban.service.js';
 import { DispatchKanbanFiltersResponseDto } from '../dto/dispatch-kanban-filters.dto.js';
+import { DriverHistoryService } from '../services/driver-history.service.js';
+import { FindDriverHistoryParamsDto } from '../dto/find-driver-history-params.dto.js';
+import { DriverHistoryResponseDto } from '../dto/driver-history-response.dto.js';
 
 /**
  * RF-U02 — "Mi Jornada": the stops the driver has to visit today, in the order Dispatch decided.
@@ -36,6 +39,7 @@ export class DispatchesController {
         private readonly priorityService: DispatchPriorityService,
         private readonly detailService: DispatchDetailService,
         private readonly kanbanService: DispatchKanbanService,
+        private readonly historyService: DriverHistoryService,
     ) {}
 
     @Get('kanban')
@@ -77,6 +81,26 @@ export class DispatchesController {
     @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
     async findMyAssignments(@Query() params: FindDriverAssignmentsParamsDto, @CurrentUser('id') driverId: number): Promise<DriverAssignmentsResponseDto> {
         return await this.dispatchesService.findDriverAssignments(driverId, params.date ?? todayInOperatingTimeZone());
+    }
+
+    @Get('my-history')
+    @DriverOnly()
+    @ApiOperation({
+        summary: "List the authenticated driver's completed dispatch history",
+        description: "Returns this driver's delivered and returned dispatches, newest closure first. Supports one-based pagination, inclusive `from`/`to` calendar dates in America/La_Paz, an optional final status and a case-insensitive partial tracking-code search. The driver is always taken from the access token. Each row contains the tracking code, destination contact, receiver, final status, closure time and most recent evidence identifier; missing evidence is `null`. An empty result is a successful response with an empty `data` array and `total: 0`.",
+    })
+    @ApiOkResponse({ type: DriverHistoryResponseDto })
+    @ApiBadRequests({ validation: true, example: [
+        'page must not be greater than 1000000',
+        'limit must not be greater than 50',
+        'from must be a valid ISO 8601 date string',
+        'status must be one of the following values: delivered, returned',
+        'search must be shorter than or equal to 100 characters',
+    ] })
+    @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+    @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
+    async findMyHistory(@Query() params: FindDriverHistoryParamsDto, @CurrentUser('id') driverId: number): Promise<DriverHistoryResponseDto> {
+        return await this.historyService.findHistory(driverId, params);
     }
 
     @Get(':id/detail')

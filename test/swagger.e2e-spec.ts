@@ -91,9 +91,9 @@ describe('Swagger document (e2e)', () => {
         expect(bad).toEqual([]);
     });
 
-    it('page and limit are pre-filled with their defaults (1 and 10), so "Try it out" returns the first page', () => {
+    it('page and limit are pre-filled with endpoint defaults, so "Try it out" returns the first page', () => {
         const bad = operations().flatMap(({ key, op }) => (op.parameters ?? [])
-            .filter((p: any) => p.in === 'query' && ((p.name === 'page' && p.schema?.example !== 1) || (p.name === 'limit' && p.schema?.example !== 10)))
+            .filter((p: any) => p.in === 'query' && ((p.name === 'page' && p.schema?.example !== 1) || (p.name === 'limit' && p.schema?.example !== (key === 'get /api/dispatches/my-history' ? 20 : 10))))
             .map((p: any) => `${key} → ${p.name}`));
         expect(bad).toEqual([]);
     });

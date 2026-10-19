@@ -9,7 +9,8 @@ function build() {
         findAll: vi.fn().mockResolvedValue({ date: 'x', columns: [] }),
         findFilters: vi.fn().mockResolvedValue({ drivers: [], dispatchTypes: [] }),
     };
-    return { controller: new DispatchesController(service as any, priority as any, {} as any, kanban as any), service, priority, kanban };
+    const history = { findHistory: vi.fn().mockResolvedValue({ data: [], total: 0, page: 1, limit: 20 }) };
+    return { controller: new DispatchesController(service as any, priority as any, {} as any, kanban as any, history as any), service, priority, kanban, history };
 }
 
 // ST-58.2 — el usuario que cambia la prioridad sale siempre del token.
@@ -63,5 +64,15 @@ describe('DispatchesController.findMyAssignments', () => {
         await controller.findMyAssignments({}, 7);
 
         expect(service.findDriverAssignments).toHaveBeenCalledWith(7, '2026-10-14');
+    });
+});
+
+describe('DispatchesController.findMyHistory', () => {
+    it('passes query filters and the authenticated driver id to the history service', async () => {
+        const { controller, history } = build();
+        const params = { page: 2, limit: 10, from: '2026-10-01', to: '2026-10-19', status: 'delivered' as const, search: 'DSP-2026' };
+
+        await expect(controller.findMyHistory(params, 7)).resolves.toEqual({ data: [], total: 0, page: 1, limit: 20 });
+        expect(history.findHistory).toHaveBeenCalledWith(7, params);
     });
 });

@@ -20,6 +20,7 @@ import { TypeOrmDispatchGenerator } from './services/typeorm-dispatch-generator.
 import { DispatchPackage } from './entities/dispatch-package.entity.js';
 import { RouteBatchEvent } from '../route-batches/entities/route-batch-event.entity.js';
 import { DispatchKanbanService } from './services/dispatch-kanban.service.js';
+import { DriverHistoryService } from './services/driver-history.service.js';
 
 // autoLoadEntities only registers an entity's TypeORM metadata once it's part of SOME
 // forFeature() call — Dispatch's own @ManyToOne relations (directly or transitively via
@@ -32,7 +33,7 @@ import { DispatchKanbanService } from './services/dispatch-kanban.service.js';
         TypeOrmModule.forFeature([Dispatch, DispatchPackage, DispatchType, DispatchStatus, ServiceLevel, RouteBatch, RouteBatchEvent, Vehicle, VehicleStatus, DispatchEvent, DispatchIncident, DispatchReschedule, DeliveryEvidence]),
     ],
     controllers: [DispatchesController],
-    providers: [DispatchesService, DispatchPriorityService, DispatchDetailService, DispatchKanbanService, { provide: DispatchGenerator, useClass: TypeOrmDispatchGenerator }],
+    providers: [DispatchesService, DispatchPriorityService, DispatchDetailService, DispatchKanbanService, DriverHistoryService, { provide: DispatchGenerator, useClass: TypeOrmDispatchGenerator }],
     exports:   [DispatchesService, DispatchGenerator],
 })
 export class DispatchesModule {}
