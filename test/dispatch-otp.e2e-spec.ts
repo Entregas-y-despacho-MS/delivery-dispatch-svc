@@ -98,6 +98,7 @@ describe.skipIf(!process.env.OTP_TEST_REDIS_PORT)('delivery OTP HTTP + PostgreSQ
         expect(messages.length).toBe(before + 1);
         const firstCode = messages[before].body.match(/\b\d{6}\b/)?.[0];
         expect(firstCode).toBeDefined();
+        expect(messages[before].body).toBe(`Tu código de entrega es ${firstCode}. Dáselo al repartidor solo al recibir tu pedido. Válido por 60 minutos.`);
         const firstHash = await redis.get(`dispatch-otp:{${id}}:code`);
         expect(firstHash).toBeTruthy();
         expect(firstHash).not.toContain(firstCode!);

@@ -20,6 +20,7 @@ describe('delivery OTP lifecycle', () => {
         expect([id, ttl, resend]).toEqual([12, 900, false]);
         const code = x.sms.send.mock.calls[0][0].body.match(/\d{8}/)![0];
         expect(await matchesOtp(code, hash)).toBe(true);
+        expect(x.sms.send.mock.calls[0][0].body).toBe(`Tu código de entrega es ${code}. Dáselo al repartidor solo al recibir tu pedido. Válido por 15 minutos.`);
         expect(JSON.stringify(x.db.query.mock.calls)).not.toContain(code);
         expect(JSON.stringify(x.db.query.mock.calls)).toContain('otp_sent');
     });

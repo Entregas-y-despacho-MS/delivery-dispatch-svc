@@ -91,7 +91,7 @@ export class DispatchOtpService {
             }
             if (issued !== 'issued') throw new DispatchOtpException(`OTP_${issued.toUpperCase()}`, 'OTP cannot be issued in its current state.');
             try {
-                await this.sms.send({ to: phone, body: `Tu código de entrega es ${code}. Válido por ${options.ttlSeconds / 60} minutos.` });
+                await this.sms.send({ to: phone, body: `Tu código de entrega es ${code}. Dáselo al repartidor solo al recibir tu pedido. Válido por ${options.ttlSeconds / 60} minutos.` });
             } catch {
                 await this.store.invalidate(row.id, hash);
                 await this.record(row.id, 'otp_send_failed', { resend });

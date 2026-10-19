@@ -41,3 +41,21 @@ describe('messaging environment defaults', () => {
         expect(error?.message).toContain('MESSAGING_ADAPTER');
     });
 });
+
+
+describe('simulated SMS environment flag', () => {
+    it('defaults to redacted messages', () => {
+        const { error, value } = envValidation.validate(requiredEnvironment);
+        expect(error).toBeUndefined();
+        expect(value.SMS_SIMULATED_LOG_BODY).toBe(false);
+    });
+    it.each([['true', true], ['false', false]])('converts environment %s into boolean %s', (flag, expected) => {
+        const { error, value } = envValidation.validate({ ...requiredEnvironment, SMS_SIMULATED_LOG_BODY: flag });
+        expect(error).toBeUndefined();
+        expect(value.SMS_SIMULATED_LOG_BODY).toBe(expected);
+    });
+    it('rejects values that are not boolean flags', () => {
+        const { error } = envValidation.validate({ ...requiredEnvironment, SMS_SIMULATED_LOG_BODY: 'enabled' });
+        expect(error?.message).toContain('SMS_SIMULATED_LOG_BODY');
+    });
+});

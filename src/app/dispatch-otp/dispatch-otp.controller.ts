@@ -23,7 +23,7 @@ export class DispatchOtpController {
     @HttpCode(200)
     @DriverOnly()
     @ApiIdParam('Dispatch')
-    @ApiOperation({ summary: 'Resend the delivery OTP', description: 'Only the assigned driver can request up to two resends for an in-transit high-value dispatch. Each replaces the old code and restarts expiry without resetting the three-failure limit. The customer phone is verified by the source system. A missing usable phone requires Dispatch intervention. No code is returned or logged.' })
+    @ApiOperation({ summary: 'Resend the delivery OTP', description: 'Only the assigned driver can request up to two resends for an in-transit high-value dispatch. Each replaces the old code and restarts expiry without resetting the three-failure limit. The customer phone is verified by the source system. A missing usable phone requires Dispatch intervention. No code is returned through HTTP. Only the simulated adapter with explicit local development opt-in may log the message body.' })
     @ApiOkResponse({ type: DispatchOtpSentDto })
     @ApiResponse({ status: 503, description: 'OTP_UNAVAILABLE (Redis down) or OTP_SEND_FAILED (bounded resend permitted).' })
     @ApiBadRequests({ id: true })

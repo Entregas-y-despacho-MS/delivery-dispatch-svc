@@ -1,7 +1,9 @@
 # Delivery OTP — ST-31.4
 
 `DispatchOtpModule` consumes the post-commit `dispatch.status_changed` event and rereads the dispatch.
-Only `in_transit` + `high_value_control` issues a code. The source system guarantees verification of
+Only a committed transition to `in_transit` with `high_value_control` issues the initial code,
+once per dispatch. Repeated events and reentry never generate another initial issue; replacements
+require an explicit controlled resend. The source system guarantees verification of
 `contact_phone` (user decision, 2026-10-18); absence or unusable format records
 `dispatch_events.otp_resolution_required` for Dispatch intervention and preserves the evidence policy.
 Numbers must contain 7–15 international digits, optionally preceded by `+`.
@@ -9,9 +11,16 @@ Numbers must contain 7–15 international digits, optionally preceded by `+`.
 Settings `otp_code_length` (default 6, supported 4–10) and `otp_expiry_minutes` (default 60,
 supported 1–1440) control generation and Redis TTL. Invalid values use the defaults. Digits use
 `node:crypto.randomInt`, hashes use bcrypt with random salt. Only the hash is stored. The clear
-code exists transiently while constructing the SMS and is never returned through HTTP, persisted
-or logged. `SmsSender` is the replaceable transport port; its simulated implementation records a
-structured `sms.sent` event with redacted content and no recipient. Replace the adapter for real SMS.
+code is never returned through HTTP or stored in the OTP database/cache as plaintext. `SmsSender`
+is the replaceable transport port. By default, its simulated implementation records a structured
+`sms.sent` event with redacted content and no recipient. Replace the adapter for real SMS.
+
+The explicit local debugging exception requires **both** `NODE_ENV=development` and
+`SMS_SIMULATED_LOG_BODY=true`. The validated flag defaults to `false` (including `.env.example`).
+Only then does the simulator log the message body and a masked phone with its last four characters;
+it never logs the complete phone. Treat those opt-in logs as sensitive because they contain the OTP.
+Keep the flag false in shared development and deployment configuration; production, test, debug and
+other environments ignore it even when true. There is no body logging opt-in for a real SMS provider.
 
 Redis uses existing `REDIS_HOST`/`REDIS_PORT`, dependency and configuration. A dedicated adapter is
 necessary because the generic `CacheService` cannot express multi-key atomic OTP transitions.
@@ -48,10 +57,13 @@ their random dispatch keys. No shared cache instance is inferred.
 
 ## Decisiones de revisión del PR
 
-- **C1 — SMS simulado:** se conserva la redacción total del contenido y del destinatario tanto en
-  desarrollo como en producción. La solicitud original prohíbe escribir el OTP en logs; habilitar
-  su impresión en desarrollo violaría ese criterio. El adaptador registra aceptación estructurada,
-  no permite recuperar el código. Las pruebas capturan el mensaje solamente en memoria.
+- **C1 — SMS simulado:** se conserva la redacción total del contenido y del destinatario en
+  todos los entornos por defecto. La revisión posterior solicitó una excepción explícita para
+  depuración local: únicamente `NODE_ENV=development` junto con `SMS_SIMULATED_LOG_BODY=true`
+  habilita el cuerpo en el registro estructurado del simulador, con teléfono enmascarado. Esta
+  excepción sustituye la decisión anterior de redacción incondicional en desarrollo. En producción,
+  test, debug y entornos compartidos se mantiene la configuración deshabilitada; fuera de development
+  el adaptador ignora el flag. Los tests no escriben OTP reales en logs: interceptan Logger en memoria.
 - **C2 — integración pendiente:** se mantiene el rechazo de OTP arbitrario por el flujo legacy y el
   requisito de evidencia OTP para entregar despachos `high_value_control`. ST-31.4 no implementa
   ST-31.3: generar/enviar códigos no crea evidencia. Por tanto, un despacho de alto valor no puede
@@ -81,3 +93,19 @@ their random dispatch keys. No shared cache instance is inferred.
   incluso si el código expiró. Una nueva notificación inicial es idempotente durante toda la vida
   del despacho. La recuperación sigue siendo el reenvío explícito, con un máximo de dos; no existe
   un reinicio implícito por estado, expiración ni cambio de fecha.
+
+
+## SMS de entrega y correo son flujos distintos
+
+La fuente arquitectónica es `delivery-dispatch-docs/especificacion-sistema.md`, sección **2.b.
+Integración con Sistemas Externos** (línea 126) y sección **4. Pila Tecnológica del Microservicio**
+(filas Backend y Notificaciones, líneas 342 y 348 en la versión sincronizada `e1a96d5`). Allí figuran
+Correo / Push / SMS como integración externa: correo para notificaciones al cliente, push al repartidor
+y SMS para el OTP de entrega, mediante adaptador simulado durante el proyecto. Esta referencia
+corresponde al repositorio hermano de documentación del workspace, no a una dependencia ejecutable.
+El código por correo de reprogramación en `app/public-tracking` pertenece a otro flujo y no reemplaza
+el SMS de entrega de alto valor.
+
+El mensaje de entrega conserva el código y la vigencia configurable e indica: «Dáselo al repartidor
+solo al recibir tu pedido». Ni el mensaje ni esta simulación acreditan que ST-31.3 o su integración
+móvil estén implementados; siguen aplicando los pendientes y la coordinación de despliegue anteriores.
