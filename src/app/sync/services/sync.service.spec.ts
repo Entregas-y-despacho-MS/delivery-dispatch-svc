@@ -3,25 +3,27 @@
 import { describe, expect, it, vi } from 'vitest';
 import { QueryFailedError } from 'typeorm';
 import { SyncService } from './sync.service.js';
+import { DISPATCH_STATUS_CHANGED_EVENT } from '../../dispatch-status/dispatch-status-changed.event.js';
 import { SyncEventType } from '../dto/sync-event-type.enum.js';
 
 const ID1 = '01933b6e-7f2a-7c3d-9a1b-2f8e6c4d5a10';
 const DRIVER = 5;
 
-function build(over: { assigned?: boolean; targetStatus?: string; currentStatus?: string | null; reasonCode?: string; routeStatus?: string; routeStartedAt?: string | null; routeClosedAt?: string | null } = {}) {
+function build(over: { assigned?: boolean; targetStatus?: string; currentStatus?: string | null; reasonCode?: string; evidencePolicy?: string; hasOtpEvidence?: boolean; routeStatus?: string; routeStartedAt?: string | null; routeClosedAt?: string | null } = {}) {
     const manager = { query: vi.fn(async (sql: string) => {
+        if (sql.includes('SELECT version, updated_at')) return [{ version: 4, updated_at: '2026-10-18T12:00:00.000Z' }];
         if (sql.includes('incident_reasons')) return [{ code: over.reasonCode ?? 'DAMAGED_PACKAGE' }];
         if (sql.includes('LEFT JOIN LATERAL') && sql.includes('route_batch_events')) return [{
             status: over.routeStatus ?? 'in_execution',
             started_at: over.routeStartedAt === undefined ? '2026-01-01T00:00:00.000Z' : over.routeStartedAt,
             closed_at: over.routeClosedAt ?? null,
         }];
-        return [{ dispatch_id: 42 }];
+        return [{ dispatch_id: 42, evidence_policy: over.evidencePolicy ?? 'standard_photo' }];
     }) };
     const dataSource = { transaction: vi.fn(async (cb: any) => cb(manager)) };
     const events    = { existsByClientEventId: vi.fn().mockResolvedValue(false), create: vi.fn() };
     const incidents = { existsById: vi.fn().mockResolvedValue(false), create: vi.fn() };
-    const evidences = { existsById: vi.fn().mockResolvedValue(false), create: vi.fn() };
+    const evidences = { existsByDispatchAndType: vi.fn().mockResolvedValue(over.hasOtpEvidence ?? false), existsById: vi.fn().mockResolvedValue(false), create: vi.fn() };
     const dispatches = {
         isAssignedToDriver: vi.fn().mockResolvedValue(over.assigned ?? true),
         updateStatus:       vi.fn(),
@@ -31,8 +33,9 @@ function build(over: { assigned?: boolean; targetStatus?: string; currentStatus?
     };
     const statusPublication = { publish: vi.fn().mockResolvedValue(1) };
     const storage = { upload: vi.fn().mockResolvedValue({ url: 'http://x/uploads/a.png' }) };
-    const service = new SyncService(dataSource as any, events as any, incidents as any, evidences as any, dispatches as any, storage as any, statusPublication as any);
-    return { service, events, incidents, evidences, dispatches, storage, manager, statusPublication };
+    const emitter = { emit: vi.fn() };
+    const service = new SyncService(dataSource as any, events as any, incidents as any, evidences as any, dispatches as any, storage as any, statusPublication as any, emitter as any);
+    return { service, events, incidents, evidences, dispatches, storage, manager, statusPublication, emitter, dataSource };
 }
 
 const recent = () => new Date(Date.now() - 60_000).toISOString();
@@ -394,12 +397,19 @@ describe('SyncService.syncEvidence', () => {
         expect(evidences.create).not.toHaveBeenCalled();
     });
 
-    it('an otp without its code is failed; with it, applied and no file needed', async () => {
-        const { service, evidences } = build();
+    it.each([undefined, '123456'])('rejects legacy OTP with code %s without recording or uploading it', async (otpCode) => {
+        const { service, evidences, storage } = build();
+        const result = await service.syncEvidence(dto({ type: 'otp', otpCode }), png, DRIVER);
+        expect(result).toMatchObject({ outcome: 'failed', error: 'Legacy OTP submissions are rejected. Online validation belongs to ST-31.3.' });
+        expect(evidences.create).not.toHaveBeenCalled();
+        expect(storage.upload).not.toHaveBeenCalled();
+    });
 
-        expect(await service.syncEvidence(dto({ type: 'otp' }), undefined, DRIVER)).toMatchObject({ outcome: 'failed', error: 'An otp evidence needs its otpCode.' });
-        expect((await service.syncEvidence(dto({ type: 'otp', otpCode: '123456' }), undefined, DRIVER)).outcome).toBe('applied');
-        expect(evidences.create).toHaveBeenCalledWith(expect.objectContaining({ type: 'otp', otpCode: null }));
+    it('does not acknowledge a legacy OTP row as verified on retry', async () => {
+        const { service, evidences } = build();
+        evidences.existsById.mockResolvedValue(true);
+        expect((await service.syncEvidence(dto({ type: 'otp', otpCode: '123456' }), undefined, DRIVER)).outcome).toBe('failed');
+        expect(evidences.existsById).not.toHaveBeenCalled();
     });
 
     it('someone else\'s dispatch → failed "Dispatch not found." and nothing is uploaded', async () => {
@@ -417,5 +427,60 @@ describe('SyncService.syncEvidence', () => {
 
         expect((await service.syncEvidence(dto(), png, DRIVER)).outcome).toBe('already_processed');
         expect(dispatches.isAssignedToDriver).not.toHaveBeenCalled();
+    });
+});
+
+ describe('SyncService — high value delivery requires validated OTP evidence', () => {
+    it('rejects delivered before mutation or publication when OTP evidence is absent', async () => {
+        const { service, dispatches, events, statusPublication, evidences, manager } = build({ targetStatus: 'delivered', currentStatus: 'in_transit', evidencePolicy: 'high_value_control' });
+        const result = (await service.processBatch([statusEvent()], DRIVER)).results[0];
+        expect(result).toMatchObject({ outcome: 'failed', error: 'The delivery requires otp evidence before it can be marked delivered.' });
+        expect(evidences.existsByDispatchAndType).toHaveBeenCalledWith(42, 'otp', { manager });
+        expect(dispatches.updateStatus).not.toHaveBeenCalled();
+        expect(events.create).not.toHaveBeenCalled();
+        expect(statusPublication.publish).not.toHaveBeenCalled();
+    });
+
+    it('allows delivered with OTP evidence in the event transaction', async () => {
+        const { service, dispatches } = build({ targetStatus: 'delivered', currentStatus: 'in_transit', evidencePolicy: 'high_value_control', hasOtpEvidence: true });
+        expect((await service.processBatch([statusEvent()], DRIVER)).results[0].outcome).toBe('applied');
+        expect(dispatches.updateStatus).toHaveBeenCalled();
+    });
+});
+
+describe('SyncService — OTP lifecycle sees only committed transitions', () => {
+    it('emits in_transit with its persisted version after commit', async () => {
+        const { service, dataSource, emitter } = build();
+        let committed = false;
+        const transaction = dataSource.transaction.getMockImplementation()!;
+        dataSource.transaction.mockImplementation(async (cb: any) => {
+            const result = await transaction(cb);
+            committed = true;
+            return result;
+        });
+        emitter.emit.mockImplementation(() => { expect(committed).toBe(true); });
+        expect((await service.processBatch([statusEvent()], DRIVER)).results[0].outcome).toBe('applied');
+        expect(emitter.emit).toHaveBeenCalledWith(DISPATCH_STATUS_CHANGED_EVENT, {
+            dispatchId: 42, status: 'in_transit', previousStatus: 'out_for_delivery', version: 4, updatedAt: '2026-10-18T12:00:00.000Z',
+        });
+    });
+
+    it('does not emit if commit fails after the transition was prepared', async () => {
+        const { service, dataSource, emitter } = build();
+        const transaction = dataSource.transaction.getMockImplementation()!;
+        dataSource.transaction.mockImplementation(async (cb: any) => {
+            await transaction(cb);
+            throw new Error('commit failed');
+        });
+        expect((await service.processBatch([statusEvent()], DRIVER)).results[0].outcome).toBe('failed');
+        expect(emitter.emit).not.toHaveBeenCalled();
+    });
+
+    it('does not emit for duplicate or unchanged in_transit status', async () => {
+        const { service, events, emitter } = build({ currentStatus: 'in_transit' });
+        await service.processBatch([statusEvent()], DRIVER);
+        events.existsByClientEventId.mockResolvedValue(true);
+        await service.processBatch([statusEvent()], DRIVER);
+        expect(emitter.emit).not.toHaveBeenCalled();
     });
 });

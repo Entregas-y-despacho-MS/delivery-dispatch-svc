@@ -83,6 +83,10 @@ export const envValidation = Joi.object({
     MAILER_API_KEY:   Joi.string().optional(),
     MAILER_FROM:      Joi.string().optional(),
 
+    // -- Plugin: simulated SMS -----------------------------------------------
+    // Local opt-in only: the adapter also requires NODE_ENV=development.
+    SMS_SIMULATED_LOG_BODY: Joi.boolean().default(false),
+
     // -- Plugin: socket -------------------------------------------------------
     WEBSOCKET_NAMESPACE: Joi.string().default('app'),
 

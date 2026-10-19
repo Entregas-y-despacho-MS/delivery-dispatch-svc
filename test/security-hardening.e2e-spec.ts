@@ -688,18 +688,18 @@ describe('Security hardening (e2e)', () => {
                 expect(res.status).toBe(413);
             });
 
-            it('a photo/signature without its file, or an otp without its code, is failed', async () => {
+            it('requires a photo/signature file and rejects legacy OTP with or without a code', async () => {
                 const noFile = await evidence(tokenA, { clientEventId: uuid(), dispatchId: String(dispatchId), type: 'photo' });
                 expect(noFile.body).toMatchObject({ outcome: 'failed', error: 'A photo or signature evidence needs its file.' });
                 const noCode = await evidence(tokenA, { clientEventId: uuid(), dispatchId: String(dispatchId), type: 'otp' });
-                expect(noCode.body).toMatchObject({ outcome: 'failed', error: 'An otp evidence needs its otpCode.' });
+                expect(noCode.body).toMatchObject({ outcome: 'failed', error: 'Legacy OTP submissions are rejected. Online validation belongs to ST-31.3.' });
                 const otp = await evidence(tokenA, { clientEventId: uuid(), dispatchId: String(dispatchId), type: 'otp', otpCode: '123456' });
-                expect(otp.body.outcome).toBe('applied');
-                const [stored] = await ds.query(
-                    `SELECT otp_code FROM delivery_evidences WHERE delivery_evidence_id = $1`,
+                expect(otp.body).toMatchObject({ outcome: 'failed', error: 'Legacy OTP submissions are rejected. Online validation belongs to ST-31.3.' });
+                const stored = await ds.query(
+                    `SELECT 1 FROM delivery_evidences WHERE delivery_evidence_id = $1`,
                     [otp.body.clientEventId],
                 );
-                expect(stored.otp_code).toBeNull();
+                expect(stored).toHaveLength(0);
             });
 
             it('another driver\'s dispatch: failed, and nothing is uploaded or stored', async () => {

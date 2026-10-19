@@ -1,5 +1,7 @@
 /// <reference types="multer" />
 import { BadRequestException, HttpException, Injectable, Logger } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { DISPATCH_STATUS_CHANGED_EVENT, type DispatchStatusChangedEvent } from '../../dispatch-status/dispatch-status-changed.event.js';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager, QueryFailedError } from 'typeorm';
 import { DispatchEventsService } from '../../../modules/dispatch/dispatch-events/services/dispatch-events.service.js';
@@ -15,6 +17,9 @@ import { SyncEventOutcome, SyncEventResultDto, SyncEventsBatchResultDto } from '
 import { SyncEvidenceDto } from '../dto/sync-evidence.dto.js';
 import { DispatchStatusPublicationService } from '../../../modules/dispatch/dispatch-status-publication/dispatch-status-publication.service.js';
 import { PUBLISHED_DELIVERY_OUTCOME_STATUSES } from '../../../modules/dispatch/dispatch-status-publication/dispatch-status-message.js';
+
+import { SyncOtpVerificationRequiredException } from '../exceptions/sync-otp-verification-required.exception.js';
+import { DispatchEvidenceRequiredException } from '../../dispatch-status/exceptions/dispatch-evidence-required.exception.js';
 
 const DRIVER_SYNC_STATUSES = new Set(['in_transit', 'delivered', 'not_delivered']);
 
@@ -41,6 +46,7 @@ export class SyncService {
         private readonly dispatchesService: DispatchesService,
         private readonly storage: StoragePort,
         private readonly statusPublication: DispatchStatusPublicationService,
+        private readonly events: EventEmitter2,
     ) {}
 
     /**
@@ -57,14 +63,14 @@ export class SyncService {
 
     async syncEvidence(dto: SyncEvidenceDto, file: Express.Multer.File | undefined, driverId: number): Promise<SyncEventResultDto> {
         try {
+            if (dto.type === 'otp') throw new SyncOtpVerificationRequiredException();
             if (await this.deliveryEvidencesService.existsById(dto.clientEventId)) {
                 return { clientEventId: dto.clientEventId, outcome: SyncEventOutcome.ALREADY_PROCESSED };
             }
             if (!(await this.dispatchesService.isAssignedToDriver(dto.dispatchId, driverId))) throw new DispatchNotFoundException();
 
-            // A photo or a signature IS the file, and an OTP evidence IS the code: without it there is nothing to record.
+            // Photo and signature evidence must include the actual file.
             if (dto.type !== 'otp' && !file) throw new BadRequestException('A photo or signature evidence needs its file.');
-            if (dto.type === 'otp' && !dto.otpCode) throw new BadRequestException('An otp evidence needs its otpCode.');
 
             let fileUrl: string | null = null;
             if (file) {
@@ -77,7 +83,7 @@ export class SyncService {
                 dispatchId: dto.dispatchId,
                 type:       dto.type,
                 fileUrl,
-                // The code proves the driver's local verification step; never persist it in plaintext.
+                // OTP evidence is accepted only by the server validation flow.
                 otpCode:    null,
             });
             return { clientEventId: dto.clientEventId, outcome: SyncEventOutcome.APPLIED };
@@ -96,7 +102,8 @@ export class SyncService {
     }
 
     private async processOne(event: SyncEventDto, driverId: number): Promise<SyncEventOutcome> {
-        return this.dataSource.transaction(async (manager) => {
+        let statusChangedEvent: DispatchStatusChangedEvent | undefined;
+        const outcome = await this.dataSource.transaction(async (manager) => {
             const options = { manager };
 
             if (event.type === SyncEventType.STATUS_CHANGE) {
@@ -107,7 +114,7 @@ export class SyncService {
 
                 // Unknown dispatch and someone else's dispatch answer the same: a driver cannot probe other routes.
                 const [lockedDispatch] = await manager.query(
-                    'SELECT dispatch_id FROM dispatches WHERE dispatch_id = $1 FOR UPDATE',
+                    'SELECT dispatch_id, evidence_policy FROM dispatches WHERE dispatch_id = $1 FOR UPDATE',
                     [event.dispatchId],
                 );
                 if (!lockedDispatch) throw new DispatchNotFoundException();
@@ -124,6 +131,10 @@ export class SyncService {
                 if (!current) throw new BadRequestException('The dispatch has no configured current status.');
                 if (!DRIVER_SYNC_STATUSES.has(target)) {
                     throw new BadRequestException(`The driver cannot set dispatch status ${target}.`);
+                }
+                if (target === 'delivered' && lockedDispatch.evidence_policy === 'high_value_control' &&
+                    !(await this.deliveryEvidencesService.existsByDispatchAndType(event.dispatchId, 'otp', options))) {
+                    throw new DispatchEvidenceRequiredException('otp');
                 }
                 const occurredAt = new Date(event.occurredAt);
                 const outboundRecordVersion = current !== target && PUBLISHED_DELIVERY_OUTCOME_STATUSES.includes(target)
@@ -148,6 +159,13 @@ export class SyncService {
                         ...(outboundRecordVersion !== null && { outboundRecordVersion }),
                     },
                 }, options);
+                if (current !== target && target === 'in_transit') {
+                    const [updated]: { version: number; updated_at: Date | string }[] = await manager.query(
+                        'SELECT version, updated_at FROM dispatches WHERE dispatch_id = $1', [event.dispatchId],
+                    );
+                    statusChangedEvent = { dispatchId: event.dispatchId, status: target, previousStatus: current,
+                        version: updated.version, updatedAt: new Date(updated.updated_at).toISOString() };
+                }
                 return SyncEventOutcome.APPLIED;
             }
 
@@ -213,6 +231,9 @@ export class SyncService {
             }, options);
             return SyncEventOutcome.APPLIED;
         });
+        // Emit only after the transaction commits so OTP never observes a rolled-back transition.
+        if (statusChangedEvent) this.events.emit(DISPATCH_STATUS_CHANGED_EVENT, statusChangedEvent);
+        return outcome;
     }
 
     /**

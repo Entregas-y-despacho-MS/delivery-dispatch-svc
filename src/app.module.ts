@@ -45,6 +45,7 @@ import { RouteBatchCorrectionModule } from './app/route-batch-correction/route-b
 import { RouteCutoffModule } from './app/route-cutoff/route-cutoff.module.js';
 import { PublicTrackingModule } from './app/public-tracking/public-tracking.module.js';
 import { DispatchStatusModule } from './app/dispatch-status/dispatch-status.module.js';
+import { DispatchOtpModule } from './app/dispatch-otp/dispatch-otp.module.js';
 import { AuditLogsModule } from './modules/audit/audit-logs/audit-logs.module.js';
 
 @Module({
@@ -69,6 +70,7 @@ import { AuditLogsModule } from './modules/audit/audit-logs/audit-logs.module.js
     PublicTrackingModule,
     RouteCutoffModule,
     DispatchStatusModule,
+    DispatchOtpModule,
     AuditLogsModule,
     RouteBatchCorrectionModule,
     FinalReviewModule,
