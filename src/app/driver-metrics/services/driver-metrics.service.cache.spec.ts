@@ -69,7 +69,8 @@ describe('DriverMetricsService cache', () => {
         vi.spyOn(cache, 'setWithTtl').mockRejectedValue(new CacheUnavailableException());
 
         await expect(service.get(7, DriverMetricsPeriod.MONTH)).resolves.toMatchObject({ deliveredCount: 4, ratingsCount: 2 });
-        expect(warn).toHaveBeenCalledTimes(2);
+        // One warning for the failed read; with the cache down the epoch is unknown, so nothing is written (no second warning).
+        expect(warn).toHaveBeenCalledTimes(1);
     });
 
     it('an unreadable cached value is treated as a miss', async () => {

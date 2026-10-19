@@ -22,7 +22,8 @@ export class DriverMetricsListener {
 
     @OnEvent(DISPATCH_STATUS_CHANGED_EVENT, { async: true })
     async handle(event: DispatchStatusChangedEvent): Promise<void> {
-        if (event.status !== DispatchStatusEnum.DELIVERED) return;
+        // A delivery enters `delivered` (it counts) or, if it ever leaves it, stops counting: both change the figures.
+        if (event.status !== DispatchStatusEnum.DELIVERED && event.previousStatus !== DispatchStatusEnum.DELIVERED) return;
         try {
             const driverId = await this.repository.findDriverIdOfDispatch(event.dispatchId);
             if (driverId !== null) await this.metrics.invalidate(driverId);

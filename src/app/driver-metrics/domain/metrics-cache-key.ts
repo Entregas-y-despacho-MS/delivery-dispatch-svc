@@ -7,7 +7,18 @@ export function metricsCacheKey(driverId: number, period: DriverMetricsPeriod): 
     return `metrics:driver:${driverId}:${period}`;
 }
 
-/** Every key of a driver, for the invalidation when a delivery is confirmed. */
+/**
+ * Counter bumped on every invalidation of a driver. A request that computed its answer while the counter moved
+ * knows a delivery was confirmed meanwhile and must not leave that (possibly stale) answer in the cache. It lives
+ * longer than any cached answer, so it cannot expire while one computed under it is still stored.
+ */
+export const METRICS_EPOCH_TTL_SECONDS = 2 * METRICS_CACHE_TTL_SECONDS;
+
+export function metricsEpochKey(driverId: number): string {
+    return `metrics:driver:${driverId}:epoch`;
+}
+
+/** Every cached answer of a driver, for the invalidation when a delivery is confirmed. */
 export function allMetricsCacheKeys(driverId: number): string[] {
     return Object.values(DriverMetricsPeriod).map((period) => metricsCacheKey(driverId, period));
 }

@@ -3,12 +3,12 @@ import { Logger } from '@nestjs/common';
 import { MemoryCacheAdapter } from '../../plugins/cache/memory/memory-cache.adapter.js';
 import { CacheUnavailableException } from '../../plugins/cache/exceptions/index.js';
 import type { DispatchStatusChangedEvent } from '../dispatch-status/dispatch-status-changed.event.js';
-import { allMetricsCacheKeys, metricsCacheKey } from './domain/metrics-cache-key.js';
+import { allMetricsCacheKeys, metricsCacheKey, metricsEpochKey } from './domain/metrics-cache-key.js';
 import { DriverMetricsPeriod } from './domain/metrics-period.js';
 import { DriverMetricsListener } from './driver-metrics.listener.js';
 import { DriverMetricsService } from './services/driver-metrics.service.js';
 
-const event = (status: string): DispatchStatusChangedEvent => ({ dispatchId: 50, status, previousStatus: 'in_transit', version: 1, updatedAt: '2026-10-19T15:00:00.000Z' });
+const event = (status: string, previousStatus = 'in_transit'): DispatchStatusChangedEvent => ({ dispatchId: 50, status, previousStatus, version: 1, updatedAt: '2026-10-19T15:00:00.000Z' });
 
 describe('DriverMetricsListener', () => {
     const repository = { aggregate: vi.fn(), findDriverIdOfDispatch: vi.fn() };
@@ -48,6 +48,22 @@ describe('DriverMetricsListener', () => {
 
         expect(repository.findDriverIdOfDispatch).not.toHaveBeenCalled();
         expect(await cache.get(metricsCacheKey(7, DriverMetricsPeriod.TODAY))).not.toBeNull();
+    });
+
+    it('a dispatch that LEAVES delivered also drops the answers (it stops counting)', async () => {
+        await fill(7);
+
+        await listener.handle(event('assigned', 'delivered'));
+
+        for (const key of allMetricsCacheKeys(7)) expect(await cache.get(key)).toBeNull();
+    });
+
+    it('a delivery moves the epoch, so an answer being computed is not stored', async () => {
+        const before = await cache.get(metricsEpochKey(7));
+
+        await listener.handle(event('delivered'));
+
+        expect(await cache.get(metricsEpochKey(7))).not.toBe(before);
     });
 
     it('a dispatch without a driver invalidates nothing', async () => {
