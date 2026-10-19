@@ -4,7 +4,9 @@ import { AccessUrlResult, StoragePort, UploadOptions, UploadResult } from '../st
 import { CloudinaryConfig } from './cloudinary.config.js';
 import { StorageUploadException } from '../exceptions/index.js';
 
-const STORED_URL = /\/(image|video|raw)\/upload\/(?:v\d+\/)?(.+?)(?:\.([a-z0-9]+))?$/i;
+// Stored form: https://res.cloudinary.com/<cloud>/<resource_type>/<type>/[s--signature--/][v123/]<public_id>.<format>
+// New files are `authenticated`; `upload` (public delivery) only appears in files stored before ST-56.2.
+const STORED_URL = /\/(image|video|raw)\/(upload|authenticated)\/(?:s--[^/]+--\/)?(?:v\d+\/)?(.+?)(?:\.([a-z0-9]+))?$/i;
 
 @Injectable()
 export class CloudinaryAdapter extends StoragePort {
@@ -23,7 +25,8 @@ export class CloudinaryAdapter extends StoragePort {
         try {
             const result = await new Promise<UploadApiResponse>((resolve, reject) => {
                 const stream = cloudinary.uploader.upload_stream(
-                    { folder: this.config.folder, resource_type: 'auto' },
+                    // `authenticated`: the stored URL does not open without a signature (the default, `upload`, is public forever).
+                    { folder: this.config.folder, resource_type: 'auto', type: 'authenticated' },
                     (error?: UploadApiErrorResponse, result?: UploadApiResponse) => {
                         if (error || !result) reject(error);
                         else resolve(result);
@@ -40,15 +43,14 @@ export class CloudinaryAdapter extends StoragePort {
     }
 
     async getAccessUrl(storedUrl: string, ttlSeconds: number): Promise<AccessUrlResult> {
-        // Stored form: https://res.cloudinary.com/<cloud>/<resource_type>/upload/[v123/]<public_id>.<format>
         const match = STORED_URL.exec(storedUrl.split('?')[0]);
         if (!match) throw new StorageUploadException('Unrecognized stored file URL.');
-        const [, resourceType, publicId, format] = match;
+        const [, resourceType, deliveryType, publicId, format] = match;
         const expiresAtSec = Math.floor(Date.now() / 1000) + ttlSeconds;
-        // Signed download endpoint: valid until expires_at, regardless of the asset's delivery type.
+        // Signed download endpoint, valid until expires_at. `type` must be the asset's own delivery type.
         const url = cloudinary.utils.private_download_url(publicId, format ?? '', {
             resource_type: resourceType,
-            type:          'upload',
+            type:          deliveryType.toLowerCase(),
             expires_at:    expiresAtSec,
         });
         return { url, expiresAt: new Date(expiresAtSec * 1000) };
