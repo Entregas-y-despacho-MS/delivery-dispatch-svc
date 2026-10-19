@@ -5,8 +5,9 @@ import { Readable } from 'node:stream';
 import { DispatchStatusEnum } from '../../../../shared/enums/dispatch-status.enum.js';
 import { DispatchHistoryItemDto, FindDispatchHistoryResponseDto } from '../dto/dispatch-history.dto.js';
 import { ExportDispatchHistoryParamsDto, FindDispatchHistoryParamsDto } from '../dto/find-dispatch-history-params.dto.js';
-import { CSV_BOM, csvLine, formatLocalIso } from '../utils/csv.js';
+import { CSV_BOM, csvLine, formatLocalDateTime } from '../utils/csv.js';
 import { buildHistoryQuery, HISTORY_FROM_SQL } from '../utils/history-query.js';
+import { terminalStatusLabel } from '../utils/status-labels.js';
 
 interface HistoryRow {
     id: number;
@@ -111,9 +112,9 @@ export class DispatchHistoryService {
             item.recipient,
             item.driverName,
             item.plate,
-            formatLocalIso(item.departedAt),
-            formatLocalIso(item.deliveredAt),
-            item.status,
+            formatLocalDateTime(item.departedAt),
+            formatLocalDateTime(item.deliveredAt),
+            terminalStatusLabel(item.status),
         ]);
     }
 

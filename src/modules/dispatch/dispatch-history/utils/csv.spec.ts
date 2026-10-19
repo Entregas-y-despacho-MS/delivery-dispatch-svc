@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { csvCell, csvLine, formatLocalIso } from './csv.js';
+import { csvCell, csvLine, formatLocalDateTime } from './csv.js';
 
 describe('csvCell', () => {
     it('leaves plain text as it is and null or undefined as an empty cell', () => {
@@ -34,21 +34,21 @@ describe('csvLine', () => {
     });
 });
 
-describe('formatLocalIso', () => {
-    it('writes the moment in Bolivia time with its offset', () => {
-        expect(formatLocalIso(new Date('2026-10-10T15:00:00.000Z'))).toBe('2026-10-10T11:00:00-04:00');
+describe('formatLocalDateTime', () => {
+    it('writes the moment as date and time in Bolivia time, in the form spreadsheets read as a date', () => {
+        expect(formatLocalDateTime(new Date('2026-10-10T15:00:00.000Z'))).toBe('2026-10-10 11:00:00');
     });
 
     it('moves the day when UTC is already the next one', () => {
-        expect(formatLocalIso(new Date('2040-03-11T03:30:00.000Z'))).toBe('2040-03-10T23:30:00-04:00');
+        expect(formatLocalDateTime(new Date('2040-03-11T03:30:00.000Z'))).toBe('2040-03-10 23:30:00');
     });
 
     it('writes midnight as 00, not 24', () => {
-        expect(formatLocalIso(new Date('2040-03-11T04:00:00.000Z'))).toBe('2040-03-11T00:00:00-04:00');
+        expect(formatLocalDateTime(new Date('2040-03-11T04:00:00.000Z'))).toBe('2040-03-11 00:00:00');
     });
 
     it('is empty for a missing or invalid moment', () => {
-        expect(formatLocalIso(null)).toBe('');
-        expect(formatLocalIso(new Date('nope'))).toBe('');
+        expect(formatLocalDateTime(null)).toBe('');
+        expect(formatLocalDateTime(new Date('nope'))).toBe('');
     });
 });

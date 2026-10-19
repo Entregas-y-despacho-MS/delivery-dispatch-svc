@@ -27,16 +27,15 @@ const LOCAL_PARTS = new Intl.DateTimeFormat('en-CA', {
     year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit',
     hourCycle: 'h23',
-    timeZoneName: 'longOffset',
 });
 
 /**
- * A moment as ISO 8601 in Bolivia time with its offset, e.g. `2026-10-10T11:30:00-04:00`: readable for whoever
- * opens the file and still unambiguous for any tool that parses it.
+ * A moment as `YYYY-MM-DD HH:mm:ss` in Bolivia time (the operation's time zone), e.g. `2026-10-10 11:30:00`. Excel
+ * and Sheets read this form as a date and time in any regional setting, so the column can be sorted and filtered;
+ * with an ISO offset (`...T11:30:00-04:00`) they keep it as text.
  */
-export function formatLocalIso(value: Date | null): string {
+export function formatLocalDateTime(value: Date | null): string {
     if (!value || Number.isNaN(value.getTime())) return '';
     const parts = Object.fromEntries(LOCAL_PARTS.formatToParts(value).map((part) => [part.type, part.value]));
-    const offset = parts.timeZoneName === 'GMT' ? 'Z' : parts.timeZoneName.replace('GMT', '');
-    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}${offset}`;
+    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
 }

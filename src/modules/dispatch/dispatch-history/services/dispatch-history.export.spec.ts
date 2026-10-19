@@ -60,8 +60,8 @@ describe('DispatchHistoryService.exportCsv', () => {
 
         expect(csv).toBe(
             HEADER
-            + 'DSP-2026-00001,María,Juan,1234ABC,2026-10-10T09:00:00-04:00,2026-10-10T11:00:00-04:00,delivered\r\n'
-            + 'DSP-2026-00002,María,,,,,not_delivered\r\n',
+            + 'DSP-2026-00001,María,Juan,1234ABC,2026-10-10 09:00:00,2026-10-10 11:00:00,Entregado\r\n'
+            + 'DSP-2026-00002,María,,,,,No entregado\r\n',
         );
     });
 
