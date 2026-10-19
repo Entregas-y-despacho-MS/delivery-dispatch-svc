@@ -208,6 +208,26 @@ describe('DispatchStatusService.update', () => {
         }), { manager: ctx.manager });
     });
 
+    it.each([DispatchStatusEnum.DELIVERED, DispatchStatusEnum.NOT_DELIVERED])('sets closed_at to the time %s happened on the device (ST-55.2)', async (status) => {
+        const ctx = setup({ current: DispatchStatusEnum.IN_TRANSIT });
+        const event = { ...dto(status), occurredAt: new Date(Date.now() - 2 * 60 * 60_000).toISOString() };
+
+        await ctx.service.update(12, event, 7);
+
+        const [sql, args] = ctx.manager.query.mock.calls.find(([text]) => text.includes('UPDATE dispatches'))!;
+        expect(sql).toContain('closed_at = $3::timestamptz');
+        expect(args[2]).toEqual(new Date(event.occurredAt));
+    });
+
+    it('does not set a closing time on a status that is not final', async () => {
+        const ctx = setup();
+
+        await ctx.service.update(12, dto(DispatchStatusEnum.IN_TRANSIT), 7);
+
+        const [, args] = ctx.manager.query.mock.calls.find(([text]) => text.includes('UPDATE dispatches'))!;
+        expect(args[2]).toBeNull();
+    });
+
     it('returns the current state for a repeated eventId without duplicating writes or emissions', async () => {
         const ctx = setup({
             current: DispatchStatusEnum.IN_TRANSIT,

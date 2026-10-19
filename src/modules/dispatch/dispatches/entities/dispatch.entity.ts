@@ -149,6 +149,11 @@ export class Dispatch extends BaseCreatedUpdated {
     @Column({ name: 'confirmed_at', type: 'timestamptz', nullable: true })
     confirmedAt: Date | null;
 
+    // When the dispatch reached a terminal status (the event's time, not the time it was received);
+    // NULL while it is not in one. The history filters and sorts on it (ST-55.2).
+    @Column({ name: 'closed_at', type: 'timestamptz', nullable: true })
+    closedAt: Date | null;
+
     @ManyToOne(() => DispatchType)
     @JoinColumn({ name: 'dispatch_type_id' })
     dispatchType: DispatchType;

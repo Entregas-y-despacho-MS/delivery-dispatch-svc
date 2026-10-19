@@ -6,6 +6,7 @@ import { DispatchEventsService } from '../../../modules/dispatch/dispatch-events
 import { DeliveryEvidencesService } from '../../../modules/dispatch/delivery-evidences/services/delivery-evidences.service.js';
 import { DispatchNotFoundException } from '../../../modules/dispatch/dispatches/exceptions/dispatch-not-found.exception.js';
 import { FINAL_STATUSES } from '../../../modules/dispatch/dispatches/services/dispatches.service.js';
+import { isTerminalDispatchStatus } from '../../../modules/dispatch/dispatches/utils/terminal-statuses.js';
 import { DispatchStatusEnum } from '../../../shared/enums/dispatch-status.enum.js';
 import { DispatchEvidenceRequiredException } from '../exceptions/dispatch-evidence-required.exception.js';
 import { DispatchStatusConflictException } from '../exceptions/dispatch-status-conflict.exception.js';
@@ -180,17 +181,18 @@ export class DispatchStatusService {
         );
         if (!target) throw new DispatchStatusConflictException('DISPATCH_STATUS_UNKNOWN', `Status ${dto.status} is not configured.`);
 
+        // The closing time is when it happened on the device (the app may sync late), not when it arrives (ST-55.2).
+        const occurredAt = new Date(dto.occurredAt);
         const [updated]: { updated_at: Date }[] = await manager.query(
             `WITH updated AS (
                 UPDATE dispatches
-                   SET dispatch_status_id = $1, updated_at = now()
+                   SET dispatch_status_id = $1, updated_at = now(), closed_at = $3::timestamptz
                  WHERE dispatch_id = $2
                  RETURNING updated_at
              )
              SELECT updated_at FROM updated`,
-            [target.dispatch_status_id, dispatchId],
+            [target.dispatch_status_id, dispatchId, isTerminalDispatchStatus(dto.status) ? occurredAt : null],
         );
-        const occurredAt = new Date(dto.occurredAt);
         const outboundRecordVersion = dispatch.status === dto.status || !PUBLISHED_DELIVERY_OUTCOME_STATUSES.includes(dto.status)
             ? null
             : await this.statusPublication.publish(manager, {

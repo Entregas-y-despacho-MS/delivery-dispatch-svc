@@ -94,11 +94,15 @@ export class DispatchesService {
         return repo.exists({ where: { serviceLevelId, dispatchStatus: { name: In(ACTIVE_STATUSES) } } });
     }
 
-    /** Throws DispatchNotFoundException if the dispatch doesn't exist. */
-    async updateStatus(id: number, dispatchStatusId: number, options?: MutationOptions): Promise<void> {
+    /**
+     * Throws DispatchNotFoundException if the dispatch doesn't exist. `closedAt` is the time the event
+     * happened (the device's `occurredAt`): pass it only when the status changes to a terminal one. Without
+     * it the database trigger fills `closed_at` with the current time (ST-55.2).
+     */
+    async updateStatus(id: number, dispatchStatusId: number, options?: MutationOptions, closedAt?: Date): Promise<void> {
         const repo = options?.manager?.getRepository(Dispatch) ?? this.rawRepo;
         if (!(await this.existsById(id, options))) throw new DispatchNotFoundException();
-        await repo.update(id, { dispatchStatusId });
+        await repo.update(id, { dispatchStatusId, ...(closedAt && { closedAt }) });
     }
 
     /**

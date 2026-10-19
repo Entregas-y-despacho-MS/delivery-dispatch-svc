@@ -75,9 +75,27 @@ describe('SyncService.processBatch — a driver only syncs their own dispatches'
         const { results } = await service.processBatch([statusEvent()], DRIVER);
 
         expect(results[0].outcome).toBe('applied');
-        expect(dispatches.updateStatus).toHaveBeenCalledWith(42, 2, expect.anything());
+        // in_transit is not a final status: no closing time is passed (ST-55.2)
+        expect(dispatches.updateStatus).toHaveBeenCalledWith(42, 2, expect.anything(), undefined);
         expect(events.create).toHaveBeenCalled();
         expect(statusPublication.publish).not.toHaveBeenCalled();
+    });
+
+    it.each(['delivered', 'not_delivered'])('closes the dispatch at the time %s happened on the device, not when the sync arrives', async (status) => {
+        const { service, dispatches, manager } = build({ targetStatus: status, currentStatus: 'in_transit' });
+        const occurredAt = new Date(Date.now() - 3 * 60 * 60_000).toISOString();
+
+        await service.processBatch([statusEvent({ dispatchStatusId: 9, occurredAt })], DRIVER);
+
+        expect(dispatches.updateStatus).toHaveBeenCalledWith(42, 9, { manager }, new Date(occurredAt));
+    });
+
+    it('does not move the closing time when the same final status is sent again', async () => {
+        const { service, dispatches, manager } = build({ targetStatus: 'delivered', currentStatus: 'delivered' });
+
+        await service.processBatch([statusEvent({ dispatchStatusId: 9 })], DRIVER);
+
+        expect(dispatches.updateStatus).toHaveBeenCalledWith(42, 9, { manager }, undefined);
     });
 
     it.each(['delivered', 'not_delivered'])('publishes %s from offline status sync in the same transaction', async (status) => {
