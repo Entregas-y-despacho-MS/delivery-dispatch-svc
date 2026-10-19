@@ -183,7 +183,7 @@ export class RouteBatchesController {
   @Roles(RoleEnum.DRIVER)
   @ApiOperation({
     summary: 'Start a confirmed route batch',
-    description: 'The assigned driver starts the route with an idempotent UUID v7 eventId. In one transaction it moves the batch to in_execution, moves eligible assigned dispatches to out_for_delivery, records custody and queues one dispatch.shipment.departed outbox message per departing dispatch. Dispatches with an unresolved cotejo_failed event are returned in excludedDispatchIds and are not transitioned or published. Status-change notifications are emitted after commit. A retry with the same eventId returns the original result without repeating transitions.',
+    description: 'The assigned driver starts the route with an idempotent UUID v7 eventId, only after accepting the batch (`POST /route-batches/:id/accept`, 409 `ROUTE_BATCH_NOT_ACCEPTED` otherwise). In one transaction it moves the batch to in_execution, moves eligible assigned dispatches to out_for_delivery, records custody and queues one dispatch.shipment.departed outbox message per departing dispatch. Dispatches with an unresolved cotejo_failed event are returned in excludedDispatchIds and are not transitioned or published. Status-change notifications are emitted after commit. A retry with the same eventId returns the original result without repeating transitions.',
   })
   @ApiIdParam('Route batch')
   @ApiOkResponse({ type: StartRouteBatchResponseDto })
@@ -193,6 +193,7 @@ export class RouteBatchesController {
   @ApiNotFound({ code: 'ROUTE_BATCH_NOT_FOUND', message: 'Route batch not found.' })
   @ApiConflict(
     { code: 'ROUTE_BATCH_NOT_CONFIRMED', message: 'Only a confirmed route batch can start.' },
+    { code: 'ROUTE_BATCH_NOT_ACCEPTED', message: 'Accept the route batch and check the load before starting the route.' },
     { code: 'ROUTE_BATCH_DRIVER_REQUIRED', message: 'Assign a driver before starting the route.' },
     { code: 'ROUTE_BATCH_HAS_NO_DISPATCHES', message: 'The route batch has no dispatches to start.' },
     { code: 'ROUTE_BATCH_ALL_DISPATCHES_EXCLUDED', message: 'No dispatches can depart because every dispatch has an unresolved package-check failure.' },

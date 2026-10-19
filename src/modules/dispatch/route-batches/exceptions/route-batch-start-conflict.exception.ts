@@ -2,6 +2,7 @@ import { ConflictException } from '@nestjs/common';
 
 export type RouteBatchStartConflictCode =
   | 'ROUTE_BATCH_NOT_CONFIRMED'
+  | 'ROUTE_BATCH_NOT_ACCEPTED'
   | 'ROUTE_BATCH_DRIVER_REQUIRED'
   | 'ROUTE_BATCH_HAS_NO_DISPATCHES'
   | 'ROUTE_BATCH_ALL_DISPATCHES_EXCLUDED'

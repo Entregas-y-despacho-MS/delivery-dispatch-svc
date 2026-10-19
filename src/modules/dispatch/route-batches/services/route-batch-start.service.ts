@@ -22,6 +22,7 @@ interface BatchRow {
   id: number;
   status: string;
   driver_id: number | null;
+  accepted_at: Date | null;
 }
 interface DispatchRow {
   id: number;
@@ -92,7 +93,7 @@ export class RouteBatchStartService {
   ): Promise<StartResult> {
     const manager = runner.manager;
     const [batch]: BatchRow[] = await manager.query(
-      `SELECT route_batch_id AS id, status, driver_id FROM route_batches WHERE route_batch_id = $1 FOR UPDATE`,
+      `SELECT route_batch_id AS id, status, driver_id, accepted_at FROM route_batches WHERE route_batch_id = $1 FOR UPDATE`,
       [routeBatchId],
     );
     if (!batch) throw new RouteBatchNotFoundException();
@@ -136,6 +137,14 @@ export class RouteBatchStartService {
       throw new RouteBatchStartConflictException(
         'ROUTE_BATCH_NOT_CONFIRMED',
         `Only a confirmed route batch can start (current status: ${batch.status}).`,
+      );
+    }
+
+    // The driver must accept the batch and check the load first (ST-210.1, RF-U24).
+    if (!batch.accepted_at) {
+      throw new RouteBatchStartConflictException(
+        'ROUTE_BATCH_NOT_ACCEPTED',
+        'Accept the route batch and check the load before starting the route.',
       );
     }
 
