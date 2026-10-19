@@ -5,7 +5,7 @@ vi.mock('../../../plugins/messaging/envelope/uuid-v7.js', () => ({
   generateMessageId: () => '0192fbe5-f6cc-7fcc-9bff-2d8cae4a6edc',
 }));
 
-import { DISPATCH_CHANGE_REQUIRES_ATTENTION } from '../sales-order-intake/services/dispatch-change-events.service.js';
+const INCOMPLETE_ORDER_EVENT = 'integration.order_incomplete';
 import { MemoryMessageBusAdapter } from '../../../plugins/messaging/memory/memory-message-bus.adapter.js';
 import { MemoryInboundMessageLogAdapter } from '../../../plugins/messaging/memory/memory-inbound-message-log.adapter.js';
 import { MessageValidator } from '../../../plugins/messaging/envelope/message-validator.js';
@@ -122,7 +122,7 @@ describe('IncompleteOrderRecoveryTask', () => {
   it('publishes the missing origin request and alerts after the third spaced request', async () => {
     const { task, bus, events, state, settings } = setup();
     const alerts: unknown[] = [];
-    events.on(DISPATCH_CHANGE_REQUIRES_ATTENTION, (alert) =>
+    events.on(INCOMPLETE_ORDER_EVENT, (alert) =>
       alerts.push(alert),
     );
 
@@ -155,8 +155,9 @@ describe('IncompleteOrderRecoveryTask', () => {
     expect(alerts).toEqual([
       expect.objectContaining({
         salesOrderId: 'SO-50-5',
-        source: 'inventory',
-        changeType: 'incomplete_order',
+        missingSource: 'inventory',
+        attempts: 3,
+        detectedAt: expect.any(String),
       }),
     ]);
     expect(settings.getNumber).toHaveBeenCalledWith(
@@ -172,7 +173,7 @@ describe('IncompleteOrderRecoveryTask', () => {
   it('does not publish or alert when the missing origin arrives before the next run', async () => {
     const { task, bus, events, state } = setup({ base_received: true });
     const alert = vi.fn();
-    events.on(DISPATCH_CHANGE_REQUIRES_ATTENTION, alert);
+    events.on(INCOMPLETE_ORDER_EVENT, alert);
 
     await task.recover(new Date('2026-10-14T10:00:00.000Z'));
 
@@ -272,7 +273,7 @@ describe('IncompleteOrderRecoveryTask', () => {
     };
     const events = new EventEmitter2();
     const alerts: unknown[] = [];
-    events.on(DISPATCH_CHANGE_REQUIRES_ATTENTION, (alert) =>
+    events.on(INCOMPLETE_ORDER_EVENT, (alert) =>
       alerts.push(alert),
     );
     const bus = new MemoryMessageBusAdapter(
@@ -306,8 +307,9 @@ describe('IncompleteOrderRecoveryTask', () => {
     expect(states.marketplace.incomplete_alerted_at).toEqual(now);
     expect(alerts).toEqual([
       expect.objectContaining({
-        source: 'marketplace',
-        changeType: 'incomplete_order',
+        missingSource: 'marketplace',
+        attempts: 3,
+        detectedAt: expect.any(String),
       }),
     ]);
   });
@@ -331,15 +333,15 @@ describe('IncompleteOrderRecoveryTask', () => {
 
     expect(state.incomplete_alerted_at).toBeNull();
     expect(emit).toHaveBeenCalledWith(
-      DISPATCH_CHANGE_REQUIRES_ATTENTION,
-      expect.objectContaining({ changeType: 'incomplete_order' }),
+      INCOMPLETE_ORDER_EVENT,
+      expect.objectContaining({ missingSource: 'inventory', attempts: 3 }),
     );
     emit.mockRestore();
   });
 
   it('retries the alert when a listener throws', async () => {
     const { task, state, events } = setup({ sync_attempts: 3 });
-    events.on(DISPATCH_CHANGE_REQUIRES_ATTENTION, () => {
+    events.on(INCOMPLETE_ORDER_EVENT, () => {
       throw new Error('listener failed');
     });
 

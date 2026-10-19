@@ -5,7 +5,11 @@ import { DispatchesController } from './dispatches.controller.js';
 function build() {
     const service = { findDriverAssignments: vi.fn().mockResolvedValue({ date: 'x', lastModifiedAt: null, data: [] }) };
     const priority = { changePriority: vi.fn().mockResolvedValue({ id: 5, priority: 'urgent', status: 'pending' }) };
-    return { controller: new DispatchesController(service as any, priority as any), service, priority };
+    const kanban = {
+        findAll: vi.fn().mockResolvedValue({ date: 'x', columns: [] }),
+        findFilters: vi.fn().mockResolvedValue({ drivers: [], dispatchTypes: [] }),
+    };
+    return { controller: new DispatchesController(service as any, priority as any, {} as any, kanban as any), service, priority, kanban };
 }
 
 // ST-58.2 — el usuario que cambia la prioridad sale siempre del token.
@@ -17,6 +21,26 @@ describe('DispatchesController.changePriority', () => {
 
         expect(priority.changePriority).toHaveBeenCalledWith(5, 'urgent', 9);
         expect(result).toEqual({ id: 5, priority: 'urgent', status: 'pending' });
+    });
+});
+
+describe('DispatchesController.findKanban', () => {
+    it('passes supported filters and the authenticated viewer id to the board service', async () => {
+        const { controller, kanban } = build();
+        const params = { date: '2026-10-20', delivery_zone_id: 3, driver_id: 7, dispatch_type_id: 2 };
+
+        await controller.findKanban(params, 9);
+
+        expect(kanban.findAll).toHaveBeenCalledWith(params, 9);
+    });
+});
+
+describe('DispatchesController.findKanbanFilters', () => {
+    it('delegates filter catalog retrieval to the kanban service', async () => {
+        const { controller, kanban } = build();
+
+        await expect(controller.findKanbanFilters()).resolves.toEqual({ drivers: [], dispatchTypes: [] });
+        expect(kanban.findFilters).toHaveBeenCalledOnce();
     });
 });
 

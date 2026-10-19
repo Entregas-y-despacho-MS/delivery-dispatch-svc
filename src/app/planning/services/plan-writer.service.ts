@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { isUniqueViolation } from '../../../shared/orm/unique-violation.js';
@@ -6,6 +7,7 @@ import { DispatchStatusEnum, RouteBatchStatusEnum } from '../../../shared/enums/
 import { RouteBatch } from '../../../modules/dispatch/route-batches/entities/route-batch.entity.js';
 import { RouteBatchEvent } from '../../../modules/dispatch/route-batches/entities/route-batch-event.entity.js';
 import { DispatchEvent } from '../../../modules/dispatch/dispatch-events/entities/dispatch-event.entity.js';
+import { DISPATCH_STATUS_CHANGED_EVENT, type DispatchStatusChangedEvent } from '../../dispatch-status/dispatch-status-changed.event.js';
 import { RouteBatchReviewerService } from '../../../modules/dispatch/route-batches/services/route-batch-reviewer.service.js';
 import type { ProposedBatch, ProposedInsertion } from '../domain/plan-types.js';
 
@@ -37,6 +39,7 @@ export interface WrittenInsertion {
 interface LockedDispatch {
     dispatch_id: number;
     status: string;
+    version: number;
     route_batch_id: number | null;
     reserved: boolean;
 }
@@ -58,17 +61,24 @@ export class PlanWriterService {
     constructor(
         @InjectDataSource() private readonly dataSource: DataSource,
         private readonly reviewer: RouteBatchReviewerService,
+        private readonly events: EventEmitter2,
     ) {}
 
     async writeNewBatch(proposal: ProposedBatch, context: WriteContext): Promise<WrittenBatch> {
-        return await this.dataSource.transaction((manager) => this.createBatch(manager, proposal, context));
+        const statusEvents: DispatchStatusChangedEvent[] = [];
+        const result = await this.dataSource.transaction((manager) => this.createBatch(manager, proposal, context, statusEvents));
+        for (const event of statusEvents) this.events.emit(DISPATCH_STATUS_CHANGED_EVENT, event);
+        return result;
     }
 
     async writeInsertion(insertion: ProposedInsertion, context: WriteContext): Promise<WrittenInsertion> {
-        return await this.dataSource.transaction((manager) => this.insertIntoBatch(manager, insertion, context));
+        const statusEvents: DispatchStatusChangedEvent[] = [];
+        const result = await this.dataSource.transaction((manager) => this.insertIntoBatch(manager, insertion, context, statusEvents));
+        for (const event of statusEvents) this.events.emit(DISPATCH_STATUS_CHANGED_EVENT, event);
+        return result;
     }
 
-    private async createBatch(manager: EntityManager, proposal: ProposedBatch, context: WriteContext): Promise<WrittenBatch> {
+    private async createBatch(manager: EntityManager, proposal: ProposedBatch, context: WriteContext, statusEvents: DispatchStatusChangedEvent[]): Promise<WrittenBatch> {
         const wanted = proposal.stops.map((stop) => stop.dispatchId);
         const locked = await this.lockDispatches(manager, wanted);
         const plannable = plannableIds(locked);
@@ -90,7 +100,7 @@ export class PlanWriterService {
             windowEnd: stop.windowEnd,
         })));
 
-        await this.recordStatusEvents(manager, locked, ids, routeBatchId, context);
+        await this.recordStatusEvents(manager, locked, ids, routeBatchId, context, statusEvents);
 
         const batchEvents = manager.getRepository(RouteBatchEvent);
         await batchEvents.save(batchEvents.create({
@@ -121,7 +131,7 @@ export class PlanWriterService {
         return { routeBatchId, vehicleId, plannedDispatchIds: ids, skippedDispatchIds };
     }
 
-    private async insertIntoBatch(manager: EntityManager, insertion: ProposedInsertion, context: WriteContext): Promise<WrittenInsertion> {
+    private async insertIntoBatch(manager: EntityManager, insertion: ProposedInsertion, context: WriteContext, statusEvents: DispatchStatusChangedEvent[]): Promise<WrittenInsertion> {
         const { routeBatchId } = insertion;
         const newStops = insertion.stops.filter((stop) => stop.isNew);
         const staleResult: WrittenInsertion = {
@@ -208,7 +218,7 @@ export class PlanWriterService {
             [routeBatchId],
         );
 
-        await this.recordStatusEvents(manager, locked, insertedDispatchIds, routeBatchId, context, new Map(added.map((s) => [s.dispatchId, s.sequence])));
+        await this.recordStatusEvents(manager, locked, insertedDispatchIds, routeBatchId, context, statusEvents, new Map(added.map((s) => [s.dispatchId, s.sequence])));
 
         const shiftedDispatchIds = existing
             .filter((stop) => stop.sequence !== stop.previousSequence)
@@ -275,6 +285,7 @@ export class PlanWriterService {
         ids: number[],
         routeBatchId: number,
         context: WriteContext,
+        statusEvents: DispatchStatusChangedEvent[],
         sequences?: Map<number, number>,
     ): Promise<void> {
         const statusByDispatch = new Map(locked.map((row) => [row.dispatch_id, row.status]));
@@ -295,12 +306,24 @@ export class PlanWriterService {
                 occurrence: context.occurrence,
             },
         })));
+        const lockedById = new Map(locked.map((row) => [row.dispatch_id, row]));
+        for (const dispatchId of ids) {
+            const previous = lockedById.get(dispatchId);
+            if (!previous) continue;
+            statusEvents.push({
+                dispatchId,
+                previousStatus: previous.status,
+                status: DispatchStatusEnum.IN_PLANNING,
+                version: previous.version + 1,
+                updatedAt: new Date().toISOString(),
+            });
+        }
     }
 
     private async lockDispatches(manager: EntityManager, ids: number[]): Promise<LockedDispatch[]> {
         if (ids.length === 0) return [];
         return await manager.query(
-            `SELECT d.dispatch_id, s.name AS status, d.route_batch_id,
+            `SELECT d.dispatch_id, s.name AS status, d.version, d.route_batch_id,
                     EXISTS (SELECT 1 FROM dispatch_reservations r
                              WHERE r.dispatch_id = d.dispatch_id AND r.expires_at > NOW()) AS reserved
                FROM dispatches d

@@ -48,6 +48,7 @@ import { DispatchStatusModule } from './app/dispatch-status/dispatch-status.modu
 import { DispatchOtpModule } from './app/dispatch-otp/dispatch-otp.module.js';
 import { DispatchEvidenceModule } from './app/dispatch-evidence/dispatch-evidence.module.js';
 import { AuditLogsModule } from './modules/audit/audit-logs/audit-logs.module.js';
+import { DispatchEventsAppModule } from './app/dispatch-events/dispatch-events.module.js';
 
 @Module({
   imports: [
@@ -90,6 +91,7 @@ import { AuditLogsModule } from './modules/audit/audit-logs/audit-logs.module.js
     AuthModule,
     SyncModule,
     TrackingModule,
+    DispatchEventsAppModule,
     MailerModule.register(),
     SocketModule,
     PdfModule,

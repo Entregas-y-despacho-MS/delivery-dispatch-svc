@@ -2,6 +2,7 @@
 // la sala 'dispatch-board'. Todo mockeado: sin DB ni socket real. (El guardrail de "no pisar algo
 // más nuevo" en sí se prueba en dispatches.service.spec.ts — acá solo se confirma que se usa.)
 import { describe, expect, it, vi } from 'vitest';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { DISPATCH_BOARD_ROOM, TrackingService } from './tracking.service.js';
 import { LocationReportOutcome } from '../dto/location-report-result.dto.js';
 import { LocationPointDto } from '../dto/location-point.dto.js';
@@ -15,8 +16,9 @@ function buildService() {
         joinRoom:    vi.fn(),
         emitToRoom:  vi.fn(),
     };
-    const service = new TrackingService(dispatchesService as any, socketService as any);
-    return { service, dispatchesService, socketService };
+    const events = { emit: vi.fn() };
+    const service = new TrackingService(dispatchesService as any, socketService as any, events as unknown as EventEmitter2);
+    return { service, dispatchesService, socketService, events };
 }
 
 // Todas relativas a "ahora" — nunca una fecha fija, para no depender de qué día sea al correr los tests.
@@ -32,27 +34,27 @@ const point = (over: Partial<LocationPointDto> = {}): LocationPointDto => ({
 });
 
 describe('TrackingService.reportLocations', () => {
-    it('un punto válido: applied + se retransmite por socket a dispatch-board', async () => {
-        const { service, socketService } = buildService();
+    it('un punto válido: applied + publica el evento de dominio para el listener del tablero', async () => {
+        const { service, events } = buildService();
         const p = point();
 
         const { results } = await service.reportLocations([p], 5);
 
         expect(results).toEqual([{ dispatchId: 42, outcome: LocationReportOutcome.APPLIED }]);
-        expect(socketService.emitToRoom).toHaveBeenCalledWith(DISPATCH_BOARD_ROOM, 'dispatch.location.updated', {
+        expect(events.emit).toHaveBeenCalledWith('dispatch.location.updated', {
             dispatchId: 42, latitude: -17.783, longitude: -63.182, recordedAt: p.recordedAt,
         });
     });
 
     it('despacho ajeno o inexistente (isAssignedToDriver false) → failed, sin llegar a escribir ni emitir', async () => {
-        const { service, dispatchesService, socketService } = buildService();
+        const { service, dispatchesService, events } = buildService();
         dispatchesService.isAssignedToDriver.mockResolvedValue(false);
 
         const { results } = await service.reportLocations([point()], 5);
 
         expect(results).toEqual([{ dispatchId: 42, outcome: LocationReportOutcome.FAILED, error: 'Dispatch not found.' }]);
         expect(dispatchesService.updateLocation).not.toHaveBeenCalled();
-        expect(socketService.emitToRoom).not.toHaveBeenCalled();
+        expect(events.emit).not.toHaveBeenCalled();
     });
 
     it('recordedAt muy en el futuro → failed, sin llegar a validar pertenencia ni escribir', async () => {
@@ -67,13 +69,13 @@ describe('TrackingService.reportLocations', () => {
     });
 
     it('guardrail rechaza el punto por viejo (updateLocation → false) → stale, no error, no emite', async () => {
-        const { service, dispatchesService, socketService } = buildService();
+        const { service, dispatchesService, events } = buildService();
         dispatchesService.updateLocation.mockResolvedValue(false);
 
         const { results } = await service.reportLocations([point()], 5);
 
         expect(results).toEqual([{ dispatchId: 42, outcome: LocationReportOutcome.STALE }]);
-        expect(socketService.emitToRoom).not.toHaveBeenCalled();
+        expect(events.emit).not.toHaveBeenCalled();
     });
 
     it('un lote fuera de orden se aplica cronológicamente (el más viejo primero), no en el orden en que se envió', async () => {
@@ -118,11 +120,10 @@ describe('TrackingService.handleSocketConnected — quién ve el tablero en vivo
         expect(socketService.joinRoom).toHaveBeenCalledWith('sock-1', DISPATCH_BOARD_ROOM);
     });
 
-    it('driver NO se une (no necesita ver el tablero: es quien reporta la posición, no quien la mira)', () => {
+    it('driver se une a su room individual, pero no al tablero', () => {
         const { service, socketService } = buildService();
-
         service.handleSocketConnected({ socketId: 'sock-1', userId: 1, role: 'driver' as any });
-
-        expect(socketService.joinRoom).not.toHaveBeenCalled();
+        expect(socketService.joinRoom).toHaveBeenCalledWith('sock-1', 'driver:1');
+        expect(socketService.joinRoom).not.toHaveBeenCalledWith('sock-1', DISPATCH_BOARD_ROOM);
     });
 });

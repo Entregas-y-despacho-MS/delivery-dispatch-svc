@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, ILike, Repository } from 'typeorm';
 import { escapeLike } from '../../../../shared/utils/like.util.js';
@@ -11,6 +12,7 @@ import { DeliveryZoneNotFoundException, DeliveryZoneCodeAlreadyExistsException }
 import { DtoRepository, isUniqueViolation } from '../../../../shared/orm/index.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
 import { FindOptions, MutationOptions } from '../../../../shared/dto/options.dto.js';
+import { DELIVERY_ZONE_CREATED_EVENT } from '../events/delivery-zone-created.event.js';
 
 @Injectable()
 export class DeliveryZonesService {
@@ -19,6 +21,7 @@ export class DeliveryZonesService {
     constructor(
         @InjectRepository(DeliveryZone)
         private readonly rawRepo: Repository<DeliveryZone>,
+        private readonly events: EventEmitter2,
     ) {
         this.repo = new DtoRepository(rawRepo);
     }
@@ -66,6 +69,7 @@ export class DeliveryZonesService {
         const saved = await this.saveHandlingDuplicate(() => repo.save(zone));
 
         const result = await new DtoRepository(repo).findOne({ dto: returnDto, where: { id: saved.id } });
+        if (!options?.manager) this.events.emit(DELIVERY_ZONE_CREATED_EVENT, { deliveryZoneId: saved.id });
         return result!;
     }
 
