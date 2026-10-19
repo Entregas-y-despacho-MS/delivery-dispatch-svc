@@ -4,22 +4,28 @@ import { CoordinatorOnly } from '../../auth/decorators/index.js';
 import { CurrentUser } from '../../../shared/decorators/current-user.decorator.js';
 import { ParseIdPipe } from '../../../shared/pipes/index.js';
 import { ApiBadRequests, ApiConflict, ApiForbidden, ApiIdParam, ApiNotFound, ApiUnauthorized } from '../../../shared/utils/swagger/index.js';
+import { ReturnDispatchResultDto } from '../dto/return-dispatch-result.dto.js';
+import { ReturnDispatchDto } from '../dto/return-dispatch.dto.js';
+import { DispatchReturnService } from '../services/dispatch-return.service.js';
 import { RescheduleDispatchResultDto } from '../dto/reschedule-dispatch-result.dto.js';
 import { RescheduleDispatchDto } from '../dto/reschedule-dispatch.dto.js';
 import { DispatchReschedulingService } from '../services/dispatch-rescheduling.service.js';
 
 /**
- * ST-52.2 — rescheduling of a delivery by the coordinator (RF-A05).
+ * ST-52.2 — rescheduling of a delivery by the coordinator (RF-A05) and its return to the warehouse (ES-52).
  *
  * Error dictionary: DISPATCH_NOT_FOUND 404, INVALID_TOKEN 401, INSUFFICIENT_PERMISSIONS 403,
- *   DISPATCH_STATUS_NOT_RESCHEDULABLE 409, DISPATCH_TYPE_NOT_SUPPORTED 409, DISPATCH_CHANGED_CONCURRENTLY 409,
+ *   DISPATCH_STATUS_NOT_RESCHEDULABLE 409, DISPATCH_RETURN_NOT_ALLOWED 409, DELIVERY_ATTEMPTS_NOT_EXHAUSTED 409, DISPATCH_TYPE_NOT_SUPPORTED 409, DISPATCH_CHANGED_CONCURRENTLY 409,
  *   RESCHEDULE_ATTEMPTS_LIMIT_REACHED 400, INVALID_RESCHEDULE_WINDOW 400, RESCHEDULE_REASON_INVALID 400
  */
 @ApiTags('Dispatches')
 @ApiBearerAuth('access-token')
 @Controller('dispatches')
 export class DispatchRescheduleController {
-    constructor(private readonly rescheduling: DispatchReschedulingService) {}
+    constructor(
+        private readonly rescheduling: DispatchReschedulingService,
+        private readonly returns: DispatchReturnService,
+    ) {}
 
     @Post(':id/reschedule')
     @HttpCode(HttpStatus.OK)
@@ -54,5 +60,31 @@ export class DispatchRescheduleController {
         @CurrentUser('id') userId: number,
     ): Promise<RescheduleDispatchResultDto> {
         return await this.rescheduling.reschedule(id, dto, userId);
+    }
+
+    @Post(':id/return')
+    @HttpCode(HttpStatus.OK)
+    @CoordinatorOnly()
+    @ApiOperation({
+        summary:     'Return a failed delivery to the warehouse (coordinator)',
+        description: "Sends a delivery back to the warehouse (`returned`) when its delivery attempts are spent: the way out that a rescheduling leaves when `POST /dispatches/:id/reschedule` answers 400 `RESCHEDULE_ATTEMPTS_LIMIT_REACHED` (ES-52, Escenario 3). Only from `incident` or `not_delivered`, and only once the attempts reached `max_delivery_attempts`; before that it answers 409. In one transaction it queues `dispatch.transfer.status_changed` in the outbox (with the `reasonCode` of the most recent incident of the dispatch, when it has one), sets `closed_at` to the moment of the return and records the audit event with the optional note. The dispatch stays linked to its route, so the history still shows its driver and vehicle, and the planning version does not change. Requires coordinator role, or root.",
+    })
+    @ApiIdParam('Dispatch')
+    @ApiOkResponse({ type: ReturnDispatchResultDto })
+    @ApiBadRequests({ validation: true, id: true, example: ['notes must not be longer than 500 characters.'] })
+    @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+    @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
+    @ApiNotFound({ code: 'DISPATCH_NOT_FOUND', message: 'Dispatch not found.' })
+    @ApiConflict(
+        { code: 'DISPATCH_RETURN_NOT_ALLOWED', message: 'A dispatch can only be returned to the warehouse from incident or not_delivered (current status: scheduled).' },
+        { code: 'DELIVERY_ATTEMPTS_NOT_EXHAUSTED', message: 'The dispatch can only be returned to the warehouse once the delivery attempts limit is reached (1 of 3). Reschedule it instead.' },
+        { code: 'DISPATCH_TYPE_NOT_SUPPORTED', message: 'Only delivery dispatches can be rescheduled or returned from here (type: supplier_pickup). Pickups are rescheduled from their own flow.' },
+    )
+    async returnToWarehouse(
+        @Param('id', ParseIdPipe) id: number,
+        @Body() dto: ReturnDispatchDto,
+        @CurrentUser('id') userId: number,
+    ): Promise<ReturnDispatchResultDto> {
+        return await this.returns.returnToWarehouse(id, dto, userId);
     }
 }

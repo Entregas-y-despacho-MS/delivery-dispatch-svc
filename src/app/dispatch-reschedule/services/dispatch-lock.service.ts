@@ -49,6 +49,20 @@ export class DispatchLockService {
         if (!pre) throw new DispatchNotFoundException();
 
         const batch = pre.route_batch_id === null ? null : await this.batchExit.lock(manager, pre.route_batch_id);
+        const dispatch = await this.lockRow(manager, dispatchId);
+        if (dispatch.routeBatchId !== pre.route_batch_id) throw new DispatchChangedConcurrentlyException();
+        return { batch, dispatch };
+    }
+
+    /**
+     * Locks only the dispatch row, for an action that never touches its batch (the return to the warehouse keeps the
+     * dispatch linked to its route). Safe against deadlocks because the batch is never locked afterwards.
+     */
+    async lockDispatchOnly(manager: EntityManager, dispatchId: number): Promise<LockedDispatch> {
+        return await this.lockRow(manager, dispatchId);
+    }
+
+    private async lockRow(manager: EntityManager, dispatchId: number): Promise<LockedDispatch> {
         const [row]: DispatchRow[] = await manager.query(
             `SELECT d.dispatch_id AS id, ds.name AS status, dt.name AS type, d.version, d.route_batch_id,
                     d.scheduled_window_start, d.scheduled_window_end, d.customer_confirmation
@@ -60,20 +74,15 @@ export class DispatchLockService {
             [dispatchId],
         );
         if (!row) throw new DispatchNotFoundException();
-        if (row.route_batch_id !== pre.route_batch_id) throw new DispatchChangedConcurrentlyException();
-
         return {
-            batch,
-            dispatch: {
-                id: row.id,
-                status: row.status,
-                type: row.type,
-                version: row.version,
-                routeBatchId: row.route_batch_id,
-                scheduledWindowStart: row.scheduled_window_start,
-                scheduledWindowEnd: row.scheduled_window_end,
-                customerConfirmation: row.customer_confirmation,
-            },
+            id: row.id,
+            status: row.status,
+            type: row.type,
+            version: row.version,
+            routeBatchId: row.route_batch_id,
+            scheduledWindowStart: row.scheduled_window_start,
+            scheduledWindowEnd: row.scheduled_window_end,
+            customerConfirmation: row.customer_confirmation,
         };
     }
 }
