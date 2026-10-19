@@ -14,7 +14,7 @@ describe('DriverMetricsService.compute', () => {
 
     beforeEach(() => {
         repository.aggregate.mockReset();
-        service = new DriverMetricsService(repository as never);
+        service = new DriverMetricsService(repository as never, {} as never);
     });
 
     it('turns the totals of the sample week into the figures of the app', async () => {
