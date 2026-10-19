@@ -4,7 +4,8 @@ import { matchesOtp } from './domain/otp-code.js';
 
 function setup(overrides = {}) {
     const row = { id: 12, status: 'in_transit', evidence_policy: 'high_value_control', contact_phone: '+59170000000', driver_id: 7, ...overrides };
-    const db = { query: vi.fn(async (sql: string) => sql.includes('SELECT') ? [row] : []) };
+    const query = vi.fn(async (sql: string) => sql.trimStart().startsWith('SELECT') ? [row] : [{ dispatch_event_id: 1 }]);
+    const db = { query, transaction: vi.fn(async (operation: (manager: { query: typeof query }) => Promise<unknown>) => await operation({ query })) };
     const store = { issue: vi.fn().mockResolvedValue('issued'), readHash: vi.fn(), verify: vi.fn(), invalidate: vi.fn() };
     const sms = { send: vi.fn().mockResolvedValue(undefined) };
     const settings = { getNumber: vi.fn(async (key: string) => key === 'otp_code_length' ? 8 : 15) };
@@ -28,14 +29,19 @@ describe('delivery OTP lifecycle', () => {
         expect(x.store.issue).not.toHaveBeenCalled();
         expect(x.sms.send).not.toHaveBeenCalled();
     });
-    it.each([null, '', 'invalid'])('marks unusable source phone %s without generating an OTP', async (phone) => {
+    it.each([null, '', 'invalid', '+591(70000000)', '+591.70000000', '+591\t70000000'])('marks unusable source phone %s without generating an OTP', async (phone) => {
         const x = setup({ contact_phone: phone });
         await x.service.onInTransit(12);
         expect(x.store.issue).not.toHaveBeenCalled();
         expect(x.sms.send).not.toHaveBeenCalled();
         expect(JSON.stringify(x.db.query.mock.calls)).toContain('otp_resolution_required');
     });
-    it('does not send again for duplicate status events', async () => {
+    it.each([' +591 700-00-000 ', '+59170000000', '591-700-00-000'])('normalizes only spaces and hyphens in verified source phone %s', async (phone) => {
+        const x = setup({ contact_phone: phone });
+        await x.service.onInTransit(12);
+        expect(x.sms.send).toHaveBeenCalledWith(expect.objectContaining({ to: phone.replace(/[ -]/g, '') }));
+    });
+    it('does not send again on reentry or repeated initial events, even when the old code has expired', async () => {
         const x = setup();
         x.store.issue.mockResolvedValue('already_issued');
         await x.service.onInTransit(12);
@@ -81,5 +87,8 @@ describe('delivery OTP lifecycle', () => {
         await expect(x.service.onInTransit(12)).rejects.toMatchObject({ status: 503 });
         expect(x.store.invalidate).toHaveBeenCalledWith(12, x.store.issue.mock.calls[0][1]);
         expect(JSON.stringify(x.db.query.mock.calls)).not.toContain('secret');
+        // Failed SMS retains the issued generation's consumed budget: no compensating issue/reset.
+        expect(x.store.issue).toHaveBeenCalledTimes(1);
+        expect(x.store.invalidate).toHaveBeenCalledTimes(1);
     });
 });

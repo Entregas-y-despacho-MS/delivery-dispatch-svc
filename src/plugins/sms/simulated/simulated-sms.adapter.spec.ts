@@ -3,8 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SimulatedSmsAdapter } from './simulated-sms.adapter.js';
 
 describe('simulated SMS', () => {
-    afterEach(() => vi.restoreAllMocks());
-    it('records a structured acceptance without phone or sensitive message', async () => {
+    afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
+    it.each(['development', 'production'])('redacts phone and sensitive message in %s', async (environment) => {
+        vi.stubEnv('NODE_ENV', environment);
         const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => {});
         await new SimulatedSmsAdapter().send({ to: '+59170000000', body: 'OTP 123456' });
         expect(log).toHaveBeenCalledWith({ event: 'sms.sent', adapter: 'simulated', message: '[REDACTED]' });

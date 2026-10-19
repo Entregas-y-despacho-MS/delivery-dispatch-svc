@@ -73,7 +73,7 @@ export class DispatchOtpService {
 
     private async send(row: DispatchContact, resend: boolean): Promise<{ sent: boolean; expiresAt: string } | null> {
         // Source systems attest verification (user decision, 2026-10-18). A missing or unusable phone is never downgraded.
-        const phone = row.contact_phone?.trim();
+        const phone = row.contact_phone?.replace(/[ -]/g, '');
         if (!phone || !/^\+?[1-9][0-9]{6,14}$/.test(phone)) {
             await this.record(row.id, 'otp_resolution_required', { reason: 'verified_phone_missing' });
             return null;
@@ -107,11 +107,33 @@ export class DispatchOtpService {
     }
 
     private async record(dispatchId: number, eventType: string, metadata: Record<string, unknown>): Promise<void> {
-        await this.dataSource.query(
-            `INSERT INTO dispatch_events (dispatch_id, event_type, actor_type, reason, metadata)
-             VALUES ($1, $2, 'system', 'Delivery OTP lifecycle', $3::jsonb)`,
-            [dispatchId, eventType, JSON.stringify(metadata)],
-        );
-        this.logger.log({ event: eventType, dispatchId });
+        const inserted = await this.dataSource.transaction(async (manager) => {
+            // All OTP lifecycle writers use the same dispatch lock. Never acquire a route lock here:
+            // status transitions lock route -> dispatch, so doing the reverse would risk deadlock.
+            await manager.query('SELECT dispatch_id FROM dispatches WHERE dispatch_id = $1 FOR UPDATE', [dispatchId]);
+            if (eventType === 'otp_resolution_required') {
+                // One marker per unresolved episode, regardless of its first reason. Successful sends
+                // close an episode implicitly. Server sequence IDs remain ordered for backdated events.
+                return await manager.query(
+                    `INSERT INTO dispatch_events (dispatch_id, event_type, actor_type, reason, metadata)
+                     SELECT $1, $2, 'system', 'Delivery OTP lifecycle', $3::jsonb
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM dispatch_events pending
+                         WHERE pending.dispatch_id = $1 AND pending.event_type = 'otp_resolution_required'
+                           AND pending.dispatch_event_id > COALESCE((
+                               SELECT MAX(sent.dispatch_event_id) FROM dispatch_events sent
+                               WHERE sent.dispatch_id = $1 AND sent.event_type IN ('otp_sent', 'otp_resent')
+                           ), 0)
+                     ) RETURNING dispatch_event_id`,
+                    [dispatchId, eventType, JSON.stringify(metadata)],
+                );
+            }
+            return await manager.query(
+                `INSERT INTO dispatch_events (dispatch_id, event_type, actor_type, reason, metadata)
+                 VALUES ($1, $2, 'system', 'Delivery OTP lifecycle', $3::jsonb) RETURNING dispatch_event_id`,
+                [dispatchId, eventType, JSON.stringify(metadata)],
+            );
+        });
+        if (inserted.length > 0) this.logger.log({ event: eventType, dispatchId });
     }
 }

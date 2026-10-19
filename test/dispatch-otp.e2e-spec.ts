@@ -144,4 +144,45 @@ describe.skipIf(!process.env.OTP_TEST_REDIS_PORT)('delivery OTP HTTP + PostgreSQ
         expect(await otp.verify(id, 'wrong-code')).toBe('locked');
         expect((await resend(id)).body.error).toBe('OTP_LOCKED');
     });
+    it('normalizes verified source numbers with spaces and hyphens before sending', async () => {
+        const id = await dispatch('  +591 7000-0123  ');
+        const before = messages.length;
+        await start(id);
+        await waitUntil(async () => (await events(id)).some((event: { event_type: string }) => event.event_type === 'otp_sent'));
+        expect(messages[before].to).toBe('+59170000123');
+        expect((await events(id)).filter((event: { event_type: string }) => event.event_type === 'otp_resolution_required')).toHaveLength(0);
+    });
+    it('rejects non-format characters instead of silently changing the verified number', async () => {
+        const id = await dispatch('+591ABC70000123', 'in_transit');
+        const before = messages.length;
+        const response = await resend(id);
+        expect(response.status).toBe(409);
+        expect(response.body.error).toBe('OTP_CONTACT_REQUIRED');
+        expect(messages.length).toBe(before);
+        expect(await redis.get(`dispatch-otp:{${id}}:code`)).toBeNull();
+    });
+    it('deduplicates concurrent resolution marks and starts a new episode after successful sending', async () => {
+        const id = await dispatch(null, 'in_transit');
+        const results = await Promise.all(Array.from({ length: 8 }, () => resend(id)));
+        expect(results.every((response) => response.status === 409 && response.body.error === 'OTP_CONTACT_REQUIRED')).toBe(true);
+        const markers = async () => (await events(id)).filter((event: { event_type: string }) => event.event_type === 'otp_resolution_required');
+        expect(await markers()).toHaveLength(1);
+        // Another reason in the same unresolved episode must not append a second marker.
+        await Promise.all(Array.from({ length: 4 }, () => otp.markProcessingFailure(id)));
+        expect(await markers()).toHaveLength(1);
+        expect((await markers())[0].metadata.reason).toBe('verified_phone_missing');
+        // A failed send is audit history, not successful resolution of this episode.
+        await db.query("INSERT INTO dispatch_events (dispatch_id, event_type, actor_type, metadata) VALUES ($1, 'otp_send_failed', 'system', '{}'::jsonb)", [id]);
+        await otp.markProcessingFailure(id);
+        expect(await markers()).toHaveLength(1);
+        await db.query('UPDATE dispatches SET contact_phone=$1 WHERE dispatch_id=$2', ['+591 7000-0123', id]);
+        expect((await resend(id)).status).toBe(200);
+        await db.query('UPDATE dispatches SET contact_phone=NULL WHERE dispatch_id=$1', [id]);
+        const retries = await Promise.all(Array.from({ length: 8 }, () => resend(id)));
+        expect(retries.every((response) => response.status === 409)).toBe(true);
+        expect(await markers()).toHaveLength(2);
+        const lifecycle = (await events(id)).map((event: { event_type: string }) => event.event_type);
+        expect(lifecycle).toEqual(['otp_resolution_required', 'otp_send_failed', 'otp_resent', 'otp_resolution_required']);
+    });
+
 });
