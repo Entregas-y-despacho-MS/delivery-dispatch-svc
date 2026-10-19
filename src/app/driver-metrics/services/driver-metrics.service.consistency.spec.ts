@@ -181,11 +181,91 @@ describe('DriverMetricsService cache consistency', () => {
         it('if the epoch cannot be moved the keys are still dropped and it only warns', async () => {
             await service.get(7, DriverMetricsPeriod.TODAY);
             vi.spyOn(cache, 'increment').mockRejectedValue(new CacheUnavailableException());
+            vi.spyOn(cache, 'setWithTtl').mockRejectedValue(new CacheUnavailableException());
 
             await service.invalidate(7);
 
             expect(await stored()).toBeNull();
-            expect(warn).toHaveBeenCalledTimes(1);
+            expect(warn).toHaveBeenCalledTimes(2); // the increment and its fallback
+        });
+
+        describe('when the epoch advance cannot be confirmed (review of ST-35.2)', () => {
+            // `epochBefore` was null (never invalidated) and stays null because the increment failed: a false "unchanged".
+            const failIncrement = () => vi.spyOn(cache, 'increment').mockRejectedValue(new CacheUnavailableException());
+
+            it('increment fails, fallback fails, deletes work: a request in flight does NOT repopulate the cache', async () => {
+                failIncrement();
+                const original = cache.setWithTtl.bind(cache);
+                const setWithTtl = vi.spyOn(cache, 'setWithTtl').mockImplementation(async (key, value, ttl) => {
+                    if (key === metricsEpochKey(7)) throw new CacheUnavailableException();
+                    await original(key, value, ttl);
+                });
+                repository.aggregate.mockImplementation(async () => {
+                    await service.invalidate(7); // the confirmation lands in the middle; its deletes work, its epoch does not
+                    return ROW;
+                });
+
+                const metrics = await service.get(7, DriverMetricsPeriod.TODAY);
+
+                expect(metrics.deliveredCount).toBe(4);
+                expect(await stored()).toBeNull();
+                expect(setWithTtl).not.toHaveBeenCalledWith(TODAY_KEY, expect.anything(), expect.anything());
+            });
+
+            it('increment fails but the fallback token lands: the epoch changed, so it is not stored either', async () => {
+                failIncrement();
+                repository.aggregate.mockImplementation(async () => {
+                    await service.invalidate(7);
+                    return ROW;
+                });
+
+                await service.get(7, DriverMetricsPeriod.TODAY);
+
+                expect(await cache.get(metricsEpochKey(7))).not.toBeNull();
+                expect(await stored()).toBeNull();
+            });
+
+            it('two fallback tokens in a row differ, so a second confirmation is still noticed', async () => {
+                failIncrement();
+                await service.invalidate(7); // leaves the first token as the epoch
+                repository.aggregate.mockImplementation(async () => {
+                    await service.invalidate(7); // must leave a DIFFERENT token
+                    return ROW;
+                });
+
+                await service.get(7, DriverMetricsPeriod.TODAY);
+
+                expect(await stored()).toBeNull();
+            });
+
+            it('an unconfirmed invalidation of ANOTHER driver does not block this one', async () => {
+                failIncrement();
+                vi.spyOn(cache, 'setWithTtl').mockImplementation(async (key, value, ttl) => {
+                    if (key === metricsEpochKey(8)) throw new CacheUnavailableException();
+                    await MemoryCacheAdapter.prototype.setWithTtl.call(cache, key, value, ttl);
+                });
+                repository.aggregate.mockImplementation(async () => {
+                    await service.invalidate(8);
+                    return ROW;
+                });
+
+                await service.get(7, DriverMetricsPeriod.TODAY);
+
+                expect(await stored()).not.toBeNull();
+            });
+
+            it('a request that STARTS after the unconfirmed invalidation stores normally', async () => {
+                failIncrement();
+                vi.spyOn(cache, 'setWithTtl').mockImplementation(async (key, value, ttl) => {
+                    if (key === metricsEpochKey(7)) throw new CacheUnavailableException();
+                    await MemoryCacheAdapter.prototype.setWithTtl.call(cache, key, value, ttl);
+                });
+                await service.invalidate(7);
+
+                await service.get(7, DriverMetricsPeriod.TODAY);
+
+                expect(await stored()).not.toBeNull();
+            });
         });
     });
 });

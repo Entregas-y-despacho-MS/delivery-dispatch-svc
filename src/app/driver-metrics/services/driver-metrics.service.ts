@@ -5,6 +5,9 @@ import { DriverMetricsPeriod, resolveMetricsRange, type MetricsDateRange } from 
 import { DriverMetricsDto } from '../dto/driver-metrics.dto.js';
 import { DriverMetricsRepository, type DriverMetricsRow } from '../repositories/driver-metrics.repository.js';
 
+// A computation is two SQL queries; a minute is far longer than any of them can take.
+const UNCONFIRMED_MEMORY_MS = 60_000;
+
 function round1(value: number): number {
     return Math.round(value * 10) / 10;
 }
@@ -31,6 +34,9 @@ function isMetricsOf(value: unknown, period: DriverMetricsPeriod, range: Metrics
 @Injectable()
 export class DriverMetricsService {
     private readonly logger = new Logger(DriverMetricsService.name);
+    /** Orders "a request started" against "an invalidation could not be confirmed", without trusting the clock. */
+    private sequence = 0;
+    private readonly unconfirmed = new Map<number, { sequence: number; at: number }>();
 
     constructor(
         private readonly repository: DriverMetricsRepository,
@@ -49,9 +55,10 @@ export class DriverMetricsService {
         if (cached) return cached;
 
         // Taken BEFORE computing: if it moves, a delivery was confirmed while this answer was being built.
+        const startedAt = this.sequence;
         const epoch = await this.readEpochOrUnknown(driverId);
         const metrics = this.toDto(period, range, await this.repository.aggregate(driverId, range));
-        await this.write(driverId, key, metrics, epoch);
+        await this.write(driverId, key, metrics, epoch, startedAt);
         return metrics;
     }
 
@@ -61,11 +68,7 @@ export class DriverMetricsService {
      * stale; a cache that does not answer only warns (the entries expire by themselves within 5 minutes).
      */
     async invalidate(driverId: number): Promise<void> {
-        try {
-            await this.cache.increment(metricsEpochKey(driverId), METRICS_EPOCH_TTL_SECONDS);
-        } catch (error) {
-            this.logger.warn(`Could not move the metrics epoch of driver ${driverId}. ${error instanceof Error ? error.message : ''}`.trim());
-        }
+        await this.advanceEpoch(driverId);
         for (const key of allMetricsCacheKeys(driverId)) {
             try {
                 await this.cache.delete(key);
@@ -95,6 +98,35 @@ export class DriverMetricsService {
         return null;
     }
 
+    /**
+     * Moves the driver's epoch so the requests in flight know they must not store their answer. If the increment
+     * fails, a fresh token is set instead (any new value differs from what they read). If that fails too, the advance
+     * cannot be confirmed in the cache and `epochBefore === epochNow` would be a false "unchanged" (null stays null),
+     * so the failure is remembered in this process and every request started before it skips its write.
+     */
+    private async advanceEpoch(driverId: number): Promise<void> {
+        const key = metricsEpochKey(driverId);
+        try {
+            await this.cache.increment(key, METRICS_EPOCH_TTL_SECONDS);
+            return;
+        } catch (error) {
+            this.logger.warn(`Could not move the metrics epoch of driver ${driverId}; trying a fresh token. ${error instanceof Error ? error.message : ''}`.trim());
+        }
+        try {
+            await this.cache.setWithTtl(key, `t${Date.now()}-${++this.sequence}`, METRICS_EPOCH_TTL_SECONDS);
+        } catch (error) {
+            this.unconfirmed.set(driverId, { sequence: ++this.sequence, at: Date.now() });
+            this.pruneUnconfirmed();
+            this.logger.warn(`Could not confirm the metrics epoch of driver ${driverId}; answers being computed will not be cached. ${error instanceof Error ? error.message : ''}`.trim());
+        }
+    }
+
+    /** Forgets failures older than any computation can last, so the map does not grow with the drivers. */
+    private pruneUnconfirmed(): void {
+        const limit = Date.now() - UNCONFIRMED_MEMORY_MS;
+        for (const [driverId, failure] of this.unconfirmed) if (failure.at < limit) this.unconfirmed.delete(driverId);
+    }
+
     /** `undefined` when the cache does not answer: then the result is simply not stored. */
     private async readEpochOrUnknown(driverId: number): Promise<string | null | undefined> {
         try {
@@ -109,8 +141,10 @@ export class DriverMetricsService {
      * epoch moved between the write and the second check, the entry just stored is removed, so no interleaving of
      * a confirmation and a request can leave an answer older than the confirmation in the cache.
      */
-    private async write(driverId: number, key: string, metrics: DriverMetricsDto, epochBefore: string | null | undefined): Promise<void> {
+    private async write(driverId: number, key: string, metrics: DriverMetricsDto, epochBefore: string | null | undefined, startedAt: number): Promise<void> {
         if (epochBefore === undefined) return;
+        // An invalidation of this driver whose epoch advance could not be confirmed happened after this request began.
+        if ((this.unconfirmed.get(driverId)?.sequence ?? 0) > startedAt) return;
         try {
             if (await this.cache.get(metricsEpochKey(driverId)) !== epochBefore) return;
             await this.cache.setWithTtl(key, JSON.stringify(metrics), METRICS_CACHE_TTL_SECONDS);
