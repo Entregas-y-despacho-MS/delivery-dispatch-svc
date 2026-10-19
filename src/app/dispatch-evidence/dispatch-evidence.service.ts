@@ -1,5 +1,6 @@
 /// <reference types="multer" />
 import { Injectable, Logger } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { v7 as uuidv7 } from 'uuid';
 import { DeliveryEvidence } from '../../modules/dispatch/delivery-evidences/entities/delivery-evidence.entity.js';
 import { DeliveryEvidencesService } from '../../modules/dispatch/delivery-evidences/services/delivery-evidences.service.js';
@@ -8,6 +9,7 @@ import { DispatchesService } from '../../modules/dispatch/dispatches/services/di
 import { StoragePort } from '../../plugins/storage/storage.port.js';
 import { isUniqueViolation } from '../../shared/orm/unique-violation.js';
 import { DispatchOtpService } from '../dispatch-otp/dispatch-otp.service.js';
+import { DISPATCH_EVIDENCE_REGISTERED_EVENT, type DispatchEvidenceRegisteredEvent } from './dispatch-evidence-registered.event.js';
 import { assertEvidenceFile } from './domain/evidence-file.js';
 import { DeliveryEvidenceDto } from './dto/delivery-evidence.dto.js';
 import { RegisterEvidenceDto } from './dto/register-evidence.dto.js';
@@ -33,6 +35,7 @@ export class DispatchEvidenceService {
         private readonly dispatches: DispatchesService,
         private readonly storage: StoragePort,
         private readonly otp: DispatchOtpService,
+        private readonly events: EventEmitter2,
     ) {}
 
     /**
@@ -43,6 +46,7 @@ export class DispatchEvidenceService {
         await this.otp.validate(dispatchId, driverId, code);
         try {
             const saved = await this.evidences.create({ id: uuidv7(), dispatchId, type: 'otp', capturedAt: new Date() });
+            this.publish(saved);
             return this.toDto(saved);
         } catch (err) {
             // The code is already spent: leave a trace, since Dispatch must authorize this delivery by hand.
@@ -77,6 +81,7 @@ export class DispatchEvidenceService {
                 receiverName:     isSignature ? dto.receiverName : null,
                 receiverDocument: isSignature ? dto.receiverDocument : null,
             });
+            this.publish(saved);
             return { evidence: this.toDto(saved), created: true };
         } catch (err) {
             // Two requests with the same evidenceId at once: the primary key lets one in, the other gets the original.
@@ -85,6 +90,17 @@ export class DispatchEvidenceService {
             if (!original) throw err;
             return this.replay(original, dispatchId);
         }
+    }
+
+    /** Tells the control tower after the row is saved. A replay does not publish: the first registration already did. */
+    private publish(evidence: DeliveryEvidence): void {
+        const event: DispatchEvidenceRegisteredEvent = {
+            dispatchId:   evidence.dispatchId,
+            evidenceId:   evidence.id,
+            type:         evidence.type,
+            registeredAt: evidence.createdAt.toISOString(),
+        };
+        this.events.emit(DISPATCH_EVIDENCE_REGISTERED_EVENT, event);
     }
 
     private replay(existing: DeliveryEvidence, dispatchId: number): RegisteredEvidence {

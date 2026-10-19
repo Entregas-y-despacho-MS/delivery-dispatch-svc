@@ -3,13 +3,14 @@ import { DeliveryEvidencesModule } from '../../modules/dispatch/delivery-evidenc
 import { DispatchesModule } from '../../modules/dispatch/dispatches/dispatches.module.js';
 import { DispatchOtpModule } from '../dispatch-otp/dispatch-otp.module.js';
 import { DispatchEvidenceController } from './dispatch-evidence.controller.js';
+import { DispatchEvidenceSocketListener } from './dispatch-evidence.socket-listener.js';
 import { DispatchEvidenceService } from './dispatch-evidence.service.js';
 
 // No own table: registers delivery evidences (ST-31.3) on top of delivery-evidences and dispatches.
 @Module({
     imports:     [DeliveryEvidencesModule, DispatchesModule, DispatchOtpModule],
     controllers: [DispatchEvidenceController],
-    providers:   [DispatchEvidenceService],
+    providers:   [DispatchEvidenceService, DispatchEvidenceSocketListener],
     exports:     [DispatchEvidenceService],
 })
 export class DispatchEvidenceModule {}
