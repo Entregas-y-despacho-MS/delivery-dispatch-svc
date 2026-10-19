@@ -9,6 +9,7 @@ import { DispatchIncidentsService } from '../../../modules/dispatch/dispatch-inc
 import { DeliveryEvidencesService } from '../../../modules/dispatch/delivery-evidences/services/delivery-evidences.service.js';
 import { DispatchesService } from '../../../modules/dispatch/dispatches/services/dispatches.service.js';
 import { DispatchNotFoundException } from '../../../modules/dispatch/dispatches/exceptions/index.js';
+import { isTerminalDispatchStatus } from '../../../modules/dispatch/dispatches/utils/terminal-statuses.js';
 import { StoragePort } from '../../../plugins/storage/storage.port.js';
 import { FINAL_STATUSES } from '../../../modules/dispatch/dispatches/services/dispatches.service.js';
 import { SyncEventDto } from '../dto/sync-event.dto.js';
@@ -152,7 +153,13 @@ export class SyncService {
                         occurredAt,
                     })
                     : null;
-                await this.dispatchesService.updateStatus(event.dispatchId, event.dispatchStatusId!, options);
+                // The history's closing time is when it happened on the device, not when the sync arrives (ST-55.2).
+                await this.dispatchesService.updateStatus(
+                    event.dispatchId,
+                    event.dispatchStatusId!,
+                    options,
+                    current !== target && isTerminalDispatchStatus(target) ? occurredAt : undefined,
+                );
                 await this.dispatchEventsService.create({
                     dispatchId:    event.dispatchId,
                     eventType:     'status_changed',

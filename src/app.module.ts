@@ -27,6 +27,7 @@ import { StorageModule } from './plugins/storage/storage.module.js';
 import { PushModule } from './plugins/push/push.module.js';
 import { OsrmModule } from './plugins/osrm/osrm.module.js';
 import { PendingOrdersModule } from './modules/dispatch/pending-orders/pending-orders.module.js';
+import { DispatchHistoryModule } from './modules/dispatch/dispatch-history/dispatch-history.module.js';
 import { PickupSchedulingModule } from './modules/dispatch/pickup-scheduling/pickup-scheduling.module.js';
 import { RouteAssignmentModule } from './app/route-assignment/route-assignment.module.js';
 import { RouteBatchesModule } from './modules/dispatch/route-batches/route-batches.module.js';
@@ -99,6 +100,7 @@ import { DispatchEventsAppModule } from './app/dispatch-events/dispatch-events.m
     PushModule.register(),
     OsrmModule,
     PendingOrdersModule,
+    DispatchHistoryModule,
     RouteBatchesModule,
     DispatchReservationsModule,
     PickupSchedulingModule,

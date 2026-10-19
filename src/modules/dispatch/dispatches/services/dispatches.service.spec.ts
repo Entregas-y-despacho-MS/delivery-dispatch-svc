@@ -73,6 +73,15 @@ describe('DispatchesService.updateStatus / existsById', () => {
         expect(rawRepo.update).toHaveBeenCalledWith(5, { dispatchStatusId: 3 });
     });
 
+    it('con hora de cierre (ST-55.2) la guarda junto con el estado', async () => {
+        const { service, rawRepo } = buildService();
+        const closedAt = new Date('2026-10-10T18:30:00.000Z');
+
+        await service.updateStatus(5, 3, undefined, closedAt);
+
+        expect(rawRepo.update).toHaveBeenCalledWith(5, { dispatchStatusId: 3, closedAt });
+    });
+
     it('un despacho inexistente → DispatchNotFoundException y no actualiza nada', async () => {
         const { service, rawRepo } = buildService();
         rawRepo.existsBy.mockResolvedValue(false);
