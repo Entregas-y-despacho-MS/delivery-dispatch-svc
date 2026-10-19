@@ -43,6 +43,7 @@ import { PlanningModule } from './app/planning/planning.module.js';
 import { PromiseFirmingModule } from './app/promise-firming/promise-firming.module.js';
 import { FinalReviewModule } from './app/final-review/final-review.module.js';
 import { RouteBatchCorrectionModule } from './app/route-batch-correction/route-batch-correction.module.js';
+import { DispatchRescheduleModule } from './app/dispatch-reschedule/dispatch-reschedule.module.js';
 import { RouteCutoffModule } from './app/route-cutoff/route-cutoff.module.js';
 import { PublicTrackingModule } from './app/public-tracking/public-tracking.module.js';
 import { DispatchStatusModule } from './app/dispatch-status/dispatch-status.module.js';
@@ -77,6 +78,7 @@ import { DispatchEventsAppModule } from './app/dispatch-events/dispatch-events.m
     DispatchEvidenceModule,
     AuditLogsModule,
     RouteBatchCorrectionModule,
+    DispatchRescheduleModule,
     FinalReviewModule,
     UsersModule,
     RolesModule,

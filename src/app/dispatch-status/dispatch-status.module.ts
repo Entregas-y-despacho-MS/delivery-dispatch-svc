@@ -3,11 +3,12 @@ import { DispatchEventsModule } from '../../modules/dispatch/dispatch-events/dis
 import { DeliveryEvidencesModule } from '../../modules/dispatch/delivery-evidences/delivery-evidences.module.js';
 import { DispatchesModule } from '../../modules/dispatch/dispatches/dispatches.module.js';
 import { DispatchStatusPublicationModule } from '../../modules/dispatch/dispatch-status-publication/dispatch-status-publication.module.js';
+import { RouteBatchClosingModule } from '../route-batch-closing/route-batch-closing.module.js';
 import { DispatchStatusController } from './controllers/dispatch-status.controller.js';
 import { DispatchStatusService } from './services/dispatch-status.service.js';
 
 @Module({
-    imports: [DispatchesModule, DispatchEventsModule, DeliveryEvidencesModule, DispatchStatusPublicationModule],
+    imports: [DispatchesModule, DispatchEventsModule, DeliveryEvidencesModule, DispatchStatusPublicationModule, RouteBatchClosingModule],
     controllers: [DispatchStatusController],
     providers: [DispatchStatusService],
 })

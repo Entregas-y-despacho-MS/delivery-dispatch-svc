@@ -15,6 +15,7 @@ import { UpdateDispatchStatusDto } from '../dto/update-dispatch-status.dto.js';
 import { assertDriverDispatchTransition } from '../domain/dispatch-status-transition.js';
 import { DISPATCH_STATUS_CHANGED_EVENT, DispatchStatusChangedEvent } from '../dispatch-status-changed.event.js';
 import { DispatchStatusPublicationService } from '../../../modules/dispatch/dispatch-status-publication/dispatch-status-publication.service.js';
+import { RouteBatchClosingService } from '../../route-batch-closing/services/route-batch-closing.service.js';
 import { PUBLISHED_DELIVERY_OUTCOME_STATUSES } from '../../../modules/dispatch/dispatch-status-publication/dispatch-status-message.js';
 
 interface DispatchRow {
@@ -43,10 +44,6 @@ interface LatestEventRow {
     created_at: Date;
 }
 
-interface ClosedRouteBatchRow {
-    closed_at: Date;
-}
-
 interface TransitionResult {
     response: DispatchStatusResponseDto;
     event?: DispatchStatusChangedEvent;
@@ -61,12 +58,6 @@ const EVIDENCE_FOR_POLICY: Readonly<Record<string, string>> = {
     high_value_control:     'otp',
 };
 
-const OPEN_ROUTE_DISPATCH_STATUSES = [
-    DispatchStatusEnum.ASSIGNED,
-    DispatchStatusEnum.OUT_FOR_DELIVERY,
-    DispatchStatusEnum.IN_TRANSIT,
-];
-
 @Injectable()
 export class DispatchStatusService {
     constructor(
@@ -75,6 +66,7 @@ export class DispatchStatusService {
         private readonly deliveryEvidences: DeliveryEvidencesService,
         private readonly events: EventEmitter2,
         private readonly statusPublication: DispatchStatusPublicationService,
+        private readonly batchClosing: RouteBatchClosingService,
     ) {}
 
     async update(dispatchId: number, dto: UpdateDispatchStatusDto, driverId: number): Promise<DispatchStatusResponseDto> {
@@ -222,7 +214,7 @@ export class DispatchStatusService {
             occurredAt,
         }, { manager });
 
-        await this.closeBatchIfComplete(manager, batch.id, dispatchId, dto.status);
+        await this.batchClosing.closeIfComplete(manager, batch.id, { dispatchId, dispatchStatus: dto.status });
 
         const event: DispatchStatusChangedEvent = {
             dispatchId,
@@ -243,37 +235,5 @@ export class DispatchStatusService {
         if (timestamp > now + MAX_FUTURE_MS || timestamp < now - MAX_AGE_MS) {
             throw new DispatchStatusConflictException('DISPATCH_STATUS_EVENT_TIME_INVALID', 'occurredAt is in the future or more than 30 days old. Check the device clock.');
         }
-    }
-
-    private async closeBatchIfComplete(manager: EntityManager, batchId: number, dispatchId: number, dispatchStatus: string): Promise<void> {
-        const [openDispatch]: { dispatch_id: number }[] = await manager.query(
-            `SELECT d.dispatch_id
-               FROM dispatches d
-               JOIN dispatch_statuses ds ON ds.dispatch_status_id = d.dispatch_status_id
-              WHERE d.route_batch_id = $1
-                AND ds.name = ANY($2::varchar[])
-              LIMIT 1`,
-            [batchId, OPEN_ROUTE_DISPATCH_STATUSES],
-        );
-        if (openDispatch) return;
-
-        const [closedBatch]: ClosedRouteBatchRow[] = await manager.query(
-            `UPDATE route_batches
-                SET status = 'closed', closed_at = NOW(), updated_at = NOW()
-              WHERE route_batch_id = $1 AND status = 'in_execution'
-              RETURNING closed_at`,
-            [batchId],
-        );
-        if (!closedBatch) return;
-
-        await manager.query(
-            `INSERT INTO route_batch_events (route_batch_id, event_type, actor_user_id, actor_type, reason, metadata)
-             VALUES ($1, 'closed', NULL, 'system', $2, $3::jsonb)`,
-            [
-                batchId,
-                'All route dispatches are outside active states.',
-                JSON.stringify({ dispatchId, dispatchStatus }),
-            ],
-        );
     }
 }

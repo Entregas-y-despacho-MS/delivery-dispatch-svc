@@ -9,6 +9,7 @@ import { DISPATCH_STATUS_CHANGED_EVENT } from '../dispatch-status-changed.event.
 import { DispatchStatusConflictException } from '../exceptions/dispatch-status-conflict.exception.js';
 import { UpdateDispatchStatusDto } from '../dto/update-dispatch-status.dto.js';
 import { DispatchStatusService } from './dispatch-status.service.js';
+import { RouteBatchClosingService } from '../../route-batch-closing/services/route-batch-closing.service.js';
 import { DispatchStatusPublicationService } from '../../../modules/dispatch/dispatch-status-publication/dispatch-status-publication.service.js';
 
 const eventId = '01933b6e-7f2a-7c3d-9a1b-2f8e6c4d5a10';
@@ -83,7 +84,7 @@ function setup(options: {
         {
             name: 'route batch close',
             matches: (sql: string) => sql.startsWith('UPDATE route_batches'),
-            rows: state.closed,
+            rows: [state.closed, state.closed.length],
         },
         {
             name: 'closed route event',
@@ -113,6 +114,7 @@ function setup(options: {
         deliveryEvidences as unknown as DeliveryEvidencesService,
         events as unknown as EventEmitter2,
         statusPublication as unknown as DispatchStatusPublicationService,
+        new RouteBatchClosingService(),
     );
     return { service, manager, dataSource, dispatchEvents, deliveryEvidences, events, statusPublication, saved };
 }
