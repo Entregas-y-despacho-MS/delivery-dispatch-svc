@@ -45,3 +45,39 @@ permanently archived. There is no timer or automatic reset in this change.
 Run `npx vitest run src/app/dispatch-otp src/plugins/sms`. Atomic integration tests require an explicitly
 provided **disposable** Redis via `OTP_TEST_REDIS_PORT`; otherwise they are skipped. They delete only
 their random dispatch keys. No shared cache instance is inferred.
+
+## Decisiones de revisión del PR
+
+- **C1 — SMS simulado:** se conserva la redacción total del contenido y del destinatario tanto en
+  desarrollo como en producción. La solicitud original prohíbe escribir el OTP en logs; habilitar
+  su impresión en desarrollo violaría ese criterio. El adaptador registra aceptación estructurada,
+  no permite recuperar el código. Las pruebas capturan el mensaje solamente en memoria.
+- **C2 — integración pendiente:** se mantiene el rechazo de OTP arbitrario por el flujo legacy y el
+  requisito de evidencia OTP para entregar despachos `high_value_control`. ST-31.4 no implementa
+  ST-31.3: generar/enviar códigos no crea evidencia. Por tanto, un despacho de alto valor no puede
+  completar ese flujo sin el validador y su integración móvil. El usuario confirmó coordinar el
+  despliegue conjunto de ST-31.3 y móvil; esa coordinación no acredita su implementación ni pruebas.
+  El contrato actual de sync expone `outcome: 'failed'` y un mensaje `error`, sin código de excepción
+  estructurado por resultado. Móvil debe presentar ese resultado de negocio y evitar reintentarlo
+  indefinidamente con OTP arbitrarios o evidencia insuficiente.
+- **C3 — formato del teléfono:** antes de validar y enviar solo se eliminan espacios ASCII y guiones
+  (`-`); se conserva `+`. Paréntesis, puntos, tabuladores, letras y demás caracteres se rechazan.
+  La normalización no verifica el teléfono: la verificación sigue siendo garantía del origen.
+- **C4 — resolución pendiente:** `otp_resolution_required` se deduplica por episodio mediante una
+  transacción y bloqueo `FOR UPDATE` de la fila del despacho. Todas las escrituras de eventos de
+  este módulo, incluidos `otp_sent` y `otp_resent`, usan ese mismo bloqueo. Solo se agrega un marker
+  si no existe otro posterior al último envío exitoso, comparando `dispatch_event_id` de servidor.
+  Se conserva el primer motivo del episodio aunque después ocurra otro error. Un envío exitoso
+  cierra el episodio implícitamente; una falta posterior permite un nuevo marker. No se actualizan
+  eventos históricos ni se modifica el esquema. No se adquiere un bloqueo de ruta tras el despacho.
+  La marca es persistencia operativa: no se localizó un consumidor en el código backend
+  inspeccionado que la exponga a Despacho; las interfaces externas no se validaron. Las dependencias y una consulta de diagnóstico figuran en [PENDIENTES](../../../PENDIENTES.md).
+- **C5 — fallo SMS:** intentar un reenvío consume irrevocablemente una de las dos cuotas, incluso si
+  el adaptador falla. Se invalida únicamente esa generación y no se devuelve cuota ni se restaura
+  el código previo. Es una decisión intencional para mantener los límites bajo fallos/concurrencia;
+  la UI debe mostrar `OTP_SEND_FAILED` y no hacer reintentos automáticos ilimitados. Un fallo del
+  primer envío consume su emisión inicial; solo quedan los dos reenvíos controlados.
+- **C6 — reentrada en tránsito:** salir y volver a `in_transit` no reinicia emisión, fallos ni cuotas,
+  incluso si el código expiró. Una nueva notificación inicial es idempotente durante toda la vida
+  del despacho. La recuperación sigue siendo el reenvío explícito, con un máximo de dos; no existe
+  un reinicio implícito por estado, expiración ni cambio de fecha.
