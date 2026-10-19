@@ -7,13 +7,14 @@ import { DeliveryEvidencesService } from '../../modules/dispatch/delivery-eviden
 import { DispatchNotFoundException } from '../../modules/dispatch/dispatches/exceptions/dispatch-not-found.exception.js';
 import { DispatchesService } from '../../modules/dispatch/dispatches/services/dispatches.service.js';
 import { StoragePort } from '../../plugins/storage/storage.port.js';
+import { DispatchStatusEnum } from '../../shared/enums/dispatch-status.enum.js';
 import { isUniqueViolation } from '../../shared/orm/unique-violation.js';
 import { DispatchOtpService } from '../dispatch-otp/dispatch-otp.service.js';
 import { DISPATCH_EVIDENCE_REGISTERED_EVENT, type DispatchEvidenceRegisteredEvent } from './dispatch-evidence-registered.event.js';
 import { assertEvidenceFile } from './domain/evidence-file.js';
 import { DeliveryEvidenceDto } from './dto/delivery-evidence.dto.js';
 import { RegisterEvidenceDto } from './dto/register-evidence.dto.js';
-import { DispatchNotAssignedException, EvidenceIdConflictException, InvalidCaptureTimeException } from './exceptions/index.js';
+import { DispatchNotAssignedException, DispatchNotInTransitException, EvidenceIdConflictException, InvalidCaptureTimeException } from './exceptions/index.js';
 
 // A device clock is never exact, so a capture time slightly ahead of the server's is tolerated.
 const MAX_FUTURE_MS = 5 * 60 * 1000;
@@ -44,15 +45,16 @@ export class DispatchEvidenceService {
      */
     async validateOtp(dispatchId: number, driverId: number, code: string): Promise<DeliveryEvidenceDto> {
         await this.otp.validate(dispatchId, driverId, code);
+        let saved: DeliveryEvidence;
         try {
-            const saved = await this.evidences.create({ id: uuidv7(), dispatchId, type: 'otp', capturedAt: new Date() });
-            this.publish(saved);
-            return this.toDto(saved);
+            saved = await this.evidences.create({ id: uuidv7(), dispatchId, type: 'otp', capturedAt: new Date() });
         } catch (err) {
             // The code is already spent: leave a trace, since Dispatch must authorize this delivery by hand.
             this.logger.error({ event: 'otp_verified_evidence_not_saved', dispatchId });
             throw err;
         }
+        this.publish(saved);
+        return this.toDto(saved);
     }
 
     async register(dispatchId: number, driverId: number, dto: RegisterEvidenceDto, file: Express.Multer.File | undefined): Promise<RegisteredEvidence> {
@@ -63,14 +65,19 @@ export class DispatchEvidenceService {
         const existing = await this.evidences.findById(dto.evidenceId);
         if (existing) return this.replay(existing, dispatchId);
 
+        // The proof is captured at the door, so it arrives while the dispatch is in transit and before `delivered`
+        // (which requires it). Anything else is a late or stray upload that would rewrite what the 360° file shows.
+        if ((await this.dispatches.getStatusName(dispatchId)) !== DispatchStatusEnum.IN_TRANSIT) throw new DispatchNotInTransitException();
+
         const capturedAt = new Date(dto.capturedAt);
         if (capturedAt.getTime() > Date.now() + MAX_FUTURE_MS) throw new InvalidCaptureTimeException();
         const validFile = assertEvidenceFile(dto.type, file);
 
         const { url } = await this.storage.upload({ buffer: validFile.buffer, filename: `${dto.evidenceId}`, mimeType: validFile.mimetype });
         const isSignature = dto.type === 'signature';
+        let saved: DeliveryEvidence;
         try {
-            const saved = await this.evidences.create({
+            saved = await this.evidences.create({
                 id:               dto.evidenceId,
                 dispatchId,
                 type:             dto.type,
@@ -81,8 +88,6 @@ export class DispatchEvidenceService {
                 receiverName:     isSignature ? dto.receiverName : null,
                 receiverDocument: isSignature ? dto.receiverDocument : null,
             });
-            this.publish(saved);
-            return { evidence: this.toDto(saved), created: true };
         } catch (err) {
             // Two requests with the same evidenceId at once: the primary key lets one in, the other gets the original.
             if (!isUniqueViolation(err)) throw err;
@@ -90,17 +95,27 @@ export class DispatchEvidenceService {
             if (!original) throw err;
             return this.replay(original, dispatchId);
         }
+        this.publish(saved);
+        return { evidence: this.toDto(saved), created: true };
     }
 
-    /** Tells the control tower after the row is saved. A replay does not publish: the first registration already did. */
+    /**
+     * Tells the control tower after the row is saved. A replay does not publish: the first registration already did.
+     * A failure here is logged and never surfaces: the evidence exists, and answering an error would make the app
+     * retry (or, for an OTP, find the code already spent).
+     */
     private publish(evidence: DeliveryEvidence): void {
-        const event: DispatchEvidenceRegisteredEvent = {
-            dispatchId:   evidence.dispatchId,
-            evidenceId:   evidence.id,
-            type:         evidence.type,
-            registeredAt: evidence.createdAt.toISOString(),
-        };
-        this.events.emit(DISPATCH_EVIDENCE_REGISTERED_EVENT, event);
+        try {
+            const event: DispatchEvidenceRegisteredEvent = {
+                dispatchId:   evidence.dispatchId,
+                evidenceId:   evidence.id,
+                type:         evidence.type,
+                registeredAt: evidence.createdAt.toISOString(),
+            };
+            this.events.emit(DISPATCH_EVIDENCE_REGISTERED_EVENT, event);
+        } catch (err) {
+            this.logger.error({ event: 'evidence_registered_not_announced', dispatchId: evidence.dispatchId, message: (err as Error).message });
+        }
     }
 
     private replay(existing: DeliveryEvidence, dispatchId: number): RegisteredEvidence {

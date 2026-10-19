@@ -13,10 +13,14 @@ import { DeliveryEvidenceDto } from './dto/delivery-evidence.dto.js';
 import { RegisterEvidenceDto } from './dto/register-evidence.dto.js';
 import { ValidateOtpDto } from './dto/validate-otp.dto.js';
 
+// Without limits multer buffers the whole upload in memory: the cap rejects an oversized file with 413, and the
+// field limits stop a driver from filling memory with many or huge text fields (the form has 7 fields and 1 file).
+const MULTIPART_LIMITS = { fileSize: MAX_EVIDENCE_FILE_BYTES, files: 1, fields: 10, fieldSize: 1024, parts: 12 };
+
 /**
  * Error dictionary: VALIDATION_FAILED 400, EVIDENCE_FILE_REQUIRED 400, INVALID_CAPTURE_TIME 400,
  *   INVALID_TOKEN 401, INSUFFICIENT_PERMISSIONS 403, DISPATCH_NOT_FOUND 404,
- *   EVIDENCE_ID_CONFLICT 409, 413 file over 500 KB, UNSUPPORTED_EVIDENCE_FILE_TYPE 415
+ *   DISPATCH_NOT_IN_TRANSIT 409, EVIDENCE_ID_CONFLICT 409, 413 file over 500 KB, UNSUPPORTED_EVIDENCE_FILE_TYPE 415
  */
 @ApiTags('Dispatches')
 @ApiBearerAuth('access-token')
@@ -26,13 +30,12 @@ export class DispatchEvidenceController {
 
     @Post(':id/evidences')
     @DriverOnly()
-    // Without limits multer buffers the whole upload in memory: the cap rejects an oversized file with 413.
-    @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_EVIDENCE_FILE_BYTES, files: 1 } }))
+    @UseInterceptors(FileInterceptor('file', { limits: MULTIPART_LIMITS }))
     @ApiConsumes('multipart/form-data')
     @ApiIdParam('Dispatch')
     @ApiOperation({
         summary:     'Register a signature or photo evidence',
-        description: 'Used by the driver\'s app to upload the proof of delivery of a dispatch on their route. Sent as `multipart/form-data` with the `file` and the fields below. A signature is a PNG and a photo a JPEG, up to 500 KB: 400 for missing or invalid fields, 413 for a bigger file, 415 for another type. The file goes to storage under a UUID name and only its URL is saved. `evidenceId` is the idempotency key: 201 when registered now, 200 with the original record when it was already registered (409 if that id belongs to another dispatch). Registering evidence does not deliver the dispatch: the status change is a separate call. Requires driver role.',
+        description: 'Used by the driver\'s app to upload the proof of delivery of a dispatch on their route. Sent as `multipart/form-data` with the `file` and the fields below. A signature is a PNG and a photo a JPEG, up to 500 KB: 400 for missing or invalid fields, 413 for a bigger file, 415 for another type. The file goes to storage under a UUID name and only its URL is saved. `evidenceId` is the idempotency key: 201 when registered now, 200 with the original record when it was already registered (409 if that id belongs to another dispatch). Only a dispatch in transit accepts new evidence (409 `DISPATCH_NOT_IN_TRANSIT`); a retry of an evidence already registered still answers 200. Registering evidence does not deliver the dispatch: the status change is a separate call. Requires driver role.',
     })
     @ApiBody({
         schema: {
@@ -56,11 +59,14 @@ export class DispatchEvidenceController {
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'Dispatch is not assigned to your route.' })
     @ApiNotFound({ code: 'DISPATCH_NOT_FOUND', message: 'Dispatch not found.' })
-    @ApiConflict({ code: 'EVIDENCE_ID_CONFLICT', message: 'This evidenceId already belongs to another dispatch.' })
+    @ApiConflict(
+        { code: 'DISPATCH_NOT_IN_TRANSIT', message: 'Evidence can only be registered while the dispatch is in transit.' },
+        { code: 'EVIDENCE_ID_CONFLICT', message: 'This evidenceId already belongs to another dispatch.' },
+    )
     @ApiResponse({
         status:      413,
         description: 'The file is bigger than 500 KB.',
-        schema:      { type: 'object', properties: { statusCode: { type: 'integer', example: 413 }, error: { type: 'string', example: 'HTTP_ERROR' }, message: { type: 'string', example: 'File too large' }, path: { type: 'string', example: '/api/dispatches/42/evidences' }, timestamp: { type: 'string', format: 'date-time', example: '2026-10-18T14:05:00.000Z' } } },
+        schema:      { type: 'object', properties: { statusCode: { type: 'integer', example: 413 }, error: { type: 'string', example: 'Payload Too Large' }, message: { type: 'string', example: 'File too large' }, path: { type: 'string', example: '/api/dispatches/42/evidences' }, timestamp: { type: 'string', format: 'date-time', example: '2026-10-18T14:05:00.000Z' } } },
     })
     @ApiResponse({
         status:      415,

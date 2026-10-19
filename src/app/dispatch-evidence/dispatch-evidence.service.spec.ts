@@ -1,5 +1,6 @@
 /// <reference types="multer" />
 import { describe, expect, it, vi } from 'vitest';
+import { QueryFailedError } from 'typeorm';
 import { DispatchEvidenceService } from './dispatch-evidence.service.js';
 import { DISPATCH_EVIDENCE_REGISTERED_EVENT } from './dispatch-evidence-registered.event.js';
 import type { RegisterEvidenceDto } from './dto/register-evidence.dto.js';
@@ -17,7 +18,7 @@ const file = { buffer: PNG, mimetype: 'image/png' } as Express.Multer.File;
 function setup() {
     const saved = (data: Record<string, unknown>) => ({ capturedAt: null, latitude: null, longitude: null, receiverName: null, receiverDocument: null, createdAt: CREATED_AT, ...data });
     const evidences = { findById: vi.fn().mockResolvedValue(null), create: vi.fn(async (data: Record<string, unknown>) => saved(data)) };
-    const dispatches = { existsById: vi.fn().mockResolvedValue(true), isAssignedToDriver: vi.fn().mockResolvedValue(true) };
+    const dispatches = { existsById: vi.fn().mockResolvedValue(true), isAssignedToDriver: vi.fn().mockResolvedValue(true), getStatusName: vi.fn().mockResolvedValue('in_transit') };
     const storage = { upload: vi.fn().mockResolvedValue({ url: 'https://files/x.png' }) };
     const otp = { validate: vi.fn().mockResolvedValue(undefined) };
     const events = { emit: vi.fn() };
@@ -88,6 +89,50 @@ describe('DispatchEvidenceService', () => {
         x.otp.validate.mockRejectedValue(Object.assign(new Error('locked'), { status: 423 }));
         await expect(x.service.validateOtp(42, 7, '000000')).rejects.toMatchObject({ status: 423 });
         expect(x.evidences.create).not.toHaveBeenCalled();
+        expect(x.events.emit).not.toHaveBeenCalled();
+    });
+
+    it.each(['delivered', 'out_for_delivery', 'cancelled', null])('rejects new evidence when the dispatch is %s, before touching the file', async (status) => {
+        const x = setup();
+        x.dispatches.getStatusName.mockResolvedValue(status);
+        await expect(x.service.register(42, 7, dto(), file)).rejects.toMatchObject({ status: 409, response: { error: 'DISPATCH_NOT_IN_TRANSIT' } });
+        expect(x.storage.upload).not.toHaveBeenCalled();
+        expect(x.evidences.create).not.toHaveBeenCalled();
+    });
+
+    it('still answers a retry of a registered evidence after the dispatch left transit', async () => {
+        const x = setup();
+        x.dispatches.getStatusName.mockResolvedValue('delivered');
+        x.evidences.findById.mockResolvedValue({ id: EVIDENCE_ID, dispatchId: 42, type: 'signature', createdAt: CREATED_AT });
+        await expect(x.service.register(42, 7, dto(), file)).resolves.toMatchObject({ created: false });
+    });
+
+    it('answers the original when the primary key rejects a simultaneous duplicate', async () => {
+        const x = setup();
+        const original = { id: EVIDENCE_ID, dispatchId: 42, type: 'signature', createdAt: CREATED_AT };
+        x.evidences.findById.mockResolvedValueOnce(null).mockResolvedValueOnce(original);
+        x.evidences.create.mockRejectedValue(new QueryFailedError('INSERT', [], Object.assign(new Error('duplicate key'), { code: '23505' })));
+        await expect(x.service.register(42, 7, dto(), file)).resolves.toMatchObject({ created: false, evidence: { id: EVIDENCE_ID } });
+        expect(x.events.emit).not.toHaveBeenCalled();
+    });
+
+    it('rethrows any other failure of the insert', async () => {
+        const x = setup();
+        x.evidences.create.mockRejectedValue(new Error('db down'));
+        await expect(x.service.register(42, 7, dto(), file)).rejects.toThrow('db down');
+    });
+
+    it('does not fail a saved evidence when announcing it throws', async () => {
+        const x = setup();
+        x.events.emit.mockImplementation(() => { throw new Error('listener blew up'); });
+        await expect(x.service.register(42, 7, dto(), file)).resolves.toMatchObject({ created: true });
+        await expect(x.service.validateOtp(42, 7, '123456')).resolves.toMatchObject({ type: 'otp' });
+    });
+
+    it('propagates a failed insert after a correct code and announces nothing', async () => {
+        const x = setup();
+        x.evidences.create.mockRejectedValue(new Error('db down'));
+        await expect(x.service.validateOtp(42, 7, '123456')).rejects.toThrow('db down');
         expect(x.events.emit).not.toHaveBeenCalled();
     });
 });

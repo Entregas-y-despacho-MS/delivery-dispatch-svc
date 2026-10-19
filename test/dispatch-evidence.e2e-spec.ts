@@ -158,6 +158,7 @@ describe('delivery evidence: signature, photo and OTP over HTTP + PostgreSQL (ST
         const big = Buffer.concat([PNG, Buffer.alloc(501 * 1024, 3)]);
         const response = await upload(id, fields('signature'), { buffer: big, contentType: 'image/png', filename: 'big.png' });
         expect(response.status).toBe(413);
+        expect(response.body).toMatchObject({ error: 'Payload Too Large', message: 'File too large' });
         expect(await rows(id)).toHaveLength(0);
         expect(uploads.length).toBe(stored);
     });
@@ -179,14 +180,49 @@ describe('delivery evidence: signature, photo and OTP over HTTP + PostgreSQL (ST
         expect((await upload(id, fields('signature', { evidenceId: 'not-a-uuid' }), signature)).status).toBe(400);
         expect((await upload(id, fields('signature', { evidenceId: '3f1c8a52-4d1e-4b6a-9c3e-1a2b3c4d5e6f' }), signature)).status).toBe(400);
         expect((await upload(id, fields('signature', { type: 'otp' }), signature)).status).toBe(400);
-        expect((await upload(id, fields('signature', { lat: '91' }), signature)).status).toBe(400);
-        expect((await upload(id, fields('signature', { lng: 'abc' }), signature)).status).toBe(400);
+        const reason = async (override: Record<string, string>) => { const r = await upload(id, fields('signature', override), signature); expect(r.status).toBe(400); return JSON.stringify(r.body.message); };
+        expect(await reason({ lat: '91' })).toContain('lat');
+        expect(await reason({ lng: 'abc' })).toContain('lng');
+        // An empty field must not turn into 0,0 (Number('') is 0).
+        expect(await reason({ lat: '', lng: '' })).toContain('lat');
+        expect(await reason({ lat: ' ' })).toContain('lat');
         expect((await upload(id, fields('signature', { capturedAt: 'yesterday' }), signature)).status).toBe(400);
         expect((await upload(id, fields('signature', { capturedAt: new Date(Date.now() + 3_600_000).toISOString() }), signature)).status).toBe(400);
-        expect((await upload(id, fields('signature', { receiverName: 'Al' }), signature)).status).toBe(400);
+        expect(await reason({ receiverName: 'Al' })).toContain('receiverName');
         const { receiverDocument: _omitted, ...withoutDocument } = fields('signature');
         expect((await upload(id, withoutDocument, signature)).status).toBe(400);
         expect(await rows(id)).toHaveLength(0);
+    });
+
+    it('rejects a form with too many or too long text fields', async () => {
+        const id = await dispatch();
+        const crowded: Record<string, string> = fields('photo');
+        for (let n = 0; n < 6; n++) crowded[`extra${n}`] = 'x';
+        // The multer limits answer before the DTO could (extra fields would also fail the whitelist, a long name its max length).
+        const many = await upload(id, crowded, photo);
+        expect(many.status).toBe(400);
+        expect(many.body.message).toBe('Too many fields');
+        const long = await upload(id, fields('signature', { receiverName: 'M'.repeat(2000) }), signature);
+        expect(long.status).toBe(400);
+        expect(long.body.message).toContain('Field value too long');
+        expect(await rows(id)).toHaveLength(0);
+    });
+
+    it.each(['delivered', 'out_for_delivery', 'cancelled'])('refuses new evidence for a %s dispatch but still answers a retry of a registered one', async (status) => {
+        const id = await dispatch('in_transit');
+        const values = fields('photo');
+        expect((await upload(id, values, photo)).status).toBe(201);
+        const late = await dispatch(status);
+        const stored = uploads.length;
+        const refused = await upload(late, fields('photo'), photo);
+        expect(refused.status).toBe(409);
+        expect(refused.body.error).toBe('DISPATCH_NOT_IN_TRANSIT');
+        expect(uploads.length).toBe(stored);
+        expect(await rows(late)).toHaveLength(0);
+        // The first one was registered while in transit; the dispatch moves on and the app retries it.
+        await db.query('UPDATE dispatches SET dispatch_status_id=$1 WHERE dispatch_id=$2', [statuses[status], id]);
+        expect((await upload(id, values, photo)).status).toBe(200);
+        expect(uploads.length).toBe(stored);
     });
 
     it('answers the original record with 200 when the same evidenceId is sent again, without a second file or event', async () => {
@@ -242,6 +278,15 @@ describe('delivery evidence: signature, photo and OTP over HTTP + PostgreSQL (ST
             const reuse = await validate(id, code);
             expect(reuse.status).toBe(409);
             expect(reuse.body.error).toBe('OTP_CONSUMED');
+            expect(await rows(id)).toHaveLength(1);
+        });
+
+        it('lets only one of two simultaneous validations of the right code through', async () => {
+            const id = await dispatch('in_transit', 'high_value_control');
+            const code = await issuedCode(id);
+            const results = await Promise.all([validate(id, code), validate(id, code), validate(id, code)]);
+            expect(results.filter((r) => r.status === 200)).toHaveLength(1);
+            expect(results.filter((r) => r.status === 409).every((r) => r.body.error === 'OTP_CONSUMED')).toBe(true);
             expect(await rows(id)).toHaveLength(1);
         });
 
