@@ -5,7 +5,10 @@ import { DispatchesController } from './dispatches.controller.js';
 function build() {
     const service = { findDriverAssignments: vi.fn().mockResolvedValue({ date: 'x', lastModifiedAt: null, data: [] }) };
     const priority = { changePriority: vi.fn().mockResolvedValue({ id: 5, priority: 'urgent', status: 'pending' }) };
-    const kanban = { findAll: vi.fn().mockResolvedValue({ date: 'x', columns: [] }) };
+    const kanban = {
+        findAll: vi.fn().mockResolvedValue({ date: 'x', columns: [] }),
+        findFilters: vi.fn().mockResolvedValue({ drivers: [], dispatchTypes: [] }),
+    };
     return { controller: new DispatchesController(service as any, priority as any, {} as any, kanban as any), service, priority, kanban };
 }
 
@@ -29,6 +32,15 @@ describe('DispatchesController.findKanban', () => {
         await controller.findKanban(params, 9);
 
         expect(kanban.findAll).toHaveBeenCalledWith(params, 9);
+    });
+});
+
+describe('DispatchesController.findKanbanFilters', () => {
+    it('delegates filter catalog retrieval to the kanban service', async () => {
+        const { controller, kanban } = build();
+
+        await expect(controller.findKanbanFilters()).resolves.toEqual({ drivers: [], dispatchTypes: [] });
+        expect(kanban.findFilters).toHaveBeenCalledOnce();
     });
 });
 

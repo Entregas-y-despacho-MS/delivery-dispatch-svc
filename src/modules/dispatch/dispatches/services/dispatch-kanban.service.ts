@@ -3,6 +3,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { FindKanbanParamsDto } from '../dto/find-kanban-params.dto.js';
 import { DispatchKanbanItemDto, DispatchKanbanResponseDto } from '../dto/dispatch-kanban.dto.js';
+import { DispatchKanbanFiltersResponseDto } from '../dto/dispatch-kanban-filters.dto.js';
 import { todayInOperatingTimeZone } from '../utils/operating-date.util.js';
 
 const COLUMNS = [
@@ -33,6 +34,25 @@ interface KanbanRow {
 @Injectable()
 export class DispatchKanbanService {
     constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+
+    async findFilters(): Promise<DispatchKanbanFiltersResponseDto> {
+        const [drivers, dispatchTypes] = await Promise.all([
+            this.dataSource.query(
+                `SELECT u.user_id AS id, u.full_name AS "fullName"
+                   FROM users u
+                   JOIN roles r ON r.role_id = u.role_id
+                  WHERE r.name = 'driver' AND u.active = TRUE AND u.deleted_at IS NULL
+                  ORDER BY u.full_name ASC, u.user_id ASC`,
+            ),
+            this.dataSource.query(
+                `SELECT dispatch_type_id AS id, name
+                   FROM dispatch_types
+                  ORDER BY name ASC, dispatch_type_id ASC`,
+            ),
+        ]);
+
+        return { drivers, dispatchTypes };
+    }
 
     async findAll(params: FindKanbanParamsDto, viewerId: number): Promise<DispatchKanbanResponseDto> {
         const date = params.date ?? todayInOperatingTimeZone();

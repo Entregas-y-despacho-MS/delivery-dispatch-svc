@@ -2,6 +2,23 @@ import { describe, expect, it, vi } from 'vitest';
 import { DispatchKanbanService } from './dispatch-kanban.service.js';
 
 describe('DispatchKanbanService', () => {
+    it('returns complete stable catalogs and restricts drivers to active, non-deleted users', async () => {
+        const query = vi.fn()
+            .mockResolvedValueOnce([{ id: 4, fullName: 'Ana Driver' }, { id: 8, fullName: 'Zoe Driver' }])
+            .mockResolvedValueOnce([{ id: 2, name: 'delivery' }, { id: 5, name: 'warehouse_return_pickup' }]);
+        const service = new DispatchKanbanService({ query } as never);
+
+        await expect(service.findFilters()).resolves.toEqual({
+            drivers: [{ id: 4, fullName: 'Ana Driver' }, { id: 8, fullName: 'Zoe Driver' }],
+            dispatchTypes: [{ id: 2, name: 'delivery' }, { id: 5, name: 'warehouse_return_pickup' }],
+        });
+        expect(query).toHaveBeenCalledTimes(2);
+        expect(query.mock.calls[0][0]).toContain("r.name = 'driver' AND u.active = TRUE AND u.deleted_at IS NULL");
+        expect(query.mock.calls[0][0]).toContain('ORDER BY u.full_name ASC, u.user_id ASC');
+        expect(query.mock.calls[1][0]).toContain('FROM dispatch_types');
+        expect(query.mock.calls[1][0]).toContain('ORDER BY name ASC, dispatch_type_id ASC');
+    });
+
     it('groups statuses, computes volume totals and hides expired reservation details', async () => {
         const query = vi.fn(async () => [
             {
