@@ -22,7 +22,7 @@ const ACTIVE_STATUSES = [DispatchStatusEnum.PENDING, DispatchStatusEnum.IN_TRANS
 const DRIVER_VISIBLE_BATCH_STATUSES = [RouteBatchStatusEnum.CONFIRMED, RouteBatchStatusEnum.IN_EXECUTION];
 
 // Generic, direct operations only — no business logic. Orchestration (idempotency, ordering,
-// transactions across modules) lives in app/sync, not here.
+// transactions across modules) live in the app-level dispatch workflow services, not here.
 @Injectable()
 export class DispatchesService {
     private readonly repo: DtoRepository<Dispatch>;

@@ -3,7 +3,7 @@ import { DtoField } from '../../../../shared/orm/index.js';
 
 export class IncidentReasonDto {
     @DtoField()
-    @ApiProperty({ type: 'integer', example: 1, description: 'Incident reason ID. Use it as `incidentReasonId` when reporting a delivery incident (POST /sync/events)' })
+    @ApiProperty({ type: 'integer', example: 1, description: 'Incident reason ID. Use its `code` when reporting a delivery incident (POST /dispatches/:id/incidents).' })
     id!: number;
 
     @DtoField()
