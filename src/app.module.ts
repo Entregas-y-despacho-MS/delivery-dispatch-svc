@@ -46,6 +46,7 @@ import { RouteBatchCorrectionModule } from './app/route-batch-correction/route-b
 import { DispatchRescheduleModule } from './app/dispatch-reschedule/dispatch-reschedule.module.js';
 import { RouteCutoffModule } from './app/route-cutoff/route-cutoff.module.js';
 import { PublicTrackingModule } from './app/public-tracking/public-tracking.module.js';
+import { CustomerChangeRequestsModule } from './app/customer-change-requests/customer-change-requests.module.js';
 import { DispatchStatusModule } from './app/dispatch-status/dispatch-status.module.js';
 import { DispatchOtpModule } from './app/dispatch-otp/dispatch-otp.module.js';
 import { DriverMetricsModule } from './app/driver-metrics/driver-metrics.module.js';
@@ -74,6 +75,7 @@ import { DispatchIncidentsAppModule } from './app/dispatch-incidents/dispatch-in
     PlanningModule,
     PromiseFirmingModule,
     PublicTrackingModule,
+    CustomerChangeRequestsModule,
     RouteCutoffModule,
     DispatchStatusModule,
     DispatchOtpModule,
