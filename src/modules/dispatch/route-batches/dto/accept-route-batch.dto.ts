@@ -2,7 +2,6 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
-  ArrayMinSize,
   IsArray,
   IsIn,
   IsInt,
@@ -31,7 +30,7 @@ export class CotejoFailureDto {
     maximum: INT4_MAX,
     example: 101,
     description:
-      'Dispatch (stop) of the batch that is affected. It does not leave on the route. Send one failure per dispatch.',
+      'Dispatch (stop) of the batch that holds the failed package. The whole stop does not leave on the route until it is resolved, even if only one of its packages failed.',
   })
   @IsInt()
   @Min(1)
@@ -39,20 +38,16 @@ export class CotejoFailureDto {
   dispatchId!: number;
 
   @ApiProperty({
-    type: [String],
-    minItems: 1,
-    maxItems: 50,
-    example: ['PKG-101-A'],
+    minLength: 1,
+    maxLength: 100,
+    example: 'PKG-101-A',
     description:
-      'External IDs of the affected packages; each one must belong to the dispatch.',
+      'External ID of the package that failed the check; it must belong to the dispatch. Each package is reported at most once; a stop with two failed packages sends two failures, each with its own reason and photo.',
   })
-  @IsArray()
-  @ArrayMinSize(1)
-  @ArrayMaxSize(50)
-  @IsString({ each: true })
-  @MinLength(1, { each: true })
-  @MaxLength(100, { each: true })
-  packageIds!: string[];
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  packageId!: string;
 
   @ApiProperty({
     enum: COTEJO_FAILURE_REASONS,

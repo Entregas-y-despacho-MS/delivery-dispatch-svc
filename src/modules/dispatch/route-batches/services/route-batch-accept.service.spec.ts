@@ -6,7 +6,7 @@ const eventId = '01933b6e-7f2a-7c3d-9a1b-2f8e6c4d5a11';
 const photoId = '01933b6e-7f2a-7c3d-9a1b-2f8e6c4d5a10';
 const failure = {
   dispatchId: 21,
-  packageIds: ['PKG-21'],
+  packageId: 'PKG-21',
   reason: 'damaged' as const,
   detail: 'Crushed',
   photoId,
@@ -100,6 +100,53 @@ describe('RouteBatchAcceptService', () => {
     });
   });
 
+  it('records one cotejo_failed per package, even for two packages of the same stop with their own reason and photo', async () => {
+    const otherPhoto = '01933b6e-7f2a-7c3d-9a1b-2f8e6c4d5a12';
+    const { service, writes } = setup({
+      packages: [
+        { dispatch_id: 21, external_package_id: 'PKG-21' },
+        { dispatch_id: 21, external_package_id: 'PKG-21-B' },
+      ],
+      photos: [
+        { photo_id: photoId, photo_url: 'local://p.jpg' },
+        { photo_id: otherPhoto, photo_url: 'local://q.jpg' },
+      ],
+    });
+    const result = await service.accept(
+      5,
+      {
+        eventId,
+        failures: [
+          failure,
+          {
+            dispatchId: 21,
+            packageId: 'PKG-21-B',
+            reason: 'missing',
+            photoId: otherPhoto,
+          },
+        ],
+      },
+      7,
+    );
+
+    expect(result.failedDispatchIds).toEqual([21]);
+    const events = writes
+      .filter(({ sql }) => sql.includes('INSERT INTO dispatch_events'))
+      .map(({ params }) => ({
+        reason: params[3],
+        metadata: JSON.parse(params[4] as string),
+      }));
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      reason: 'damaged',
+      metadata: { packageIds: ['PKG-21'], photo: 'local://p.jpg' },
+    });
+    expect(events[1]).toMatchObject({
+      reason: 'missing',
+      metadata: { packageIds: ['PKG-21-B'], photo: 'local://q.jpg' },
+    });
+  });
+
   it('returns the original result for a retry of the same eventId without writing', async () => {
     const { service, writes } = setup({
       prior: [
@@ -164,7 +211,7 @@ describe('RouteBatchAcceptService', () => {
     const send = (options: Options, failures = [failure]) =>
       setup(options).service.accept(5, { eventId, failures }, 7);
     await expect(send({}, [failure, failure])).rejects.toMatchObject({
-      response: { error: 'COTEJO_FAILURE_DUPLICATED_DISPATCH' },
+      response: { error: 'COTEJO_FAILURE_DUPLICATED_PACKAGE' },
     });
     await expect(send({ dispatches: [] })).rejects.toMatchObject({
       response: { error: 'COTEJO_FAILURE_DISPATCH_NOT_IN_BATCH' },

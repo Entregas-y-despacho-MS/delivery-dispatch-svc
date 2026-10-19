@@ -268,7 +268,7 @@ export class RouteBatchesController {
   @ApiOperation({
     summary: 'Accept a confirmed route batch and report cotejo failures',
     description:
-      'The assigned driver accepts the batch after checking the physical packages against the expected ones (RF-U24). It records `accepted_at` and a `batch_accepted` event in the batch log, which "Start the day route" (`POST /route-batches/:id/start`) then requires. `failures` lists the packages that are missing, damaged or do not fit: for each one the stop is marked as "does not leave" with a `cotejo_failed` dispatch event (reason, photo and driver), so the route start skips it and the coordinator resolves it by hand; `dispatch_incidents` is not used. Each failure needs a `photoId` uploaded with `POST /route-batches/:id/cotejo-photos`. Only a `confirmed` batch of the authenticated driver can be accepted, once. `eventId` (UUID v7) is the idempotency key: a retry returns the original result without writing again. Requires driver role.',
+      'The assigned driver accepts the batch after checking the physical packages against the expected ones (RF-U24). It records `accepted_at` and a `batch_accepted` event in the batch log, which "Start the day route" (`POST /route-batches/:id/start`) then requires. `failures` lists the packages that are missing, damaged or do not fit, one failure per package, each with its own reason and photo (a stop with two failed packages sends two failures). Each failure writes a `cotejo_failed` dispatch event (package, reason, photo and driver) and the whole stop is marked as "does not leave", so the route start skips it until the coordinator resolves it by hand; `dispatch_incidents` is not used. Reporting the same package twice is a 400. Each failure needs a `photoId` uploaded with `POST /route-batches/:id/cotejo-photos` (one photo may back several packages). Only a `confirmed` batch of the authenticated driver can be accepted, once. `eventId` (UUID v7) is the idempotency key: a retry returns the original result without writing again. Requires driver role.',
   })
   @ApiIdParam('Route batch')
   @ApiOkResponse({ type: AcceptRouteBatchResponseDto })
@@ -276,7 +276,7 @@ export class RouteBatchesController {
     validation: true,
     id: true,
     errors: [
-      { code: 'COTEJO_FAILURE_DUPLICATED_DISPATCH', message: 'Send one failure per dispatch.' },
+      { code: 'COTEJO_FAILURE_DUPLICATED_PACKAGE', message: 'A package is reported more than once; send one failure per package.' },
       { code: 'COTEJO_FAILURE_DISPATCH_NOT_IN_BATCH', message: 'A failure points to a dispatch outside the batch.' },
       { code: 'COTEJO_FAILURE_DISPATCH_NOT_ASSIGNED', message: 'A failure points to a dispatch that is not assigned.' },
       { code: 'COTEJO_FAILURE_PACKAGE_NOT_IN_DISPATCH', message: 'A failure points to a package outside its dispatch.' },

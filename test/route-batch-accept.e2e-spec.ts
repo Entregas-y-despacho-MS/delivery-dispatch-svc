@@ -311,7 +311,7 @@ describe('Route batch acceptance and cotejo (e2e, ST-210.1)', () => {
           failures: [
             {
               dispatchId: dispatches[0].dispatchId,
-              packageIds: [],
+              packageId: '',
               reason: 'lost',
               photoId: 'not-a-uuid',
             },
@@ -337,7 +337,7 @@ describe('Route batch acceptance and cotejo (e2e, ST-210.1)', () => {
       failures: [
         {
           dispatchId: failed.dispatchId,
-          packageIds: [failed.packageId],
+          packageId: failed.packageId,
           reason: 'damaged',
           detail: 'Crushed corner',
           photoId,
@@ -360,6 +360,7 @@ describe('Route batch acceptance and cotejo (e2e, ST-210.1)', () => {
     expect(events[0].metadata).toMatchObject({
       routeBatchId,
       packageIds: [failed.packageId],
+      packageId: failed.packageId,
       photo: `https://files.test/${photoId}`,
       detail: 'Crushed corner',
     });
@@ -383,6 +384,119 @@ describe('Route batch acceptance and cotejo (e2e, ST-210.1)', () => {
     expect(start.body.excludedDispatchIds).toEqual([failed.dispatchId]);
   });
 
+  describe('two failed packages of the same stop', () => {
+    // One stop with two packages that fail for different reasons, each with its own photo.
+    async function reportTwoPackages() {
+      const { routeBatchId, dispatches } = await fixture('confirmed', 'driver1', 2);
+      const [failed, ok] = dispatches;
+      const secondPackage = `${failed.packageId}-B`;
+      await db.query(
+        `INSERT INTO dispatch_packages (dispatch_id, external_package_id, length_cm, width_cm, height_cm, gross_weight_kg)
+         VALUES ($1, $2, 20, 20, 20, 5)`,
+        [failed.dispatchId, secondPackage],
+      );
+      const photoA = uuidv7();
+      const photoB = uuidv7();
+      await uploadPhoto(routeBatchId, 'driver1', photoA);
+      await uploadPhoto(routeBatchId, 'driver1', photoB);
+      const response = await accept(routeBatchId, {
+        eventId: uuidv7(),
+        failures: [
+          { dispatchId: failed.dispatchId, packageId: failed.packageId, reason: 'damaged', detail: 'Crushed', photoId: photoA },
+          { dispatchId: failed.dispatchId, packageId: secondPackage, reason: 'does_not_fit', photoId: photoB },
+        ],
+      });
+      return { routeBatchId, failed, ok, secondPackage, photoA, photoB, response };
+    }
+
+    it('records one failure per package with its own reason, photo and actor, and the whole stop stays out of "Iniciar Ruta"', async () => {
+      const { routeBatchId, failed, ok, secondPackage, photoA, photoB, response } =
+        await reportTwoPackages();
+
+      expect(response.status).toBe(200);
+      expect(response.body.failedDispatchIds).toEqual([failed.dispatchId]);
+      const events = await db.query(
+        `SELECT * FROM dispatch_events WHERE dispatch_id = $1 AND event_type = 'cotejo_failed' ORDER BY dispatch_event_id`,
+        [failed.dispatchId],
+      );
+      expect(events).toHaveLength(2);
+      expect(events[0]).toMatchObject({ actor_user_id: users.driver1, actor_type: 'user', reason: 'damaged' });
+      expect(events[0].metadata).toMatchObject({
+        routeBatchId,
+        packageId: failed.packageId,
+        packageIds: [failed.packageId],
+        photoId: photoA,
+        photo: `https://files.test/${photoA}`,
+        detail: 'Crushed',
+      });
+      expect(events[1]).toMatchObject({ actor_user_id: users.driver1, actor_type: 'user', reason: 'does_not_fit' });
+      expect(events[1].metadata).toMatchObject({
+        routeBatchId,
+        packageId: secondPackage,
+        photoId: photoB,
+        photo: `https://files.test/${photoB}`,
+      });
+      const [{ metadata }] = await batchEvents(routeBatchId, 'batch_accepted');
+      expect(metadata.failures).toEqual([
+        { dispatchId: failed.dispatchId, packageId: failed.packageId, reason: 'damaged', photoId: photoA },
+        { dispatchId: failed.dispatchId, packageId: secondPackage, reason: 'does_not_fit', photoId: photoB },
+      ]);
+
+      const start = await http()
+        .post(api(`/route-batches/${routeBatchId}/start`))
+        .set(auth('driver1'))
+        .send({ eventId: uuidv7() });
+      expect(start.status).toBe(200);
+      expect(start.body.dispatchIds).toEqual([ok.dispatchId]);
+      expect(start.body.excludedDispatchIds).toEqual([failed.dispatchId]);
+      const [{ status }] = await db.query(
+        `SELECT s.name AS status FROM dispatches d JOIN dispatch_statuses s USING (dispatch_status_id) WHERE d.dispatch_id = $1`,
+        [failed.dispatchId],
+      );
+      expect(status).toBe('assigned');
+    });
+
+    it('lets the stop leave only after it is resolved', async () => {
+      const { routeBatchId, failed, ok } = await reportTwoPackages();
+      await db.query(
+        `INSERT INTO dispatch_events (dispatch_id, event_type, actor_type, reason, metadata)
+         VALUES ($1, 'cotejo_resolved', 'system', 'Both packages found', $2::jsonb)`,
+        [failed.dispatchId, JSON.stringify({ routeBatchId })],
+      );
+
+      const start = await http()
+        .post(api(`/route-batches/${routeBatchId}/start`))
+        .set(auth('driver1'))
+        .send({ eventId: uuidv7() });
+      expect(start.status).toBe(200);
+      expect(start.body.dispatchIds).toEqual([failed.dispatchId, ok.dispatchId]);
+      expect(start.body.excludedDispatchIds).toEqual([]);
+    });
+
+    it('rejects the same package reported twice but accepts the same photo for two packages', async () => {
+      const { routeBatchId, dispatches } = await fixture();
+      const [{ dispatchId, packageId }] = dispatches;
+      const second = `${packageId}-B`;
+      await db.query(
+        `INSERT INTO dispatch_packages (dispatch_id, external_package_id, length_cm, width_cm, height_cm, gross_weight_kg)
+         VALUES ($1, $2, 20, 20, 20, 5)`,
+        [dispatchId, second],
+      );
+      const photoId = uuidv7();
+      await uploadPhoto(routeBatchId, 'driver1', photoId);
+      const first = { dispatchId, packageId, reason: 'missing', photoId };
+
+      const twice = await accept(routeBatchId, { eventId: uuidv7(), failures: [first, { ...first, reason: 'damaged' }] });
+      expect(twice.status).toBe(400);
+      expect(twice.body.error).toBe('COTEJO_FAILURE_DUPLICATED_PACKAGE');
+      expect(await acceptedAt(routeBatchId)).toBeNull();
+
+      const shared = await accept(routeBatchId, { eventId: uuidv7(), failures: [first, { ...first, packageId: second }] });
+      expect(shared.status).toBe(200);
+      expect(shared.body.failedDispatchIds).toEqual([dispatchId]);
+    });
+  });
+
   it('lets the stop leave again once a later cotejo_resolved exists for the same batch', async () => {
     const { routeBatchId, dispatches } = await fixture('confirmed', 'driver1', 2);
     const [failed, ok] = dispatches;
@@ -393,7 +507,7 @@ describe('Route batch acceptance and cotejo (e2e, ST-210.1)', () => {
       failures: [
         {
           dispatchId: failed.dispatchId,
-          packageIds: [failed.packageId],
+          packageId: failed.packageId,
           reason: 'missing',
           photoId,
         },
@@ -427,7 +541,7 @@ describe('Route batch acceptance and cotejo (e2e, ST-210.1)', () => {
     await uploadPhoto(routeBatchId, 'driver1', photoId);
     const response = await accept(routeBatchId, {
       eventId: uuidv7(),
-      failures: [{ dispatchId, packageIds: [packageId], reason: 'missing', photoId }],
+      failures: [{ dispatchId, packageId, reason: 'missing', photoId }],
     });
     expect(response.status).toBe(400);
     expect(response.body.error).toBe('COTEJO_FAILURE_DISPATCH_NOT_ASSIGNED');
@@ -443,7 +557,7 @@ describe('Route batch acceptance and cotejo (e2e, ST-210.1)', () => {
       (
         await accept(routeBatchId, {
           eventId: uuidv7(),
-          failures: [{ dispatchId: failed.dispatchId, packageIds: [failed.packageId], reason: 'does_not_fit', photoId }],
+          failures: [{ dispatchId: failed.dispatchId, packageId: failed.packageId, reason: 'does_not_fit', photoId }],
         })
       ).status,
     ).toBe(200);
@@ -499,14 +613,14 @@ describe('Route batch acceptance and cotejo (e2e, ST-210.1)', () => {
     const [{ dispatchId, packageId }] = dispatches;
     const photoId = uuidv7();
     expect((await uploadPhoto(routeBatchId, 'driver1', photoId)).status).toBe(201);
-    const failure = { dispatchId, packageIds: [packageId], reason: 'missing', photoId };
+    const failure = { dispatchId, packageId, reason: 'missing', photoId };
     const send = (body: object) => accept(routeBatchId, { eventId: uuidv7(), ...body });
 
     const cases: [object, string][] = [
       [{ failures: [{ ...failure, photoId: uuidv7() }] }, 'COTEJO_PHOTO_NOT_FOUND'],
       [{ failures: [{ ...failure, dispatchId: other.dispatches[0].dispatchId }] }, 'COTEJO_FAILURE_DISPATCH_NOT_IN_BATCH'],
-      [{ failures: [{ ...failure, packageIds: ['NOT-MINE'] }] }, 'COTEJO_FAILURE_PACKAGE_NOT_IN_DISPATCH'],
-      [{ failures: [failure, failure] }, 'COTEJO_FAILURE_DUPLICATED_DISPATCH'],
+      [{ failures: [{ ...failure, packageId: 'NOT-MINE' }] }, 'COTEJO_FAILURE_PACKAGE_NOT_IN_DISPATCH'],
+      [{ failures: [failure, failure] }, 'COTEJO_FAILURE_DUPLICATED_PACKAGE'],
     ];
     for (const [body, error] of cases) {
       const response = await send(body);
@@ -530,7 +644,7 @@ describe('Route batch acceptance and cotejo (e2e, ST-210.1)', () => {
       failures: [
         {
           dispatchId: dispatches[0].dispatchId,
-          packageIds: [dispatches[0].packageId],
+          packageId: dispatches[0].packageId,
           reason: 'does_not_fit',
           photoId,
         },

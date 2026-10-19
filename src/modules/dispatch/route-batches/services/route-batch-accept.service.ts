@@ -117,7 +117,8 @@ export class RouteBatchAcceptService {
             JSON.stringify({
               eventId: dto.eventId,
               routeBatchId,
-              packageIds: failure.packageIds,
+              packageId: failure.packageId,
+              packageIds: [failure.packageId],
               reason: failure.reason,
               detail: failure.detail ?? null,
               photoId: failure.photoId,
@@ -127,7 +128,10 @@ export class RouteBatchAcceptService {
         );
       }
 
-      const failedDispatchIds = failures.map(({ dispatchId }) => dispatchId);
+      // A stop can fail for several packages: it is listed once, in the order of its first failure.
+      const failedDispatchIds = [
+        ...new Set(failures.map(({ dispatchId }) => dispatchId)),
+      ];
       const metadata: AcceptedMetadata = {
         eventId: dto.eventId,
         acceptedAt: acceptedAt.toISOString(),
@@ -143,11 +147,14 @@ export class RouteBatchAcceptService {
           JSON.stringify({
             ...metadata,
             driverId,
-            failures: failures.map(({ dispatchId, packageIds, reason }) => ({
-              dispatchId,
-              packageIds,
-              reason,
-            })),
+            failures: failures.map(
+              ({ dispatchId, packageId, reason, photoId }) => ({
+                dispatchId,
+                packageId,
+                reason,
+                photoId,
+              }),
+            ),
           }),
         ],
       );
@@ -164,12 +171,19 @@ export class RouteBatchAcceptService {
     const photoUrls = new Map<string, string>();
     if (failures.length === 0) return photoUrls;
 
-    const dispatchIds = failures.map(({ dispatchId }) => dispatchId);
-    if (new Set(dispatchIds).size !== dispatchIds.length)
+    // One failure per package: a stop may have several, each with its own reason and photo.
+    const packageKeys = failures.map(
+      ({ dispatchId, packageId }) => `${dispatchId}:${packageId}`,
+    );
+    const repeated = packageKeys.filter(
+      (key, index) => packageKeys.indexOf(key) !== index,
+    );
+    if (repeated.length)
       throw new CotejoFailureInvalidException(
-        'COTEJO_FAILURE_DUPLICATED_DISPATCH',
-        'Send one failure per dispatch; list every affected package in its packageIds.',
+        'COTEJO_FAILURE_DUPLICATED_PACKAGE',
+        `Package ${[...new Set(repeated)].join(', ')} (dispatch:package) is reported more than once; send one failure per package.`,
       );
+    const dispatchIds = [...new Set(failures.map(({ dispatchId }) => dispatchId))];
 
     const inBatch: { dispatch_id: number; status: string }[] =
       await manager.query(
@@ -205,13 +219,10 @@ export class RouteBatchAcceptService {
       packages.map((p) => `${p.dispatch_id}:${p.external_package_id}`),
     );
     for (const failure of failures) {
-      const foreign = failure.packageIds.filter(
-        (id) => !owned.has(`${failure.dispatchId}:${id}`),
-      );
-      if (foreign.length)
+      if (!owned.has(`${failure.dispatchId}:${failure.packageId}`))
         throw new CotejoFailureInvalidException(
           'COTEJO_FAILURE_PACKAGE_NOT_IN_DISPATCH',
-          `Packages ${foreign.join(', ')} do not belong to dispatch ${failure.dispatchId}.`,
+          `Package ${failure.packageId} does not belong to dispatch ${failure.dispatchId}.`,
         );
     }
 
