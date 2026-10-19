@@ -3,11 +3,8 @@
 // desordenado por buffer offline — solo el más nuevo por despacho gana, vía el guardrail de
 // DispatchesService.updateLocation), pertenencia del despacho al repartidor, y permisos.
 //
-// La retransmisión por Socket.IO (evento 'dispatch.location.updated' a la sala 'dispatch-board')
-// NO se prueba acá con un cliente de socket real — eso exigiría levantar un puerto HTTP real y
-// sumar socket.io-client como dependencia solo para esto. Ya está cubierto de punta a punta, en
-// piezas, por unitarios: socket.gateway.spec.ts (el plugin anuncia la conexión con el rol) +
-// tracking.service.spec.ts (quién se une a la sala, y que se emite con el payload correcto).
+// La aceptación real de Socket.IO (JWT requerido y evento recibido tras un cambio de estado)
+// está en dispatch-status.e2e-spec.ts. Aquí se verifican la ingesta GPS y sus permisos HTTP.
 //
 // Levanta el AppModule real contra una base de datos real y pega por HTTP con supertest. Seguro de
 // re-correr contra una base compartida: todo lo creado usa un tag único por corrida y se borra en

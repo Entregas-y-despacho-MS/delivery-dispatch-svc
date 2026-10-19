@@ -11,10 +11,82 @@ import { hashPassword } from '../src/shared/utils/crypto.util.js';
 import { HttpExceptionFilter } from '../src/shared/filters/index.js';
 import { withEventPurge } from './helpers/purge-append-only-events.js';
 
+type RawSocket = WebSocket;
+
+function connectSocket(url: string, token: string): Promise<RawSocket> {
+    return new Promise((resolve, reject) => {
+        const socket = new WebSocket(url);
+        let namespaceRequested = false;
+        const timeout = setTimeout(() => { socket.close(); reject(new Error('Socket.IO authentication timed out.')); }, 5_000);
+        socket.addEventListener('message', (message) => {
+            const packet = String(message.data);
+            if (packet.startsWith('0') && !namespaceRequested) {
+                namespaceRequested = true;
+                socket.send(`40/app,${JSON.stringify({ token })}`);
+            } else if (packet.startsWith('40/app,')) {
+                clearTimeout(timeout);
+                resolve(socket);
+            } else if (packet.startsWith('44/app,')) {
+                clearTimeout(timeout);
+                reject(new Error(`Socket.IO rejected the valid JWT: ${packet}`));
+            }
+        });
+        socket.addEventListener('error', () => {
+            clearTimeout(timeout);
+            reject(new Error('Socket.IO connection failed.'));
+        });
+    });
+}
+
+function socketConnectionRejected(url: string): Promise<boolean> {
+    return new Promise((resolve, reject) => {
+        const socket = new WebSocket(url);
+        let namespaceRequested = false;
+        let namespaceAccepted = false;
+        const timeout = setTimeout(() => { socket.close(); resolve(!namespaceAccepted); }, 5_000);
+        socket.addEventListener('message', (message) => {
+            const packet = String(message.data);
+            if (packet.startsWith('0') && !namespaceRequested) {
+                namespaceRequested = true;
+                socket.send('40/app,{}');
+            } else if (packet.startsWith('40/app,')) {
+                namespaceAccepted = true;
+            } else if (packet.startsWith('41/app,') || packet.startsWith('44/app,')) {
+                clearTimeout(timeout);
+                socket.close();
+                resolve(true);
+            }
+        });
+        socket.addEventListener('close', () => {
+            clearTimeout(timeout);
+            resolve(true);
+        });
+        socket.addEventListener('error', () => {
+            clearTimeout(timeout);
+            reject(new Error('Socket.IO connection failed before the no-token handshake was rejected.'));
+        });
+    });
+}
+
+function waitForSocketEvent(socket: RawSocket, eventName: string): Promise<Record<string, unknown>> {
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error(`Timed out waiting for Socket.IO event ${eventName}.`)), 5_000);
+        socket.addEventListener('message', (message) => {
+            const packet = String(message.data);
+            if (!packet.startsWith('42/app,')) return;
+            const [name, payload] = JSON.parse(packet.slice('42/app,'.length)) as [string, Record<string, unknown>];
+            if (name !== eventName) return;
+            clearTimeout(timeout);
+            resolve(payload);
+        });
+    });
+}
+
 describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
     let app: INestApplication;
     let dataSource: DataSource;
     let apiPrefix: string;
+    let socketUrl: string;
     const tokens: Record<'driver1' | 'driver2', string> = { driver1: '', driver2: '' };
     const users: Record<'driver1' | 'driver2', number> = { driver1: 0, driver2: 0 };
     const statusIds: Record<string, number> = {};
@@ -110,6 +182,10 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
         }));
         app.useGlobalFilters(new HttpExceptionFilter());
         await app.init();
+        await app.listen(0);
+        const address = app.getHttpServer().address();
+        if (!address || typeof address === 'string') throw new Error('The e2e HTTP server did not expose its ephemeral port.');
+        socketUrl = `ws://127.0.0.1:${address.port}/socket.io/?EIO=4&transport=websocket`;
         dataSource = moduleRef.get(DataSource);
 
         const passwordHash = await hashPassword('E2eTest1234');
@@ -130,6 +206,25 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
 
         for (const row of await dataSource.query(`SELECT dispatch_status_id, name FROM dispatch_statuses`)) statusIds[row.name] = row.dispatch_status_id;
         [{ dispatch_type_id: deliveryTypeId }] = await dataSource.query(`SELECT dispatch_type_id FROM dispatch_types WHERE name = 'delivery'`);
+    });
+
+    it('retransmite un cambio de estado al cliente Socket.IO autenticado y rechaza al cliente sin JWT', async () => {
+        expect(await socketConnectionRejected(socketUrl)).toBe(true);
+        const client = await connectSocket(socketUrl, tokens.driver1);
+        try {
+            const event = waitForSocketEvent(client, 'dispatch.status_changed');
+            const id = await newDispatch(await newBatch('driver1'));
+            const response = await patch(id, body('in_transit'));
+
+            expect(response.status).toBe(200);
+            expect(await event).toMatchObject({
+                dispatchId: id,
+                status: 'in_transit',
+                previousStatus: 'out_for_delivery',
+            });
+        } finally {
+            client.close();
+        }
     });
 
     afterAll(async () => {
