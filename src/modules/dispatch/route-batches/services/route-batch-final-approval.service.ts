@@ -19,6 +19,7 @@ interface BatchRow {
   shift_date: string;
   proposed_driver_id: number | null;
   vehicle_id: number | null;
+  zone_name: string;
 }
 
 interface DispatchRow {
@@ -26,6 +27,7 @@ interface DispatchRow {
   version: number;
   status: string;
   type: string;
+  priority: string;
   source_order_ref: string;
   delivery_address: string;
   delivery_latitude: string | null;
@@ -74,9 +76,11 @@ export class RouteBatchFinalApprovalService {
   private async commitApproval(runner: QueryRunner, routeBatchId: number, dto: ApproveFinalRouteBatchDto, actorUserId: number): Promise<FinalApprovalResult> {
     const manager = runner.manager;
     const [batch]: BatchRow[] = await manager.query(
-      `SELECT route_batch_id AS id, version, status, shift_date::text AS shift_date,
-              proposed_driver_id, vehicle_id
-         FROM route_batches WHERE route_batch_id = $1 FOR UPDATE`,
+      `SELECT b.route_batch_id AS id, b.version, b.status, b.shift_date::text AS shift_date,
+              b.proposed_driver_id, b.vehicle_id, COALESCE(z.name, 'Zona sin especificar') AS zone_name
+         FROM route_batches b
+         LEFT JOIN delivery_zones z ON z.delivery_zone_id = b.delivery_zone_id
+        WHERE b.route_batch_id = $1 FOR UPDATE OF b`,
       [routeBatchId],
     );
     if (!batch) throw new RouteBatchNotFoundException();
@@ -88,7 +92,7 @@ export class RouteBatchFinalApprovalService {
     }
 
     const dispatches: DispatchRow[] = await manager.query(
-      `SELECT d.dispatch_id AS id, d.version, s.name AS status, t.name AS type,
+      `SELECT d.dispatch_id AS id, d.version, s.name AS status, t.name AS type, d.priority,
               d.source_order_ref, d.delivery_address, d.delivery_latitude, d.delivery_longitude,
               d.scheduled_window_start, d.scheduled_window_end
          FROM dispatches d
@@ -185,7 +189,15 @@ export class RouteBatchFinalApprovalService {
       [batch.id, actorUserId, APPROVAL_REASON, JSON.stringify({ previousStatus: batch.status, status: RouteBatchStatusEnum.CONFIRMED, previousVersion: batch.version, version: approvedVersion, driverId, vehicleId, dispatchIds })],
     );
 
-    const event: RouteAssignedEvent = { routeId: batch.id, driverId, vehicleId, dispatchIds, version: approvedVersion };
+    const event: RouteAssignedEvent = {
+      routeId: batch.id,
+      driverId,
+      vehicleId,
+      dispatchIds,
+      dispatches: dispatches.map(({ id, priority }) => ({ dispatchId: id, priority })),
+      zoneName: batch.zone_name,
+      version: approvedVersion,
+    };
     return { routeBatchId: batch.id, version: approvedVersion, driverId, vehicleId, dispatchIds, event };
   }
 

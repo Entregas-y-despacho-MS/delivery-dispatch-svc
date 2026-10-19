@@ -12,12 +12,14 @@ function createHarness(options: { batchVersion?: number; batchStatus?: string; d
     shift_date: '2026-10-20',
     proposed_driver_id: 34,
     vehicle_id: 56,
+    zone_name: 'Centro',
   };
   const dispatches = options.dispatches ?? [{
     id: 77,
     version: 2,
     status: 'scheduled',
     type: 'delivery',
+    priority: 'urgent',
     source_order_ref: 'SO-77',
     delivery_address: 'Test address',
     delivery_latitude: '-16.5',
@@ -28,7 +30,7 @@ function createHarness(options: { batchVersion?: number; batchStatus?: string; d
   let isTransactionActive = false;
   const manager = {
     query: vi.fn(async (sql: string) => {
-      if (sql.includes('FROM route_batches WHERE route_batch_id = $1 FOR UPDATE')) return [batch];
+      if (sql.includes('FROM route_batches b') && sql.includes('FOR UPDATE OF b')) return [batch];
       if (sql.includes('JOIN dispatch_types')) return dispatches;
       if (sql.includes('COUNT(p.dispatch_package_id)')) return dispatches.map((dispatch) => ({ dispatch_id: dispatch.id, package_count: String(options.packageCount ?? 1) }));
       if (sql.includes('source_order_ref = ANY')) return [];
@@ -68,7 +70,58 @@ describe('RouteBatchFinalApprovalService', () => {
     expect(manager.query).toHaveBeenCalledWith(expect.stringContaining("VALUES ($1, 'final_approved'"), expect.any(Array));
     expect(capacity.assertAssignable).toHaveBeenCalledWith(12, 56, runner.manager);
     expect(runner.commitTransaction.mock.invocationCallOrder[0]).toBeLessThan(events.emit.mock.invocationCallOrder[0]);
-    expect(events.emit).toHaveBeenCalledWith('route.assigned', { routeId: 12, driverId: 34, vehicleId: 56, dispatchIds: [77], version: 5 });
+    expect(events.emit).toHaveBeenCalledWith('route.assigned', {
+      routeId: 12,
+      driverId: 34,
+      vehicleId: 56,
+      dispatchIds: [77],
+      dispatches: [{ dispatchId: 77, priority: 'urgent' }],
+      zoneName: 'Centro',
+      version: 5,
+    });
+  });
+
+  it('emits the approved dispatch and priority snapshot in the event order', async () => {
+    const dispatches = [
+      {
+        id: 77,
+        version: 2,
+        status: 'scheduled',
+        type: 'delivery',
+        priority: 'normal',
+        source_order_ref: 'SO-77',
+        delivery_address: 'First stop',
+        delivery_latitude: '-16.5',
+        delivery_longitude: '-68.1',
+        scheduled_window_start: new Date('2026-10-20T13:00:00Z'),
+        scheduled_window_end: new Date('2026-10-20T15:00:00Z'),
+      },
+      {
+        id: 78,
+        version: 3,
+        status: 'scheduled',
+        type: 'delivery',
+        priority: 'urgent',
+        source_order_ref: 'SO-78',
+        delivery_address: 'Second stop',
+        delivery_latitude: '-16.4',
+        delivery_longitude: '-68.0',
+        scheduled_window_start: new Date('2026-10-20T15:00:00Z'),
+        scheduled_window_end: new Date('2026-10-20T17:00:00Z'),
+      },
+    ];
+    const { service, events } = createHarness({ dispatches });
+
+    await service.approve(12, {
+      version: 4,
+      dispatches: [{ dispatchId: 77, version: 2 }, { dispatchId: 78, version: 3 }],
+    }, 9);
+
+    expect(events.emit).toHaveBeenCalledWith('route.assigned', expect.objectContaining({
+      dispatchIds: [77, 78],
+      dispatches: [{ dispatchId: 77, priority: 'normal' }, { dispatchId: 78, priority: 'urgent' }],
+      zoneName: 'Centro',
+    }));
   });
 
   it('rejects a stale batch version and rolls back without emitting', async () => {

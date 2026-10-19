@@ -5,5 +5,7 @@ export interface RouteAssignedEvent {
   driverId: number;
   vehicleId: number;
   dispatchIds: number[];
+  dispatches: Array<{ dispatchId: number; priority: string }>;
+  zoneName: string;
   version: number;
 }

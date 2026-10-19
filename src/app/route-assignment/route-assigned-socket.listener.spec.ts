@@ -7,7 +7,15 @@ describe('RouteAssignedSocketListener', () => {
   it('notifies the dispatch board and the assigned driver through the socket plugin', () => {
     const socket = { emitToRoom: vi.fn(), emitToUser: vi.fn() };
     const listener = new RouteAssignedSocketListener(socket as any);
-    const event = { routeId: 12, driverId: 34, vehicleId: 56, dispatchIds: [77], version: 5 };
+    const event = {
+      routeId: 12,
+      driverId: 34,
+      vehicleId: 56,
+      dispatchIds: [77],
+      dispatches: [{ dispatchId: 77, priority: 'normal' }],
+      zoneName: 'Centro',
+      version: 5,
+    };
 
     listener.handleRouteAssigned(event);
 
