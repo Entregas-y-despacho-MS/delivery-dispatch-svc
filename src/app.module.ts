@@ -50,6 +50,7 @@ import { DispatchOtpModule } from './app/dispatch-otp/dispatch-otp.module.js';
 import { DispatchEvidenceModule } from './app/dispatch-evidence/dispatch-evidence.module.js';
 import { AuditLogsModule } from './modules/audit/audit-logs/audit-logs.module.js';
 import { DispatchEventsAppModule } from './app/dispatch-events/dispatch-events.module.js';
+import { DispatchIncidentsAppModule } from './app/dispatch-incidents/dispatch-incidents.module.js';
 
 @Module({
   imports: [
@@ -93,6 +94,7 @@ import { DispatchEventsAppModule } from './app/dispatch-events/dispatch-events.m
     SyncModule,
     TrackingModule,
     DispatchEventsAppModule,
+    DispatchIncidentsAppModule,
     MailerModule.register(),
     SocketModule,
     PdfModule,
