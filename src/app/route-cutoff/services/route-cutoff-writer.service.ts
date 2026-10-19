@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { DispatchEvent } from '../../../modules/dispatch/dispatch-events/entities/dispatch-event.entity.js';
@@ -19,6 +20,7 @@ import {
     type StopFacts,
 } from '../domain/cutoff-validation.js';
 import { findDriverFacts, findVehicleConflict } from './cutoff-facts.queries.js';
+import { DISPATCH_STATUS_CHANGED_EVENT, type DispatchStatusChangedEvent } from '../../dispatch-status/dispatch-status-changed.event.js';
 
 export interface CutoffWriteContext {
     trigger: 'scheduled' | 'manual';
@@ -94,13 +96,19 @@ const STALE_CODES: ReadonlySet<CutoffFailureCode> = new Set<CutoffFailureCode>([
  */
 @Injectable()
 export class RouteCutoffWriterService {
-    constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+    constructor(
+        @InjectDataSource() private readonly dataSource: DataSource,
+        private readonly events: EventEmitter2,
+    ) {}
 
     async applyGroup(group: CutoffGroup, context: CutoffWriteContext): Promise<CutoffGroupResult> {
-        return await this.dataSource.transaction((manager) => this.apply(manager, group, context));
+        const statusEvents: DispatchStatusChangedEvent[] = [];
+        const result = await this.dataSource.transaction((manager) => this.apply(manager, group, context, statusEvents));
+        for (const event of statusEvents) this.events.emit(DISPATCH_STATUS_CHANGED_EVENT, event);
+        return result;
     }
 
-    private async apply(manager: EntityManager, group: CutoffGroup, context: CutoffWriteContext): Promise<CutoffGroupResult> {
+    private async apply(manager: EntityManager, group: CutoffGroup, context: CutoffWriteContext, statusEvents: DispatchStatusChangedEvent[]): Promise<CutoffGroupResult> {
         const { plan } = group;
         const result: CutoffGroupResult = {
             key: group.key, status: 'applied', batches: [], createdBatchIds: [], remnantBatchIds: [],
@@ -311,6 +319,18 @@ export class RouteCutoffWriterService {
                 [[...released], DispatchStatusEnum.PENDING],
             );
             result.releasedDispatchIds.push(...released);
+            const updatedAt = new Date().toISOString();
+            for (const dispatchId of released) {
+                const previous = dispatches.get(dispatchId);
+                if (!previous) continue;
+                statusEvents.push({
+                    dispatchId,
+                    previousStatus: previous.status,
+                    status: DispatchStatusEnum.PENDING,
+                    version: previous.version + 1,
+                    updatedAt,
+                });
+            }
         }
 
         // Batches left with only the orders that wait (no firm stop) or that lost an order.

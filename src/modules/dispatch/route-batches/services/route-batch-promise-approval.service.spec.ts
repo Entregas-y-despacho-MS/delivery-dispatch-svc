@@ -20,15 +20,16 @@ function setup(options?: { reviewerId?: number | null; version?: number; dispatc
     const capacity = { assertAssignable: vi.fn().mockResolvedValue({ assignable: true }) };
     const mailer = { send: vi.fn().mockResolvedValue(options?.mail ?? { status: 'sent' }) };
     const config = { get: vi.fn().mockReturnValue('https://dispatch.example.test') };
+    const events = { emit: vi.fn() };
     return {
-        service: new RouteBatchPromiseApprovalService(dataSource as any, capacity as any, mailer as any, config as any),
-        manager, dataSource, capacity, mailer, rows,
+        service: new RouteBatchPromiseApprovalService(dataSource as any, capacity as any, mailer as any, config as any, events as any),
+        manager, dataSource, capacity, mailer, rows, events,
     };
 }
 
 describe('RouteBatchPromiseApprovalService', () => {
     it('approves current dispatch versions, sends after commit, and only timestamps a successful email', async () => {
-        const { service, dataSource, manager, capacity, mailer } = setup();
+        const { service, dataSource, manager, capacity, mailer, events } = setup();
         const result = await service.approve(7, {
             version: 1,
             dispatches: [{ dispatchId: 21, version: 2 }, { dispatchId: 22, version: 0 }],
@@ -43,6 +44,7 @@ describe('RouteBatchPromiseApprovalService', () => {
             metadata: { dispatchId: 21, routeBatchId: 7 },
         }));
         expect(manager.query.mock.calls.some(([sql]) => String(sql).includes('SET promise_notified_at = COALESCE'))).toBe(true);
+        expect(events.emit).toHaveBeenCalledTimes(2);
     });
 
     it('returns an approved dispatch to pending and audits its removal', async () => {

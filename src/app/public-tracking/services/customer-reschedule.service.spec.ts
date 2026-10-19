@@ -101,25 +101,29 @@ function setup(options: {
     };
     const mailer = { send: vi.fn(options.mailer ?? (async () => ({ status: 'sent' }))) };
     const config = { get: vi.fn((_key: string, fallback: string) => fallback) };
+    const events = { emit: vi.fn() };
     const service = new CustomerRescheduleService(
-        dataSource as any, tracking as any, verification as any, offers as any, firming as any, capacity as any, mailer as any, config as any,
+        dataSource as any, tracking as any, verification as any, offers as any, firming as any, capacity as any, mailer as any, config as any, events as any,
     );
     const choose = (chosen: RescheduleOffer = offer()) => buildSlotId(chosen.routeBatchId, chosen.windowStart);
     const statements = () => sql.map((entry) => entry.sql.replace(/\s+/g, ' ').trim());
     const indexOf = (fragment: string) => statements().findIndex((statement) => statement.includes(fragment));
-    return { service, sql, statements, indexOf, manager, dataSource, tracking, verification, offers, firming, capacity, mailer, choose };
+    return { service, sql, statements, indexOf, manager, dataSource, tracking, verification, offers, firming, capacity, mailer, events, choose };
 }
 
 describe('CustomerRescheduleService', () => {
     describe('a valid rescheduling', () => {
         it('moves the dispatch, firms the promise, records the movement and answers the updated page', async () => {
-            const { service, choose, firming, tracking } = setup();
+            const { service, choose, firming, tracking, events } = setup();
 
             await expect(service.reschedule(TOKEN, choose(), PROOF, NOW)).resolves.toEqual({ marker: 'view' });
 
             expect(firming.firm).toHaveBeenCalledWith(1, expect.objectContaining({ reason: 'customer_rescheduled', now: NOW, manager: expect.anything() }));
             expect(firming.reissue).not.toHaveBeenCalled();
             expect(tracking.view).toHaveBeenCalledWith(TOKEN, NOW);
+            expect(events.emit).toHaveBeenCalledWith('dispatch.status_changed', expect.objectContaining({
+                dispatchId: 1, previousStatus: 'scheduled', status: 'scheduled', version: 2,
+            }));
         });
 
         it('locks both batches in id order before any dispatch, whichever the direction of the move', async () => {

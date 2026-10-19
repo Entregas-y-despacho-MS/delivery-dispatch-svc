@@ -43,8 +43,9 @@ function setup(options: { cache?: MemoryCacheAdapter; transaction?: () => Promis
     const dataSource = { transaction: vi.fn(options.transaction ?? (async () => applied)), query: vi.fn(async () => []) };
     const tracking = { resolve: vi.fn(async () => context), view: vi.fn(async () => ({ marker: 'view' })) };
     const offers = { computeOffers: vi.fn(options.computeOffers ?? (async () => ({ offers: [OFFER], unavailableReason: null }))) };
+    const events = { emit: vi.fn() };
     const service = new CustomerRescheduleService(
-        dataSource as any, tracking as any, verification, offers as any, {} as any, {} as any, mailer as any, { get: (_k: string, f: string) => f } as any,
+        dataSource as any, tracking as any, verification, offers as any, {} as any, {} as any, mailer as any, { get: (_k: string, f: string) => f } as any, events as any,
     );
     /** A proof issued the real way: a code is sent and checked. */
     const issueProof = async (): Promise<string> => {

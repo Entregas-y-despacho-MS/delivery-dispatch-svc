@@ -34,6 +34,30 @@ describe('DispatchEventsSocketListener', () => {
         expect(incidentRooms).not.toContain('driver:45');
     });
 
+    it('notifies coordinator and supervisor rooms for incidents without a delivery zone', async () => {
+        const socket = { emitToRooms: vi.fn() };
+        const dataSource = { query: vi.fn(async () => [{ zone_id: null, driver_id: null }]) };
+        const listener = new DispatchEventsSocketListener(socket as never, dataSource as never);
+
+        await listener.forwardIncidentReported({ dispatchId: 8 });
+
+        expect(socket.emitToRooms).toHaveBeenCalledWith(
+            ['coordinators', 'supervisors'], 'dispatch.incident_reported', { dispatchId: 8 },
+        );
+    });
+
+    it('adds active coordinators and supervisors to a newly created zone room', async () => {
+        const socket = { joinRoomMembers: vi.fn() };
+        const listener = new DispatchEventsSocketListener(socket as never, {} as never);
+
+        await listener.joinNewZoneForActiveDispatchRoles({ deliveryZoneId: 29 });
+
+        expect(socket.joinRoomMembers.mock.calls).toEqual([
+            ['coordinators', 'coordinator-zone:29'],
+            ['supervisors', 'supervisor-zone:29'],
+        ]);
+    });
+
     it('routes GPS updates only to the live board room', () => {
         const socket = { emitToRoom: vi.fn() };
         const listener = new DispatchEventsSocketListener(socket as never, {} as never);

@@ -21,7 +21,7 @@ const proposal = (overrides: Partial<ProposedBatch> = {}): ProposedBatch => ({
 });
 
 const locked = (id: number, status = 'pending', over: Partial<{ route_batch_id: number | null; reserved: boolean }> = {}) => ({
-    dispatch_id: id, status, route_batch_id: null, reserved: false, ...over,
+    dispatch_id: id, status, version: 0, route_batch_id: null, reserved: false, ...over,
 });
 
 function uniqueViolation(): QueryFailedError {
@@ -30,6 +30,7 @@ function uniqueViolation(): QueryFailedError {
 }
 
 function build(options: { lockedRows: ReturnType<typeof locked>[]; insertFailures?: unknown[] }) {
+    const events = { emit: vi.fn() };
     const saved: Record<string, unknown[]> = { RouteBatch: [], DispatchEvent: [], RouteBatchEvent: [] };
     const failures = [...(options.insertFailures ?? [])];
     let nextBatchId = 900;
@@ -62,15 +63,15 @@ function build(options: { lockedRows: ReturnType<typeof locked>[]; insertFailure
 
     const dataSource: any = { transaction: vi.fn(async (callback: (m: unknown) => unknown) => await callback(manager)) };
     const reviewer = { assignReviewer: vi.fn(async () => ({ routeBatchId: 900, reviewerUserId: 4, changed: true })) };
-    const service = new PlanWriterService(dataSource, reviewer as any);
-    return { service, manager, saved, reviewer, dataSource };
+    const service = new PlanWriterService(dataSource, reviewer as any, events as any);
+    return { service, manager, saved, reviewer, dataSource, events };
 }
 
 describe('PlanWriterService.writeNewBatch', () => {
     const context = { trigger: 'manual' as const, occurrence: null };
 
     it('creates a provisional batch, moves the orders to in_planning and numbers them', async () => {
-        const { service, manager, saved } = build({ lockedRows: [locked(101), locked(102), locked(103)] });
+        const { service, manager, saved, events } = build({ lockedRows: [locked(101), locked(102), locked(103)] });
 
         const result = await service.writeNewBatch(proposal(), context);
 
@@ -86,6 +87,10 @@ describe('PlanWriterService.writeNewBatch', () => {
         expect(update[1][2]).toEqual([1, 2, 3]);
         expect(update[1][5]).toBe('in_planning');
         expect(update[0]).toContain('version = d.version + 1');
+        expect(events.emit).toHaveBeenCalledTimes(3);
+        expect(events.emit).toHaveBeenCalledWith('dispatch.status_changed', expect.objectContaining({
+            dispatchId: 101, previousStatus: 'pending', status: 'in_planning', version: 1,
+        }));
     });
 
     it('records one status event per order and a created event for the batch, all as system', async () => {

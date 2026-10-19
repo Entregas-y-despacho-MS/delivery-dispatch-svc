@@ -37,14 +37,14 @@ const currentStops = [
 function build(options: {
     batch?: { status: string; version: number } | null;
     current?: typeof currentStops;
-    locked?: { dispatch_id: number; status: string; route_batch_id: number | null; reserved: boolean }[];
+    locked?: { dispatch_id: number; status: string; version?: number; route_batch_id: number | null; reserved: boolean }[];
 }) {
     const saved: Record<string, any[]> = { DispatchEvent: [], RouteBatchEvent: [] };
     const manager: any = {
         query: vi.fn()
             .mockResolvedValueOnce(options.batch === null ? [] : [options.batch ?? { status: 'provisional', version: 3 }])
             .mockResolvedValueOnce(options.current ?? currentStops)
-            .mockResolvedValueOnce(options.locked ?? [{ dispatch_id: 1, status: 'pending', route_batch_id: null, reserved: false }])
+            .mockResolvedValueOnce(options.locked ?? [{ dispatch_id: 1, status: 'pending', version: 0, route_batch_id: null, reserved: false }])
             .mockResolvedValue([]),
         getRepository: vi.fn((entity: { name: string }) => ({
             create: (data: unknown) => data,
@@ -56,7 +56,8 @@ function build(options: {
     };
     const dataSource: any = { transaction: vi.fn(async (callback: (m: unknown) => unknown) => await callback(manager)) };
     const reviewer = { assignReviewer: vi.fn() };
-    return { service: new PlanWriterService(dataSource, reviewer as any), manager, saved, reviewer };
+    const events = { emit: vi.fn() };
+    return { service: new PlanWriterService(dataSource, reviewer as any, events as any), manager, saved, reviewer, events };
 }
 
 const context = { trigger: 'scheduled' as const, occurrence: 'plan-generation@2026-10-13T13:30' };

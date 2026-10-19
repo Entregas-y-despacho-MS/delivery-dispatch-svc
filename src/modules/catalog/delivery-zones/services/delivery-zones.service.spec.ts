@@ -10,6 +10,7 @@ import { DeliveryZoneDto } from '../dto/delivery-zone.dto.js';
 import { DeliveryZoneNotFoundException, DeliveryZoneCodeAlreadyExistsException } from '../exceptions/index.js';
 
 function buildService() {
+    const events = { emit: vi.fn() };
     const rawRepo = {
         create:     vi.fn((data: any = {}) => data),
         save:       vi.fn(async (entity: any) => ({ id: 1, createdAt: new Date(), ...entity })),
@@ -19,8 +20,8 @@ function buildService() {
         findOne:    vi.fn(),
         findAndCount: vi.fn().mockResolvedValue([[], 0]),
     };
-    const service = new DeliveryZonesService(rawRepo as any);
-    return { service, rawRepo };
+    const service = new DeliveryZonesService(rawRepo as any, events as any);
+    return { service, rawRepo, events };
 }
 
 const EXISTING_ZONE = { id: 1, code: 'ZON-SUR', name: 'Zona Sur', estimatedTimeMin: 45, createdAt: new Date() };
@@ -39,7 +40,7 @@ describe('DeliveryZonesService — integridad de datos (RF-A29)', () => {
         });
 
         it('create() acepta un código nuevo y persiste la zona', async () => {
-            const { service, rawRepo } = buildService();
+            const { service, rawRepo, events } = buildService();
             rawRepo.findOne
                 .mockResolvedValueOnce(null) // existsByCode — libre
                 .mockResolvedValueOnce({ ...EXISTING_ZONE, id: 2, code: 'ZON-NORTE' }); // fetch final
@@ -48,6 +49,7 @@ describe('DeliveryZonesService — integridad de datos (RF-A29)', () => {
 
             expect(rawRepo.save).toHaveBeenCalled();
             expect((result as any).code).toBe('ZON-NORTE');
+            expect(events.emit).toHaveBeenCalledWith('delivery-zone.created', { deliveryZoneId: 1 });
         });
 
         it('update() rechaza cambiar el código a uno que ya usa otra zona', async () => {

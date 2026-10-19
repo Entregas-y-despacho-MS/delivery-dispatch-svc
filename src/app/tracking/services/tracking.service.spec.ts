@@ -112,20 +112,12 @@ describe('TrackingService.reportLocations', () => {
 });
 
 describe('TrackingService.handleSocketConnected — quién ve el tablero en vivo', () => {
-    it.each(['coordinator', 'supervisor'])('%s se une a dispatch-board al conectarse', (role) => {
+    it.each(['root', 'admin', 'coordinator', 'supervisor'])('%s se une a dispatch-board al conectarse', (role) => {
         const { service, socketService } = buildService();
 
         service.handleSocketConnected({ socketId: 'sock-1', userId: 1, role: role as any });
 
         expect(socketService.joinRoom).toHaveBeenCalledWith('sock-1', DISPATCH_BOARD_ROOM);
-    });
-
-    it('admin no se une al tablero de GPS', () => {
-        const { service, socketService } = buildService();
-
-        service.handleSocketConnected({ socketId: 'sock-1', userId: 1, role: 'admin' as any });
-
-        expect(socketService.joinRoom).not.toHaveBeenCalledWith('sock-1', DISPATCH_BOARD_ROOM);
     });
 
     it('driver se une a su room individual, pero no al tablero', () => {

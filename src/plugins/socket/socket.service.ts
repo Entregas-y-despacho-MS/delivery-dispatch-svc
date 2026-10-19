@@ -46,4 +46,9 @@ export class SocketService {
     joinRoom(socketId: string, room: string): void {
         this.gateway.getServer().in(socketId).socketsJoin(room);
     }
+
+    /** Adds every current member of one room to another without exposing socket internals to app code. */
+    joinRoomMembers(sourceRoom: string, targetRoom: string): void {
+        this.gateway.getServer().in(sourceRoom).socketsJoin(targetRoom);
+    }
 }

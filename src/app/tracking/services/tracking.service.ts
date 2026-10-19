@@ -5,14 +5,15 @@ import { SocketService } from '../../../plugins/socket/socket.service.js';
 import { SOCKET_CONNECTED_EVENT } from '../../../plugins/socket/events/socket-connected.event.js';
 import type { SocketConnectedEvent } from '../../../plugins/socket/events/socket-connected.event.js';
 import { RoleEnum } from '../../../shared/enums/index.js';
-import { dispatchRoleRooms } from '../../dispatch-events/dispatch-events.socket-listener.js';
+import { dispatchRoleRooms } from '../../../shared/utils/dispatch-role-rooms.util.js';
 import { LocationPointDto } from '../dto/location-point.dto.js';
 import { LocationReportOutcome, LocationReportResultDto, LocationsReportResultDto } from '../dto/location-report-result.dto.js';
 
 // Everyone who watches the live dispatch board (RF-A06/A13) — auto-joined on connect, see
 // handleSocketConnected() below. The plugin itself never sees this name or this role list.
 export const DISPATCH_BOARD_ROOM = 'dispatch-board';
-const DISPATCH_BOARD_ROLES: RoleEnum[] = [RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR];
+// Keep the pre-existing administrative map access; RF-A06 centers coordinators but does not revoke it.
+const DISPATCH_BOARD_ROLES: RoleEnum[] = [RoleEnum.ROOT, RoleEnum.ADMIN, RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR];
 
 // A device clock is never exact, but a point from the future is not a real one — it would win the
 // "newest wins" guardrail forever, blocking every real point that comes after it.

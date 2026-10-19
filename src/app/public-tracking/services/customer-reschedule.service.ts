@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
@@ -10,6 +11,8 @@ import { formatNoticeDate, formatNoticeWindow } from '../../final-review/domain/
 import { PromiseFirmingService } from '../../promise-firming/services/promise-firming.service.js';
 import { closeGap, layoutDestination, type CurrentStop } from '../domain/reschedule-layout.js';
 import { parseSlotId, type RescheduleOffer } from '../domain/slot-offer.js';
+import { DispatchStatusEnum } from '../../../shared/enums/index.js';
+import { DISPATCH_STATUS_CHANGED_EVENT, type DispatchStatusChangedEvent } from '../../dispatch-status/dispatch-status-changed.event.js';
 import type { PublicTrackingDto } from '../dto/public-tracking.dto.js';
 import {
     RescheduleNotAvailableException, SlotNoLongerAvailableException, VerificationRequiredException,
@@ -76,6 +79,7 @@ export class CustomerRescheduleService {
         private readonly capacity: RouteCapacityService,
         private readonly mailer: MailerPort,
         config: ConfigService,
+        private readonly events: EventEmitter2,
     ) {
         this.webUrl = config.get<string>('PUBLIC_WEB_URL', 'http://localhost:5173')!.replace(/\/$/, '');
     }
@@ -109,6 +113,14 @@ export class CustomerRescheduleService {
         }
 
         // From here on the rescheduling is done and the proof stays spent. What follows must not undo it.
+        const event: DispatchStatusChangedEvent = {
+            dispatchId: context.dispatchId,
+            previousStatus: DispatchStatusEnum.SCHEDULED,
+            status: DispatchStatusEnum.SCHEDULED,
+            version: applied.recordVersion,
+            updatedAt: now.toISOString(),
+        };
+        this.events.emit(DISPATCH_STATUS_CHANGED_EVENT, event);
         await this.confirmByEmail(context, offer, token);
         this.logger.log(`Dispatch ${context.dispatchId} rescheduled by the customer (batch ${applied.fromBatchId} → ${offer.routeBatchId}, recordVersion ${applied.recordVersion}).`);
         return await this.tracking.view(token, now);

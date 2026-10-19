@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { randomUUID } from 'node:crypto';
@@ -9,6 +10,7 @@ import { ApproveRouteBatchPromisesDto } from '../dto/approve-route-batch-promise
 import { ApproveRouteBatchPromisesResponseDto, PromiseEmailResultDto } from '../dto/approve-route-batch-promises-response.dto.js';
 import { RouteBatchApprovalConflictException, RouteBatchNotFoundException, RouteBatchNotProvisionalException, RouteBatchReviewerMismatchException } from '../exceptions/index.js';
 import { RouteCapacityService } from './route-capacity.service.js';
+import { DISPATCH_STATUS_CHANGED_EVENT, type DispatchStatusChangedEvent } from '../../../../app/dispatch-status/dispatch-status-changed.event.js';
 
 interface BatchRow {
     id: number;
@@ -46,6 +48,7 @@ export class RouteBatchPromiseApprovalService {
         private readonly capacity: RouteCapacityService,
         private readonly mailer: MailerPort,
         config: ConfigService,
+        private readonly events: EventEmitter2,
     ) {
         this.webUrl = config.get<string>('PUBLIC_WEB_URL', 'http://localhost:5173')!.replace(/\/$/, '');
     }
@@ -56,6 +59,9 @@ export class RouteBatchPromiseApprovalService {
         actorUserId: number,
     ): Promise<ApproveRouteBatchPromisesResponseDto> {
         const plan = await this.dataSource.transaction((manager) => this.commitApproval(manager, routeBatchId, dto, actorUserId));
+        const updatedAt = new Date().toISOString();
+        for (const dispatch of plan.approved) this.emitStatusChanged(dispatch, DispatchStatusEnum.SCHEDULED, updatedAt);
+        for (const dispatch of plan.removed) this.emitStatusChanged(dispatch, DispatchStatusEnum.PENDING, updatedAt);
         const emailResults = await this.notifyCustomers(plan);
         return {
             routeBatchId,
@@ -65,6 +71,17 @@ export class RouteBatchPromiseApprovalService {
             emailCount: emailResults.filter((result) => result.result !== 'skipped').length,
             emailResults,
         };
+    }
+
+    private emitStatusChanged(dispatch: DispatchRow, status: string, updatedAt: string): void {
+        const event: DispatchStatusChangedEvent = {
+            dispatchId: dispatch.id,
+            previousStatus: dispatch.status,
+            status,
+            version: dispatch.version + 1,
+            updatedAt,
+        };
+        this.events.emit(DISPATCH_STATUS_CHANGED_EVENT, event);
     }
 
     private async commitApproval(

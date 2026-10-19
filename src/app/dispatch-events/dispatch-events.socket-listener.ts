@@ -8,6 +8,7 @@ import { SOCKET_CONNECTED_EVENT, type SocketConnectedEvent } from '../../plugins
 import { todayInOperatingTimeZone } from '../../modules/dispatch/dispatches/utils/operating-date.util.js';
 import { DISPATCH_STATUS_CHANGED_EVENT } from '../dispatch-status/dispatch-status-changed.event.js';
 import { ROUTE_ASSIGNED_EVENT, type RouteAssignedEvent } from '../../modules/dispatch/route-batches/events/route-assigned.event.js';
+import { DELIVERY_ZONE_CREATED_EVENT, type DeliveryZoneCreatedEvent } from '../../modules/catalog/delivery-zones/events/delivery-zone-created.event.js';
 
 const ROLE_ROOMS = ['coordinators', 'supervisors'];
 
@@ -41,6 +42,12 @@ export class DispatchEventsSocketListener {
             if (role === RoleEnum.COORDINATOR || role === RoleEnum.ROOT) this.socket.joinRoom(socketId, `coordinator-zone:${zone_id}`);
             if (role === RoleEnum.SUPERVISOR || role === RoleEnum.ROOT) this.socket.joinRoom(socketId, `supervisor-zone:${zone_id}`);
         }
+    }
+
+    @OnEvent(DELIVERY_ZONE_CREATED_EVENT, { async: true })
+    async joinNewZoneForActiveDispatchRoles({ deliveryZoneId }: DeliveryZoneCreatedEvent): Promise<void> {
+        this.socket.joinRoomMembers('coordinators', `coordinator-zone:${deliveryZoneId}`);
+        this.socket.joinRoomMembers('supervisors', `supervisor-zone:${deliveryZoneId}`);
     }
 
     @OnEvent(DISPATCH_STATUS_CHANGED_EVENT, { async: true })
@@ -82,6 +89,8 @@ export class DispatchEventsSocketListener {
                 : audience === 'roles-zone' ? [] : [...ROLE_ROOMS];
         if (audience === 'roles-zone' && target.zone_id !== null) {
             rooms.push(`coordinator-zone:${target.zone_id}`, `supervisor-zone:${target.zone_id}`);
+        } else if (audience === 'roles-zone') {
+            rooms.push(...ROLE_ROOMS);
         }
         if (audience === 'roles-zone-driver' && target.zone_id !== null) rooms.push(`zone:${target.zone_id}`);
         if (audience === 'roles-zone-driver' && target.driver_id !== null) rooms.push(`driver:${target.driver_id}`);
@@ -106,10 +115,3 @@ export class DispatchEventsSocketListener {
     @OnEvent('integration.order_incomplete', { async: true })
     forwardOrderIncomplete(event: unknown): void { this.socket.emitToRooms(ROLE_ROOMS, 'integration.order_incomplete', event); }
 }
-
-export const dispatchRoleRooms = (role: RoleEnum, userId: number): string[] => {
-    if (role === RoleEnum.COORDINATOR || role === RoleEnum.ROOT) return ['coordinators'];
-    if (role === RoleEnum.SUPERVISOR) return ['supervisors'];
-    if (role === RoleEnum.DRIVER) return [`driver:${userId}`];
-    return [];
-};
