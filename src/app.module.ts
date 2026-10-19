@@ -47,6 +47,7 @@ import { PublicTrackingModule } from './app/public-tracking/public-tracking.modu
 import { DispatchStatusModule } from './app/dispatch-status/dispatch-status.module.js';
 import { DispatchOtpModule } from './app/dispatch-otp/dispatch-otp.module.js';
 import { AuditLogsModule } from './modules/audit/audit-logs/audit-logs.module.js';
+import { DispatchEventsAppModule } from './app/dispatch-events/dispatch-events.module.js';
 
 @Module({
   imports: [
@@ -88,6 +89,7 @@ import { AuditLogsModule } from './modules/audit/audit-logs/audit-logs.module.js
     AuthModule,
     SyncModule,
     TrackingModule,
+    DispatchEventsAppModule,
     MailerModule.register(),
     SocketModule,
     PdfModule,

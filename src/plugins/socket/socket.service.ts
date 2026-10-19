@@ -26,6 +26,12 @@ export class SocketService {
         this.gateway.getServer().to(room).emit(event, data);
     }
 
+    /** Emits once to the union of rooms, even when a socket belongs to more than one target room. */
+    emitToRooms(rooms: string[], event: string, data: unknown): void {
+        if (rooms.length === 0) return;
+        this.gateway.getServer().to(rooms).emit(event, data);
+    }
+
     /**
      * Puts an already-connected socket into a room, so it starts receiving emitToRoom(room, ...).
      * The plugin doesn't decide which sockets join which room — a business module calls this (e.g.
