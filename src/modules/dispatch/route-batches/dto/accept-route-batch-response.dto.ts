@@ -17,7 +17,8 @@ export class AcceptRouteBatchResponseDto {
   acceptedAt!: string;
 
   @ApiProperty({
-    type: [Number],
+    type: 'array',
+    items: { type: 'integer' },
     example: [103],
     description:
       'Dispatch IDs marked as "does not leave" because of a package-check failure. The coordinator resolves them by hand; the rest of the route can start.',
