@@ -6,3 +6,5 @@ export * from './route-capacity-exceeded.exception.js';
 export * from './route-batch-approval-conflict.exception.js';
 export * from './route-batch-reviewer-mismatch.exception.js';
 export * from './route-batch-not-correctable.exception.js';
+export * from './cotejo-photo-id-conflict.exception.js';
+export * from './route-batch-accept-conflict.exception.js';

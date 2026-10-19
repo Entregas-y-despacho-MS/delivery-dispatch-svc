@@ -119,15 +119,16 @@ describe('POST /route-batches/:id/start (e2e, ST-51.5)', () => {
     status = 'confirmed',
     driver: 'driver1' | 'driver2' = 'driver1',
     trackingCode: string | null = `DSP-2040-${String(fixtureSequence + 1).padStart(5, '0')}`,
+    accepted = status === 'confirmed',
   ) {
     const sequence = fixtureSequence++;
     const sourceOrderRef = `ST515-${run}-${sequence}`;
     sourceRefs.push(sourceOrderRef);
     const shiftDate = `2040-01-01`;
     const [{ route_batch_id: routeBatchId }] = await db.query(
-      `INSERT INTO route_batches (status, driver_id, shift_date)
-       VALUES ($1, $2, $3::date + $4::int) RETURNING route_batch_id`,
-      [status, users[driver], shiftDate, sequence],
+      `INSERT INTO route_batches (status, driver_id, shift_date, accepted_at)
+       VALUES ($1, $2, $3::date + $4::int, $5) RETURNING route_batch_id`,
+      [status, users[driver], shiftDate, sequence, accepted ? new Date() : null],
     );
     batchIds.push(Number(routeBatchId));
     const [{ dispatch_type_id: typeId }] = await db.query(
@@ -162,7 +163,7 @@ describe('POST /route-batches/:id/start (e2e, ST-51.5)', () => {
     };
   }
 
-  it('starts the confirmed route even when accepted_at is null, and persists custody and outbox data', async () => {
+  it('starts the accepted confirmed route and persists custody and outbox data', async () => {
     const { routeBatchId, dispatchId, sourceOrderRef, packageId } =
       await fixture();
     const eventId = uuidv7();
@@ -183,7 +184,7 @@ describe('POST /route-batches/:id/start (e2e, ST-51.5)', () => {
       [routeBatchId],
     );
     expect(batchStatus).toBe('in_execution');
-    expect(acceptedAt).toBeNull();
+    expect(acceptedAt).not.toBeNull();
     const [{ status: dispatchStatus }] = await db.query(
       `SELECT s.name AS status FROM dispatches d JOIN dispatch_statuses s USING (dispatch_status_id) WHERE d.dispatch_id = $1`,
       [dispatchId],
@@ -251,6 +252,27 @@ describe('POST /route-batches/:id/start (e2e, ST-51.5)', () => {
 
     expect(response.status).toBe(409);
     expect(response.body.error).toBe('ROUTE_BATCH_NOT_CONFIRMED');
+    const [{ status }] = await db.query(
+      `SELECT s.name AS status FROM dispatches d JOIN dispatch_statuses s USING (dispatch_status_id) WHERE d.dispatch_id = $1`,
+      [dispatchId],
+    );
+    expect(status).toBe('assigned');
+  });
+
+  it('returns 409 when the confirmed batch was not accepted by the driver yet (ST-210.1)', async () => {
+    const { routeBatchId, dispatchId } = await fixture(
+      'confirmed',
+      'driver1',
+      undefined,
+      false,
+    );
+    const response = await http()
+      .post(api(`/route-batches/${routeBatchId}/start`))
+      .set(auth('driver1'))
+      .send({ eventId: uuidv7() });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe('ROUTE_BATCH_NOT_ACCEPTED');
     const [{ status }] = await db.query(
       `SELECT s.name AS status FROM dispatches d JOIN dispatch_statuses s USING (dispatch_status_id) WHERE d.dispatch_id = $1`,
       [dispatchId],

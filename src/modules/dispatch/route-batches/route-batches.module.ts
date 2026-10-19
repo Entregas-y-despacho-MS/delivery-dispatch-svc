@@ -11,6 +11,8 @@ import { RouteBatchFinalApprovalService } from './services/route-batch-final-app
 import { RouteBatchResourcesService } from './services/route-batch-resources.service.js';
 import { RouteBatchQueryService } from './services/route-batch-query.service.js';
 import { RouteBatchStartService } from './services/route-batch-start.service.js';
+import { RouteBatchCotejoPhotoService } from './services/route-batch-cotejo-photo.service.js';
+import { RouteBatchAcceptService } from './services/route-batch-accept.service.js';
 import { OutboundMessagesModule } from '../../messaging/outbound-messages/outbound-messages.module.js';
 
 // Reviewer assignment (ST-50.4, D-42). The batch planner (ST-50.2) calls RouteBatchReviewerService.assignReviewer.
@@ -26,6 +28,8 @@ import { OutboundMessagesModule } from '../../messaging/outbound-messages/outbou
     RouteBatchResourcesService,
     RouteBatchQueryService,
     RouteBatchStartService,
+    RouteBatchCotejoPhotoService,
+    RouteBatchAcceptService,
   ],
   exports: [RouteBatchReviewerService, RouteCapacityService, RouteBatchResourcesService],
 })

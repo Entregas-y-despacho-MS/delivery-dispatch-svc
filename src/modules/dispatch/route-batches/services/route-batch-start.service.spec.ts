@@ -41,7 +41,12 @@ type CotejoEvent = {
 
 function setup(
   options: {
-    batch?: { id: number; status: string; driver_id: number | null }[];
+    batch?: {
+      id: number;
+      status: string;
+      driver_id: number | null;
+      accepted_at?: Date | null;
+    }[];
     prior?: {
       route_batch_id: number;
       metadata: { dispatchIds: number[]; startedAt: string };
@@ -54,7 +59,12 @@ function setup(
 ) {
   const state = {
     batch: options.batch ?? [
-      { id: 7, status: RouteBatchStatusEnum.CONFIRMED, driver_id: 9 },
+      {
+        id: 7,
+        status: RouteBatchStatusEnum.CONFIRMED,
+        driver_id: 9,
+        accepted_at: savedAt,
+      },
     ],
     prior: options.prior ?? [],
     dispatches: options.dispatches ?? dispatches,
@@ -354,6 +364,26 @@ describe('RouteBatchStartService.start', () => {
 
     await expect(ctx.service.start(7, { eventId }, 9)).rejects.toMatchObject({
       response: expect.objectContaining({ error: 'ROUTE_BATCH_NOT_CONFIRMED' }),
+    });
+    expect(ctx.outbox.enqueue).not.toHaveBeenCalled();
+    expect(ctx.events.emit).not.toHaveBeenCalled();
+    expect(ctx.runner.rollbackTransaction).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a confirmed batch the driver has not accepted yet, without changing data', async () => {
+    const ctx = setup({
+      batch: [
+        {
+          id: 7,
+          status: RouteBatchStatusEnum.CONFIRMED,
+          driver_id: 9,
+          accepted_at: null,
+        },
+      ],
+    });
+
+    await expect(ctx.service.start(7, { eventId }, 9)).rejects.toMatchObject({
+      response: expect.objectContaining({ error: 'ROUTE_BATCH_NOT_ACCEPTED' }),
     });
     expect(ctx.outbox.enqueue).not.toHaveBeenCalled();
     expect(ctx.events.emit).not.toHaveBeenCalled();

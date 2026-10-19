@@ -1,10 +1,17 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Patch, Post, Query } from '@nestjs/common';
+/// <reference types="multer" />
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Patch, Post, Query, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import type { Response } from 'express';
 import { RouteBatchReviewerService } from '../services/route-batch-reviewer.service.js';
 import { UpdateRouteBatchReviewerDto } from '../dto/update-route-batch-reviewer.dto.js';
 import { RouteBatchReviewerDto } from '../dto/route-batch-reviewer.dto.js';
@@ -15,6 +22,13 @@ import { ApproveFinalRouteBatchDto } from '../dto/approve-final-route-batch.dto.
 import { ApproveFinalRouteBatchResponseDto } from '../dto/approve-final-route-batch-response.dto.js';
 import { RouteBatchFinalApprovalService } from '../services/route-batch-final-approval.service.js';
 import { RouteBatchStartService } from '../services/route-batch-start.service.js';
+import { RouteBatchCotejoPhotoService } from '../services/route-batch-cotejo-photo.service.js';
+import { RouteBatchAcceptService } from '../services/route-batch-accept.service.js';
+import { AcceptRouteBatchDto } from '../dto/accept-route-batch.dto.js';
+import { AcceptRouteBatchResponseDto } from '../dto/accept-route-batch-response.dto.js';
+import { UploadCotejoPhotoDto } from '../dto/upload-cotejo-photo.dto.js';
+import { CotejoPhotoDto } from '../dto/cotejo-photo.dto.js';
+import { MAX_EVIDENCE_FILE_BYTES } from '../../../../app/dispatch-evidence/domain/evidence-file.js';
 import { RouteBatchQueryService } from '../services/route-batch-query.service.js';
 import { FindRouteBatchesParamsDto } from '../dto/find-route-batches-params.dto.js';
 import { FindRouteBatchesResponseDto } from '../dto/find-route-batches-response.dto.js';
@@ -47,6 +61,9 @@ import {
  * DISPATCH_PACKAGES_REQUIRED 409 | DISPATCH_ORDER_IN_MULTIPLE_BATCHES 409.
  * The driver and vehicle corrections (ST-50.1, ST-51.6) live in `app/route-batch-correction`.
  */
+// Same caps as the delivery evidence upload: one JPEG up to 500 KB and the few text fields of the form.
+const COTEJO_PHOTO_LIMITS = { fileSize: MAX_EVIDENCE_FILE_BYTES, files: 1, fields: 5, fieldSize: 1024, parts: 6 };
+
 @ApiTags('Route batches')
 @ApiBearerAuth('access-token')
 @Controller('route-batches')
@@ -57,6 +74,8 @@ export class RouteBatchesController {
     private readonly finalApprovalService: RouteBatchFinalApprovalService,
     private readonly queryService: RouteBatchQueryService,
     private readonly startService: RouteBatchStartService,
+    private readonly cotejoPhotoService: RouteBatchCotejoPhotoService,
+    private readonly acceptService: RouteBatchAcceptService,
   ) {}
 
   @Get()
@@ -164,7 +183,7 @@ export class RouteBatchesController {
   @Roles(RoleEnum.DRIVER)
   @ApiOperation({
     summary: 'Start a confirmed route batch',
-    description: 'The assigned driver starts the route with an idempotent UUID v7 eventId. In one transaction it moves the batch to in_execution, moves eligible assigned dispatches to out_for_delivery, records custody and queues one dispatch.shipment.departed outbox message per departing dispatch. Dispatches with an unresolved cotejo_failed event are returned in excludedDispatchIds and are not transitioned or published. Status-change notifications are emitted after commit. A retry with the same eventId returns the original result without repeating transitions.',
+    description: 'The assigned driver starts the route with an idempotent UUID v7 eventId, only after accepting the batch (`POST /route-batches/:id/accept`, 409 `ROUTE_BATCH_NOT_ACCEPTED` otherwise). In one transaction it moves the batch to in_execution, moves eligible assigned dispatches to out_for_delivery, records custody and queues one dispatch.shipment.departed outbox message per departing dispatch. Dispatches with an unresolved cotejo_failed event are returned in excludedDispatchIds and are not transitioned or published. Status-change notifications are emitted after commit. A retry with the same eventId returns the original result without repeating transitions.',
   })
   @ApiIdParam('Route batch')
   @ApiOkResponse({ type: StartRouteBatchResponseDto })
@@ -174,6 +193,7 @@ export class RouteBatchesController {
   @ApiNotFound({ code: 'ROUTE_BATCH_NOT_FOUND', message: 'Route batch not found.' })
   @ApiConflict(
     { code: 'ROUTE_BATCH_NOT_CONFIRMED', message: 'Only a confirmed route batch can start.' },
+    { code: 'ROUTE_BATCH_NOT_ACCEPTED', message: 'Accept the route batch and check the load before starting the route.' },
     { code: 'ROUTE_BATCH_DRIVER_REQUIRED', message: 'Assign a driver before starting the route.' },
     { code: 'ROUTE_BATCH_HAS_NO_DISPATCHES', message: 'The route batch has no dispatches to start.' },
     { code: 'ROUTE_BATCH_ALL_DISPATCHES_EXCLUDED', message: 'No dispatches can depart because every dispatch has an unresolved package-check failure.' },
@@ -188,6 +208,96 @@ export class RouteBatchesController {
     @CurrentUser('id') driverId: number,
   ): Promise<StartRouteBatchResponseDto> {
     return await this.startService.start(id, dto, driverId);
+  }
+
+  @Post(':id/cotejo-photos')
+  @Roles(RoleEnum.DRIVER)
+  @UseInterceptors(FileInterceptor('file', { limits: COTEJO_PHOTO_LIMITS }))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    summary: 'Upload the photo of a cotejo failure',
+    description:
+      'Step 1 of reporting a package-check failure (ST-210.1). The driver of a confirmed batch uploads one JPEG (up to 500 KB) as multipart/form-data with the `file` and a `photoId` (UUID v7). The returned `photoId` goes in `failures[].photoId` of `POST /route-batches/:id/accept`, which only accepts photos uploaded here for the same batch. `photoId` is the idempotency key: 201 when stored now, 200 with the original record when it was already stored (409 if that id belongs to another batch). Requires driver role.',
+  })
+  @ApiIdParam('Route batch')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary', description: 'The photo of the package (JPEG), up to 500 KB.' },
+        photoId: { type: 'string', format: 'uuid', example: '01933b6e-7f2a-7c3d-9a1b-2f8e6c4d5a10', description: 'UUID v7 generated by the device; makes a retry safe.' },
+      },
+      required: ['file', 'photoId'],
+    },
+  })
+  @ApiCreatedResponse({ type: CotejoPhotoDto, description: 'The photo was stored now.' })
+  @ApiOkResponse({ type: CotejoPhotoDto, description: 'The `photoId` was already stored: this is the original record, nothing changed.' })
+  @ApiBadRequests({ validation: true, id: true, errors: [{ code: 'EVIDENCE_FILE_REQUIRED', message: 'A photo evidence needs its file.' }], example: ['photoId must be a UUID'] })
+  @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+  @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
+  @ApiNotFound({ code: 'ROUTE_BATCH_NOT_FOUND', message: 'Route batch not found.' })
+  @ApiConflict(
+    { code: 'ROUTE_BATCH_NOT_CONFIRMED', message: 'The driver can only accept a confirmed batch.' },
+    { code: 'COTEJO_PHOTO_ID_CONFLICT', message: 'This photoId already belongs to another route batch.' },
+  )
+  @ApiResponse({
+    status: 413,
+    description: 'The file is bigger than 500 KB.',
+    schema: { type: 'object', properties: { statusCode: { type: 'integer', example: 413 }, error: { type: 'string', example: 'Payload Too Large' }, message: { type: 'string', example: 'File too large' }, path: { type: 'string', example: '/api/route-batches/42/cotejo-photos' }, timestamp: { type: 'string', format: 'date-time', example: '2026-10-20T07:42:00.000Z' } } },
+  })
+  @ApiResponse({
+    status: 415,
+    description: 'The photo must be a JPEG.',
+    schema: { type: 'object', properties: { statusCode: { type: 'integer', example: 415 }, error: { type: 'string', example: 'UNSUPPORTED_EVIDENCE_FILE_TYPE' }, message: { type: 'string', example: 'The file must be a JPEG image.' }, path: { type: 'string', example: '/api/route-batches/42/cotejo-photos' }, timestamp: { type: 'string', format: 'date-time', example: '2026-10-20T07:42:00.000Z' } } },
+  })
+  async uploadCotejoPhoto(
+    @Param('id', ParseIdPipe) id: number,
+    @CurrentUser('id') driverId: number,
+    @Body() dto: UploadCotejoPhotoDto,
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<CotejoPhotoDto> {
+    const { photo, created } = await this.cotejoPhotoService.upload(id, driverId, dto, file);
+    response.status(created ? HttpStatus.CREATED : HttpStatus.OK);
+    return photo;
+  }
+
+  @Post(':id/accept')
+  @HttpCode(HttpStatus.OK)
+  @Roles(RoleEnum.DRIVER)
+  @ApiOperation({
+    summary: 'Accept a confirmed route batch and report cotejo failures',
+    description:
+      'The assigned driver accepts the batch after checking the physical packages against the expected ones (RF-U24). It records `accepted_at` and a `batch_accepted` event in the batch log, which "Start the day route" (`POST /route-batches/:id/start`) then requires. `failures` lists the packages that are missing, damaged or do not fit, one failure per package, each with its own reason and photo (a stop with two failed packages sends two failures). Each failure writes a `cotejo_failed` dispatch event (package, reason, photo and driver) and the whole stop is marked as "does not leave", so the route start skips it until the coordinator resolves it by hand; `dispatch_incidents` is not used. Reporting the same package twice is a 400. Each failure needs a `photoId` uploaded with `POST /route-batches/:id/cotejo-photos` (one photo may back several packages). Only a `confirmed` batch of the authenticated driver can be accepted, once. `eventId` (UUID v7) is the idempotency key: a retry returns the original result without writing again. Requires driver role.',
+  })
+  @ApiIdParam('Route batch')
+  @ApiOkResponse({ type: AcceptRouteBatchResponseDto })
+  @ApiBadRequests({
+    validation: true,
+    id: true,
+    errors: [
+      { code: 'COTEJO_FAILURE_DUPLICATED_PACKAGE', message: 'A package is reported more than once; send one failure per package.' },
+      { code: 'COTEJO_FAILURE_DISPATCH_NOT_IN_BATCH', message: 'A failure points to a dispatch outside the batch.' },
+      { code: 'COTEJO_FAILURE_DISPATCH_NOT_ASSIGNED', message: 'A failure points to a dispatch that is not assigned.' },
+      { code: 'COTEJO_FAILURE_PACKAGE_NOT_IN_DISPATCH', message: 'A failure points to a package outside its dispatch.' },
+      { code: 'COTEJO_PHOTO_NOT_FOUND', message: 'A failure uses a photo not uploaded for this batch.' },
+    ],
+    example: ['eventId must be a UUID', 'failures.0.photoId must be a UUID'],
+  })
+  @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+  @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
+  @ApiNotFound({ code: 'ROUTE_BATCH_NOT_FOUND', message: 'Route batch not found.' })
+  @ApiConflict(
+    { code: 'ROUTE_BATCH_NOT_CONFIRMED', message: 'The driver can only accept a confirmed batch.' },
+    { code: 'ROUTE_BATCH_ALREADY_ACCEPTED', message: 'The route batch was already accepted.' },
+    { code: 'ROUTE_ACCEPT_EVENT_ID_ALREADY_USED', message: 'This eventId was already used to accept another route batch.' },
+  )
+  async accept(
+    @Param('id', ParseIdPipe) id: number,
+    @Body() dto: AcceptRouteBatchDto,
+    @CurrentUser('id') driverId: number,
+  ): Promise<AcceptRouteBatchResponseDto> {
+    return await this.acceptService.accept(id, dto, driverId);
   }
 
   @Patch(':id/reviewer')
