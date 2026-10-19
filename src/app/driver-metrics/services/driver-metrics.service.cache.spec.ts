@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Logger } from '@nestjs/common';
 import { MemoryCacheAdapter } from '../../../plugins/cache/memory/memory-cache.adapter.js';
 import { CacheUnavailableException } from '../../../plugins/cache/exceptions/index.js';
@@ -13,6 +13,8 @@ describe('DriverMetricsService cache', () => {
     let cache: MemoryCacheAdapter;
     let service: DriverMetricsService;
     let warn: ReturnType<typeof vi.spyOn>;
+
+    afterEach(() => { vi.restoreAllMocks(); });
 
     beforeEach(() => {
         repository.aggregate.mockReset().mockResolvedValue(ROW);

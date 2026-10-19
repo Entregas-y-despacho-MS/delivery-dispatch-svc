@@ -56,6 +56,18 @@ interface AssignedRow { assigned_count: number }
 export class DriverMetricsRepository {
     constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
+    /** The driver of the route a dispatch belongs to; null when it has no route or the route has no driver. */
+    async findDriverIdOfDispatch(dispatchId: number): Promise<number | null> {
+        const rows: { driver_id: number | null }[] = await this.dataSource.query(
+            `SELECT rb.driver_id
+               FROM dispatches d
+               JOIN route_batches rb ON rb.route_batch_id = d.route_batch_id
+              WHERE d.dispatch_id = $1`,
+            [dispatchId],
+        );
+        return rows[0]?.driver_id ?? null;
+    }
+
     async aggregate(driverId: number, range: MetricsDateRange): Promise<DriverMetricsRow> {
         const args = [driverId, range.from, range.to];
         const [[deliveries], [assigned]] = await Promise.all([

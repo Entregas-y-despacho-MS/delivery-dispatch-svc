@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { CacheService } from '../../../plugins/cache/cache.port.js';
-import { METRICS_CACHE_TTL_SECONDS, metricsCacheKey } from '../domain/metrics-cache-key.js';
+import { METRICS_CACHE_TTL_SECONDS, allMetricsCacheKeys, metricsCacheKey } from '../domain/metrics-cache-key.js';
 import { DriverMetricsPeriod, resolveMetricsRange } from '../domain/metrics-period.js';
 import { DriverMetricsDto } from '../dto/driver-metrics.dto.js';
 import { DriverMetricsRepository, type DriverMetricsRow } from '../repositories/driver-metrics.repository.js';
@@ -37,6 +37,20 @@ export class DriverMetricsService {
         const metrics = await this.compute(driverId, period);
         await this.write(key, metrics);
         return metrics;
+    }
+
+    /**
+     * Drops the three cached periods of a driver. Each key is attempted on its own, so one failure does not leave
+     * the others stale; a cache that does not answer only warns (the entries expire by themselves within 5 minutes).
+     */
+    async invalidate(driverId: number): Promise<void> {
+        for (const key of allMetricsCacheKeys(driverId)) {
+            try {
+                await this.cache.delete(key);
+            } catch (error) {
+                this.logger.warn(`Could not invalidate the metrics cache (${key}); it expires within ${METRICS_CACHE_TTL_SECONDS} seconds. ${error instanceof Error ? error.message : ''}`.trim());
+            }
+        }
     }
 
     /** Computes the metrics of the driver straight from PostgreSQL. */
