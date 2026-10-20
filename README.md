@@ -68,6 +68,46 @@ src/
 docker compose up --build
 ```
 
+## Consumir un topic real de Google Cloud Pub/Sub
+
+El adaptador usa Google Application Default Credentials cuando `PUBSUB_EMULATOR_HOST` no está definido.
+Para recibir varios tipos de evento desde un mismo topic, configura una subscription de GCP dedicada al
+backend. El backend enruta cada mensaje por el campo JSON `type` y luego lo valida con el contrato lógico
+correspondiente. La publicación de salida del backend continúa usando los topics `dispatch.*`.
+
+Para el topic del Grupo H (`projects/project-a96e5fe1-5ba6-4698-a85/topics/ucb-sis323-sub-h`), usa:
+
+```dotenv
+MESSAGING_ADAPTER=pubsub
+PUBSUB_PROJECT_ID=project-a96e5fe1-5ba6-4698-a85
+PUBSUB_INBOUND_TOPIC=ucb-sis323-sub-h
+PUBSUB_INBOUND_SUBSCRIPTION=ucb-sis323-sub-h-dispatch-svc
+# PUBSUB_EMULATOR_HOST debe estar vacío o sin definir para usar GCP real.
+```
+
+El nombre completo que pasaste es el **topic**. La subscription es otro recurso y debe apuntar a ese topic.
+Para crearla y preparar los topics de dead-letter que usa el backend, autentícate con `gcloud` en el proyecto
+y ejecuta desde la carpeta del servicio:
+
+```bash
+export PUBSUB_PROJECT_ID=project-a96e5fe1-5ba6-4698-a85
+export PUBSUB_INBOUND_TOPIC=ucb-sis323-sub-h
+export PUBSUB_INBOUND_SUBSCRIPTION=ucb-sis323-sub-h-dispatch-svc
+unset PUBSUB_EMULATOR_HOST
+./scripts/pubsub/setup-gcp-subscription.sh
+```
+
+El proceso del backend debe tener ADC configuradas y permiso `roles/pubsub.subscriber` sobre la subscription,
+además de `roles/pubsub.publisher` sobre los topics de dead-letter. Si también publica mensajes de salida, necesita
+permiso de publicación en los topics `dispatch.*` correspondientes. La subscription debe ser exclusiva de esta
+instancia lógica del backend: Pub/Sub reparte cada mensaje entre los consumidores que comparten una subscription.
+El helper crea la dead-letter del broker `<topic>.delivery-failures` para agotar reintentos; el service agent de
+Pub/Sub también necesita permiso `roles/pubsub.publisher` en ese topic. Si la subscription ya existía, el helper
+verifica que apunte al topic correcto y deja intacta su política actual.
+
+Inicia el backend con esas variables de entorno y publica eventos desde el sistema emisor al topic. No configures
+`PUBSUB_EMULATOR_HOST`: si lo dejas apuntando al emulador, el cliente no llegará a Google Cloud.
+
 ## Simulador ERP (ST-73.2)
 
 Permite probar la mensajería con el ERP sin Marketplace, Almacén ni Compras reales: publica en el
