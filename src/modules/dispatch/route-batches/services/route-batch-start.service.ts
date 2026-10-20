@@ -291,7 +291,13 @@ export class RouteBatchStartService {
         data: {
           salesOrderId: dispatch.source_order_ref,
           trackingCode: dispatch.tracking_code!,
-          recordVersion: dispatch.version,
+          // `dispatches.version` (contador de planificación, DEFAULT 0, solo cambia al aprobar/
+          // mover/fusionar/congelar) y `recordVersion` del contrato entre microservicios (créciente
+          // desde 1, `envelope.schema.json`) son dos cosas distintas con el mismo nombre de columna
+          // de origen. Sin el +1, cualquier despacho que nunca pasó por esas operaciones (el caso
+          // común, no el raro) manda `recordVersion: 0` y el envelope lo rechaza, revirtiendo TODO
+          // el inicio de ruta (bug real, encontrado probando ST-210.2 contra `dev` 2026-10-20).
+          recordVersion: dispatch.version + 1,
           updatedAt: dispatchUpdatedAt,
           departedAt: startedAt.toISOString(),
           driverId: String(actorUserId),

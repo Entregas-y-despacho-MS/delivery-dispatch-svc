@@ -166,7 +166,7 @@ describe('RouteBatchStartService.start', () => {
       data: {
         salesOrderId: 'SO-21',
         trackingCode: 'DSP-00021',
-        recordVersion: 3,
+        recordVersion: 4, // dispatch.version (3) + 1 — ver el fix de recordVersion >= 1
         driverId: '9',
         packageIds: ['PKG-21-A'],
       },

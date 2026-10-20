@@ -138,9 +138,13 @@ describe('POST /route-batches/:id/start (e2e, ST-51.5)', () => {
       `SELECT dispatch_status_id FROM dispatch_statuses WHERE name = 'assigned'`,
     );
     const [{ dispatch_id: dispatchId }] = await db.query(
+      // `version` en 0 (su DEFAULT real — ver DICTIONARY de `dispatches`): este fixture lo
+      // sembraba en 4 antes a propósito, esquivando sin querer el bug real de `recordVersion`
+      // (ver route-batch-start.service.ts) — el caso común es justo este, un despacho que nunca
+      // pasó por una aprobación/movimiento/fusión/congelamiento de planificación.
       `INSERT INTO dispatches (dispatch_type_id, dispatch_status_id, route_batch_id, sequence_order,
           source_order_ref, delivery_address, tracking_code, version)
-       VALUES ($1, $2, $3, 1, $4, 'Test destination', $5, 4) RETURNING dispatch_id`,
+       VALUES ($1, $2, $3, 1, $4, 'Test destination', $5, 0) RETURNING dispatch_id`,
       [
         typeId,
         assignedId,
@@ -208,7 +212,7 @@ describe('POST /route-batches/:id/start (e2e, ST-51.5)', () => {
       salesOrderId: sourceOrderRef,
       driverId: String(users.driver1),
       packageIds: [packageId],
-      recordVersion: 4,
+      recordVersion: 1, // dispatch.version (0, el DEFAULT real) + 1
     });
   });
 
