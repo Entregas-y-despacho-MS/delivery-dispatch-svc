@@ -22,11 +22,12 @@ export const NOTICE_RESULT_EVENT = 'notice_result';
 export type NoticeResult = 'sent' | 'bounced' | 'failed' | 'abandoned';
 
 /**
- * How long a reservation without a result counts as "being sent". The SMTP adapter sets no timeouts and
- * nodemailer allows up to 10 minutes of socket silence, so the lease must be longer than that: shorter, and
- * a send that is still alive would be called abandoned. After it, the reservation counts as failed.
+ * How long a reservation without a result counts as "being sent". The SMTP transport limits itself (connect
+ * 10 s, greeting 10 s, 30 s of socket silence per command: `smtp.config.ts`), so a live send ends in a few
+ * minutes at most; the lease must stay longer than that, or a send that is still alive would be called
+ * abandoned. After it, the reservation counts as failed.
  */
-export const NOTICE_LEASE_MINUTES = 15;
+export const NOTICE_LEASE_MINUTES = 10;
 
 /** Who the alert of `final_review_end_time` is for (D-46). */
 export const FINAL_REVIEW_ALERT_AUDIENCE = ['coordinators', 'supervisor'] as const;

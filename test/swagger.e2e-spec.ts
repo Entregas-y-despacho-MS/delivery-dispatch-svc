@@ -98,6 +98,25 @@ describe('Swagger document (e2e)', () => {
         expect(bad).toEqual([]);
     });
 
+    it('the manual planning triggers document the 500 SCHEDULED_TASK_FAILED', () => {
+        for (const key of ['post /api/planning/generate', 'post /api/planning/cutoff']) {
+            const op = operations().find((o) => o.key === key)?.op;
+            expect(JSON.stringify(op?.responses?.['500'] ?? null), key).toContain('SCHEDULED_TASK_FAILED');
+        }
+    });
+
+    it('the planning run summaries publish their whole numbers as integer, never as number', () => {
+        const bad: string[] = [];
+        for (const name of ['PlanGenerationSummaryDto', 'RouteCutoffSummaryDto']) {
+            const schema = (doc.components?.schemas as Record<string, any>)[name];
+            expect(schema, name).toBeDefined();
+            for (const [field, prop] of Object.entries(schema.properties ?? {}) as [string, any][]) {
+                if (prop.type === 'number' || prop.items?.type === 'number') bad.push(`${name}.${field}`);
+            }
+        }
+        expect(bad).toEqual([]);
+    });
+
     it('every schema field is described and no nullable field is published as a bare "object"', () => {
         const bad: string[] = [];
         for (const [name, schema] of Object.entries(doc.components?.schemas ?? {})) {
