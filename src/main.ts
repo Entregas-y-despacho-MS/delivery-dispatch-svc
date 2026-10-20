@@ -24,6 +24,9 @@ async function bootstrap() {
 
     app.setGlobalPrefix(cfg.apiPrefix);
 
+    // Behind a reverse proxy the client address comes from X-Forwarded-For; without this every client shares the proxy's IP.
+    if (cfg.trustProxy !== false) app.getHttpAdapter().getInstance().set('trust proxy', cfg.trustProxy);
+
     if (swagger) {
         setupSwagger(app, {
             title:       'delivery-dispatch-svc',

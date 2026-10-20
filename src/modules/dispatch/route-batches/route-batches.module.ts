@@ -12,6 +12,7 @@ import { RouteBatchResourcesService } from './services/route-batch-resources.ser
 import { RouteBatchQueryService } from './services/route-batch-query.service.js';
 import { RouteBatchStartService } from './services/route-batch-start.service.js';
 import { RouteBatchCotejoPhotoService } from './services/route-batch-cotejo-photo.service.js';
+import { RouteBatchReviewerSweepTask } from './route-batch-reviewer-sweep.task.js';
 import { RouteBatchAcceptService } from './services/route-batch-accept.service.js';
 import { OutboundMessagesModule } from '../../messaging/outbound-messages/outbound-messages.module.js';
 
@@ -22,6 +23,7 @@ import { OutboundMessagesModule } from '../../messaging/outbound-messages/outbou
   providers: [
     RouteBatchReviewerService,
     RouteBatchReviewerListener,
+    RouteBatchReviewerSweepTask,
     RouteCapacityService,
     RouteBatchPromiseApprovalService,
     RouteBatchFinalApprovalService,

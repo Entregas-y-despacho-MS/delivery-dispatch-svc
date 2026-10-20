@@ -4,7 +4,8 @@ import { DispatchRescheduleController } from './dispatch-reschedule.controller.j
 function build() {
     const rescheduling = { reschedule: vi.fn() };
     const returns = { returnToWarehouse: vi.fn() };
-    return { controller: new DispatchRescheduleController(rescheduling as never, returns as never), rescheduling, returns };
+    const cancellations = { cancel: vi.fn() };
+    return { controller: new DispatchRescheduleController(rescheduling as never, returns as never, cancellations as never), rescheduling, returns, cancellations };
 }
 
 describe('DispatchRescheduleController', () => {
@@ -25,5 +26,14 @@ describe('DispatchRescheduleController', () => {
 
         expect(await controller.returnToWarehouse(5, { notes: 'No answer' }, 9)).toBe(result);
         expect(returns.returnToWarehouse).toHaveBeenCalledWith(5, { notes: 'No answer' }, 9);
+    });
+
+    it("delegates the cancellation with the id, the body and the user of the token", async () => {
+        const { controller, cancellations } = build();
+        const result = { dispatchId: 5, status: "cancelled" };
+        cancellations.cancel.mockResolvedValue(result);
+
+        expect(await controller.cancel(5, { reason: "Lost at the cotejo" }, 9)).toBe(result);
+        expect(cancellations.cancel).toHaveBeenCalledWith(5, { reason: "Lost at the cotejo" }, 9);
     });
 });

@@ -5,6 +5,7 @@ import { RouteBatchClosingModule } from '../route-batch-closing/route-batch-clos
 import { DispatchRescheduleController } from './controllers/dispatch-reschedule.controller.js';
 import { BatchExitService } from './services/batch-exit.service.js';
 import { DeliveryAttemptsService } from './services/delivery-attempts.service.js';
+import { DispatchCancelService } from './services/dispatch-cancel.service.js';
 import { DispatchLockService } from './services/dispatch-lock.service.js';
 import { DispatchReturnService } from './services/dispatch-return.service.js';
 import { DispatchReschedulingService } from './services/dispatch-rescheduling.service.js';
@@ -16,7 +17,7 @@ import { DispatchReschedulingService } from './services/dispatch-rescheduling.se
 @Module({
     imports: [DispatchEventsModule, DispatchStatusPublicationModule, RouteBatchClosingModule],
     controllers: [DispatchRescheduleController],
-    providers: [BatchExitService, DeliveryAttemptsService, DispatchLockService, DispatchReschedulingService, DispatchReturnService],
+    providers: [BatchExitService, DeliveryAttemptsService, DispatchCancelService, DispatchLockService, DispatchReschedulingService, DispatchReturnService],
     exports: [BatchExitService, DeliveryAttemptsService, DispatchLockService],
 })
 export class DispatchRescheduleModule {}

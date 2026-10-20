@@ -1,4 +1,5 @@
 export * from './delivery-attempts-not-exhausted.exception.js';
+export * from './dispatch-cancel-not-allowed.exception.js';
 export * from './dispatch-changed-concurrently.exception.js';
 export * from './dispatch-return-not-allowed.exception.js';
 export * from './dispatch-status-not-reschedulable.exception.js';
