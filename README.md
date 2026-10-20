@@ -86,8 +86,14 @@ PUBSUB_INBOUND_SUBSCRIPTION=ucb-sis323-sub-h-dispatch-svc
 ```
 
 El nombre completo que pasaste es el **topic**. La subscription es otro recurso y debe apuntar a ese topic.
-Para crearla y preparar los topics de dead-letter que usa el backend, autentícate con `gcloud` en el proyecto
-y ejecuta desde la carpeta del servicio:
+Para el proceso local, configura las credenciales que usará la librería de Pub/Sub:
+
+```bash
+gcloud auth application-default login
+```
+
+Para crear la subscription y preparar los topics de dead-letter que usa el backend, autentícate con `gcloud`
+en el proyecto y ejecuta desde la carpeta del servicio:
 
 ```bash
 export PUBSUB_PROJECT_ID=project-a96e5fe1-5ba6-4698-a85
