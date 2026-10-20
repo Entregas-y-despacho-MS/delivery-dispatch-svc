@@ -101,9 +101,10 @@ El proceso del backend debe tener ADC configuradas y permiso `roles/pubsub.subsc
 además de `roles/pubsub.publisher` sobre los topics de dead-letter. Si también publica mensajes de salida, necesita
 permiso de publicación en los topics `dispatch.*` correspondientes. La subscription debe ser exclusiva de esta
 instancia lógica del backend: Pub/Sub reparte cada mensaje entre los consumidores que comparten una subscription.
-El helper crea la dead-letter del broker `<topic>.delivery-failures` para agotar reintentos; el service agent de
-Pub/Sub también necesita permiso `roles/pubsub.publisher` en ese topic. Si la subscription ya existía, el helper
-verifica que apunte al topic correcto y deja intacta su política actual.
+El helper crea la dead-letter del broker `<topic>.delivery-failures` y concede al service agent de Pub/Sub los permisos
+`roles/pubsub.subscriber` sobre la subscription y `roles/pubsub.publisher` sobre esa dead-letter, que necesita para
+reenviar mensajes tras agotar los intentos. Si la subscription ya existía, el helper verifica que apunte al topic
+correcto y deja intacta su política actual.
 
 Inicia el backend con esas variables de entorno y publica eventos desde el sistema emisor al topic. No configures
 `PUBSUB_EMULATOR_HOST`: si lo dejas apuntando al emulador, el cliente no llegará a Google Cloud.

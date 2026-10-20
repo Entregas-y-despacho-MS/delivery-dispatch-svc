@@ -21,6 +21,13 @@ gcloud pubsub topics describe "$topic" --project="$project" >/dev/null
 if ! gcloud pubsub topics describe "$broker_dead_letter" --project="$project" >/dev/null 2>&1; then
     gcloud pubsub topics create "$broker_dead_letter" --project="$project"
 fi
+project_number="$(gcloud projects describe "$project" --format='value(projectNumber)')"
+pubsub_agent="service-${project_number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+gcloud pubsub topics add-iam-policy-binding "$broker_dead_letter" \
+    --project="$project" \
+    --member="serviceAccount:${pubsub_agent}" \
+    --role="roles/pubsub.publisher" \
+    --quiet >/dev/null
 
 if gcloud pubsub subscriptions describe "$subscription" --project="$project" >/dev/null 2>&1; then
     actual_topic="$(gcloud pubsub subscriptions describe "$subscription" --project="$project" --format='value(topic)')"
@@ -39,6 +46,11 @@ else
         --min-retry-delay=10s \
         --max-retry-delay=600s
 fi
+gcloud pubsub subscriptions add-iam-policy-binding "$subscription" \
+    --project="$project" \
+    --member="serviceAccount:${pubsub_agent}" \
+    --role="roles/pubsub.subscriber" \
+    --quiet >/dev/null
 
 create_topic_if_missing() {
     local name="$1"
@@ -59,5 +71,5 @@ done
 
 echo "Ready. Configure the backend with this project, topic and subscription, and unset PUBSUB_EMULATOR_HOST."
 echo "Grant the backend service account Pub/Sub Subscriber on $subscription and Pub/Sub Publisher on the app dead-letter topics."
-echo "Grant the Pub/Sub service agent Pub/Sub Publisher on $broker_dead_letter for broker retry exhaustion."
+echo "Granted the Pub/Sub service agent Subscriber on $subscription and Publisher on $broker_dead_letter for retry exhaustion."
 echo "Existing subscriptions are checked but their retry/dead-letter policy is not changed by this script."
