@@ -134,6 +134,13 @@ export class PubsubMessageBusAdapter extends MessageBus implements OnApplication
         const subscription = this.client.subscription(name);
         const [exists] = await subscription.exists();
         if (!exists) throw new SubscriptionNotFoundException(name);
+        const [metadata] = await subscription.getMetadata();
+        const expectedTopic = `projects/${this.config.projectId}/topics/${this.config.inboundTopic}`;
+        if (metadata.topic !== expectedTopic) {
+            throw new Error(
+                `Subscription ${name} is attached to ${metadata.topic ?? '(unknown topic)'}, expected ${expectedTopic}.`,
+            );
+        }
         subscription.on('message', (message: Message) => {
             const work = this.onSharedMessage(message).finally(() => this.inFlight.delete(work));
             this.inFlight.add(work);
@@ -148,14 +155,17 @@ export class PubsubMessageBusAdapter extends MessageBus implements OnApplication
     private async onSharedMessage(message: Message): Promise<void> {
         const payload = this.parsePayload(message);
         const type = this.messageTypeOf(payload);
+        const attributeType = message.attributes?.type;
         const handler = type ? this.inboundHandlers.get(type) : undefined;
 
-        if (handler) {
+        if (handler && (attributeType === undefined || attributeType === type)) {
             await this.onMessage(type!, handler, message, payload);
             return;
         }
 
-        const reason = `no registered handler for envelope type ${type ?? '(missing)'}`;
+        const reason = attributeType !== undefined && attributeType !== type
+            ? `attribute type ${attributeType} does not match envelope type ${type ?? '(missing)'}`
+            : `no registered handler for envelope type ${type ?? '(missing)'}`;
         this.logger.warn(`Message ${message.id} on ${this.config.inboundTopic} rejected: ${reason}.`);
 
         // The physical topic has no contract schema. Passing it through the common consumer
