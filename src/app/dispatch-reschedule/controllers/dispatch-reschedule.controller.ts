@@ -4,6 +4,9 @@ import { CoordinatorOnly } from '../../auth/decorators/index.js';
 import { CurrentUser } from '../../../shared/decorators/current-user.decorator.js';
 import { ParseIdPipe } from '../../../shared/pipes/index.js';
 import { ApiBadRequests, ApiConflict, ApiForbidden, ApiIdParam, ApiNotFound, ApiUnauthorized } from '../../../shared/utils/swagger/index.js';
+import { CancelDispatchResultDto } from '../dto/cancel-dispatch-result.dto.js';
+import { CancelDispatchDto } from '../dto/cancel-dispatch.dto.js';
+import { DispatchCancelService } from '../services/dispatch-cancel.service.js';
 import { ReturnDispatchResultDto } from '../dto/return-dispatch-result.dto.js';
 import { ReturnDispatchDto } from '../dto/return-dispatch.dto.js';
 import { DispatchReturnService } from '../services/dispatch-return.service.js';
@@ -12,9 +15,9 @@ import { RescheduleDispatchDto } from '../dto/reschedule-dispatch.dto.js';
 import { DispatchReschedulingService } from '../services/dispatch-rescheduling.service.js';
 
 /**
- * ST-52.2 — rescheduling of a delivery by the coordinator (RF-A05) and its return to the warehouse (ES-52).
+ * ST-52.2 — rescheduling of a delivery by the coordinator (RF-A05), its return to the warehouse and its cancellation (ES-52).
  *
- * Error dictionary: DISPATCH_NOT_FOUND 404, INVALID_TOKEN 401, INSUFFICIENT_PERMISSIONS 403,
+ * Error dictionary: DISPATCH_NOT_FOUND 404, INVALID_TOKEN 401, INSUFFICIENT_PERMISSIONS 403, DISPATCH_CANCEL_NOT_ALLOWED 409,
  *   DISPATCH_STATUS_NOT_RESCHEDULABLE 409, DISPATCH_RETURN_NOT_ALLOWED 409, DELIVERY_ATTEMPTS_NOT_EXHAUSTED 409, DISPATCH_TYPE_NOT_SUPPORTED 409, DISPATCH_CHANGED_CONCURRENTLY 409,
  *   RESCHEDULE_ATTEMPTS_LIMIT_REACHED 400, INVALID_RESCHEDULE_WINDOW 400, RESCHEDULE_REASON_INVALID 400
  */
@@ -25,6 +28,7 @@ export class DispatchRescheduleController {
     constructor(
         private readonly rescheduling: DispatchReschedulingService,
         private readonly returns: DispatchReturnService,
+        private readonly cancellations: DispatchCancelService,
     ) {}
 
     @Post(':id/reschedule')
@@ -86,5 +90,31 @@ export class DispatchRescheduleController {
         @CurrentUser('id') userId: number,
     ): Promise<ReturnDispatchResultDto> {
         return await this.returns.returnToWarehouse(id, dto, userId);
+    }
+
+    @Post(':id/cancel')
+    @HttpCode(HttpStatus.OK)
+    @CoordinatorOnly()
+    @ApiOperation({
+        summary:     'Cancel an assigned delivery (coordinator)',
+        description: "Cancels a delivery that is already `assigned` to a driver but cannot be served, for example a stop left out of the route by a failed cotejo (ST-210.1), which otherwise keeps its route batch open (D-50). Only from `assigned`; any other status answers 409 (use `POST /dispatches/:id/reschedule` or `POST /dispatches/:id/return` for the others). `reason` is required and is kept in the audit event. In one transaction it queues `dispatch.transfer.status_changed` in the outbox with the reason code `COORD-CANCELLED`, sets `closed_at` to the moment of the cancellation, records the audit event and closes the route batch when no dispatch of it is left in `assigned`, `out_for_delivery` or `in_transit` (`routeBatchClosed`). The dispatch stays linked to its route, so the history still shows its driver and vehicle, and the planning version does not change. Requires coordinator role, or root.",
+    })
+    @ApiIdParam('Dispatch')
+    @ApiOkResponse({ type: CancelDispatchResultDto })
+    @ApiBadRequests({ validation: true, id: true, example: ['reason must not be empty.', 'reason must not be longer than 500 characters.'] })
+    @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+    @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
+    @ApiNotFound({ code: 'DISPATCH_NOT_FOUND', message: 'Dispatch not found.' })
+    @ApiConflict(
+        { code: 'DISPATCH_CANCEL_NOT_ALLOWED', message: 'A dispatch can only be cancelled by the coordinator while it is assigned (current status: scheduled).' },
+        { code: 'DISPATCH_TYPE_NOT_SUPPORTED', message: 'Only delivery dispatches can be rescheduled or returned from here (type: supplier_pickup). Pickups are rescheduled from their own flow.' },
+        { code: 'DISPATCH_CHANGED_CONCURRENTLY', message: 'The dispatch changed while the request was being processed (it moved to another route). Review its current state and try again.' },
+    )
+    async cancel(
+        @Param('id', ParseIdPipe) id: number,
+        @Body() dto: CancelDispatchDto,
+        @CurrentUser('id') userId: number,
+    ): Promise<CancelDispatchResultDto> {
+        return await this.cancellations.cancel(id, dto, userId);
     }
 }
