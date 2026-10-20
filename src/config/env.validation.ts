@@ -8,6 +8,10 @@ export const envValidation = Joi.object({
     PORT:         Joi.number().default(3000),
     API_PREFIX:   Joi.string().default('api'),
     CORS_ORIGINS: Joi.string().default('*'),
+    // Proxies whose X-Forwarded-For is trusted: empty/false (none, the default), a number of hops (`1`) or a list of
+    // addresses/CIDR/loopback. Set it behind a reverse proxy or the per-IP limit of /public/tracking/* blocks every
+    // client at once. `true` is rejected (it would let any client forge its IP). See config/helpers/trust-proxy.ts.
+    TRUST_PROXY:  Joi.string().allow('').default(''),
 
     // -- Database -------------------------------------------------------------
     DB_TYPE:     Joi.string().required(),
