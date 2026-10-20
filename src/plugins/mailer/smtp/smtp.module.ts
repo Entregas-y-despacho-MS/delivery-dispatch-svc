@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { MailerModule } from '@nestjs-modules/mailer';
 import { HandlebarsAdapter } from '@nestjs-modules/mailer/adapters/handlebars.adapter';
 import { join } from 'path';
-import { SmtpConfig } from './smtp.config.js';
+import { SmtpConfig, SMTP_CONNECTION_TIMEOUT_MS, SMTP_GREETING_TIMEOUT_MS, SMTP_SOCKET_TIMEOUT_MS } from './smtp.config.js';
 import { SmtpAdapter } from './smtp.adapter.js';
 import { MailerPort } from '../mailer.port.js';
 
@@ -21,6 +21,9 @@ const TEMPLATES_DIR = join(process.cwd(), 'dist', 'plugins', 'mailer', 'template
                     host: cfg.host,
                     port: cfg.port,
                     auth: { user: cfg.user, pass: cfg.pass },
+                    connectionTimeout: SMTP_CONNECTION_TIMEOUT_MS,
+                    greetingTimeout:   SMTP_GREETING_TIMEOUT_MS,
+                    socketTimeout:     SMTP_SOCKET_TIMEOUT_MS,
                 },
                 defaults: { from: cfg.from },
                 template: {

@@ -5,7 +5,7 @@ import { NoticeReconciliationService } from './services/notice-reconciliation.se
 /** Name of the reconciliation task (also its lock key). Not exposed by a manual endpoint. */
 export const NOTICE_RECONCILIATION_TASK = 'notice-reconciliation';
 
-/** How often it runs. The abandoned lease is 15 minutes, so a stuck email is closed within about 20. */
+/** How often it runs. The abandoned lease is 10 minutes, so a stuck email is closed within about 15. */
 export const NOTICE_RECONCILIATION_EVERY_MINUTES = 5;
 
 /** Registers the safety net of the customer emails: abandoned reservations and notices still owed (ST-51.4). */
