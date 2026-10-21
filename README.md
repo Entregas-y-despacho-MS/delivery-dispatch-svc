@@ -115,6 +115,44 @@ correcto y deja intacta su política actual.
 Inicia el backend con esas variables de entorno y publica eventos desde el sistema emisor al topic. No configures
 `PUBSUB_EMULATOR_HOST`: si lo dejas apuntando al emulador, el cliente no llegará a Google Cloud.
 
+### Publicar en Grupo H y procesar una copia local
+
+Cuando no tengas permisos de suscripción en GCP, puedes publicar los eventos en el topic real y enviar una copia
+idéntica al emulador local. El backend procesa la copia local con sus suscripciones habituales; esto no valida el
+consumo desde GCP.
+
+Levanta el stack local desde la carpeta raíz del workspace. El publicador corre como contenedor temporal; la cuenta
+de servicio se monta solo en lectura:
+
+```bash
+docker compose up -d --build delivery-dispatch-svc
+docker compose run --rm --no-deps \
+  -v "$HOME/Downloads/project-a96e5fe1-5ba6-4698-a85-1637705fb6b3 SIS 323 - 17102026.json:/run/gcp/service-account.json:ro" \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/run/gcp/service-account.json \
+  -e PUBSUB_PROJECT_ID=project-a96e5fe1-5ba6-4698-a85 \
+  -e PUBSUB_INBOUND_TOPIC=ucb-sis323-sub-h \
+  -e LOCAL_PUBSUB_EMULATOR_HOST=pubsub-emulator:8085 \
+  delivery-dispatch-svc node scripts/pubsub/publish-grupo-h-and-simulate.mjs
+```
+
+Sin argumento, genera un pedido manual y publica `marketplace.sales_order.confirmed` seguido de
+`inventory.shipment.ready`. También puedes pasar un archivo JSON con un sobre o una lista de sobres:
+
+```bash
+docker compose run --rm --no-deps \
+  -v "$HOME/Downloads/project-a96e5fe1-5ba6-4698-a85-1637705fb6b3 SIS 323 - 17102026.json:/run/gcp/service-account.json:ro" \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/run/gcp/service-account.json \
+  -e PUBSUB_PROJECT_ID=project-a96e5fe1-5ba6-4698-a85 \
+  -e PUBSUB_INBOUND_TOPIC=ucb-sis323-sub-h \
+  -e LOCAL_PUBSUB_EMULATOR_HOST=pubsub-emulator:8085 \
+  delivery-dispatch-svc node scripts/pubsub/publish-grupo-h-and-simulate.mjs /ruta/a/eventos.json
+```
+
+Cada sobre se publica en el topic físico de Grupo H y luego, sin cambiar su contenido, en el topic lógico homónimo
+del emulador (`message.type`) para que el backend local lo procese. El envío a GCP ocurre primero; si falla después
+la copia local, el mensaje de GCP ya quedó publicado. Repetir el comando genera un nuevo pedido cuando se usan los
+mensajes de ejemplo.
+
 ## Simulador ERP (ST-73.2)
 
 Permite probar la mensajería con el ERP sin Marketplace, Almacén ni Compras reales: publica en el

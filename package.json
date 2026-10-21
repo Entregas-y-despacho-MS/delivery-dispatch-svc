@@ -29,7 +29,8 @@
     "simulate:marketplace": "tsx scripts/simulator/simulate.ts marketplace",
     "simulate:inventory": "tsx scripts/simulator/simulate.ts inventory",
     "simulate:procurement": "tsx scripts/simulator/simulate.ts procurement",
-    "simulate:listen": "tsx scripts/simulator/listen.ts"
+    "simulate:listen": "tsx scripts/simulator/listen.ts",
+    "pubsub:publish-grupo-h:simulate": "node scripts/pubsub/publish-grupo-h-and-simulate.mjs"
   },
   "dependencies": {
     "@google-cloud/pubsub": "^6.2.0",
