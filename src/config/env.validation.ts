@@ -51,6 +51,10 @@ export const envValidation = Joi.object({
     PUBSUB_EMULATOR_HOST:       Joi.string().allow('').optional(),
     // Subscription of this service on every incoming topic: <topic>.<suffix>.
     PUBSUB_SUBSCRIPTION_SUFFIX: Joi.string().default('dispatch-svc'),
+    // Optional shared GCP input: both values must be set together. The subscription ID must already
+    // exist in PUBSUB_PROJECT_ID and be attached to PUBSUB_INBOUND_TOPIC.
+    PUBSUB_INBOUND_TOPIC:        Joi.string().trim().min(1).optional(),
+    PUBSUB_INBOUND_SUBSCRIPTION: Joi.string().trim().min(1).optional(),
     // Folder with envelope.schema.json and schemas/*.schema.json, relative to the working directory.
     MESSAGING_CONTRACTS_DIR:    Joi.string().default('contracts/messages'),
 
@@ -131,4 +135,6 @@ export const envValidation = Joi.object({
     // Public tracking page endpoints (/public/tracking/*), per client IP and THROTTLE_TTL_MS
     THROTTLE_PUBLIC_TRACKING_LIMIT: Joi.number().default(20),
 
-});
+})
+    .with('PUBSUB_INBOUND_TOPIC', 'PUBSUB_INBOUND_SUBSCRIPTION')
+    .with('PUBSUB_INBOUND_SUBSCRIPTION', 'PUBSUB_INBOUND_TOPIC');

@@ -31,6 +31,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       fonts-khmeros fonts-kacst fonts-freefont-ttf dbus dbus-x11 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Keep the opt-in manual publisher available for `docker compose run` without exposing it as an API.
+COPY --from=builder /app/scripts/pubsub/publish-grupo-h-and-simulate.mjs ./scripts/pubsub/
+
 RUN groupadd -r nestjs && useradd -rm -g nestjs nestjs
 RUN chown -R nestjs:nestjs /app
 USER nestjs
