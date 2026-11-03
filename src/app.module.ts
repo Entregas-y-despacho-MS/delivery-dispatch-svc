@@ -37,6 +37,7 @@ import { InboundMessagesModule } from './modules/messaging/inbound-messages/inbo
 import { OutboundMessagesModule } from './modules/messaging/outbound-messages/outbound-messages.module.js';
 import { SalesOrderIntakeModule } from './modules/messaging/sales-order-intake/sales-order-intake.module.js';
 import { IncompleteOrderRecoveryModule } from './modules/messaging/incomplete-order-recovery/incomplete-order-recovery.module.js';
+import { RmaPickupIntakeModule } from './modules/messaging/rma-pickup-intake/rma-pickup-intake.module.js';
 import { SchedulerModule } from './app/scheduler/scheduler.module.js';
 import { PlanningModule } from './app/planning/planning.module.js';
 import { PromiseFirmingModule } from './app/promise-firming/promise-firming.module.js';
@@ -67,6 +68,7 @@ import { DispatchIncidentsAppModule } from './app/dispatch-incidents/dispatch-in
     OutboundMessagesModule,
     SalesOrderIntakeModule,
     IncompleteOrderRecoveryModule,
+    RmaPickupIntakeModule,
     HealthModule,
     DatabaseModule,
     SettingsModule,
