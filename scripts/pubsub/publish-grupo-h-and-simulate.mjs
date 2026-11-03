@@ -3,10 +3,16 @@ import { randomUUID } from 'node:crypto';
 import { PubSub } from '@google-cloud/pubsub';
 import { v7 as uuidv7 } from 'uuid';
 
-const projectId = process.env.PUBSUB_PROJECT_ID ?? 'project-a96e5fe1-5ba6-4698-a85';
-const inboundTopic = process.env.PUBSUB_INBOUND_TOPIC ?? 'ucb-sis323-sub-h';
+// No defaults on purpose: a careless run must never publish to a shared topic by accident.
+const projectId = process.env.PUBSUB_PROJECT_ID;
+const inboundTopic = process.env.PUBSUB_INBOUND_TOPIC;
 const emulatorHost = process.env.LOCAL_PUBSUB_EMULATOR_HOST ?? 'localhost:8085';
 const inputPath = process.argv[2];
+
+const missingEnv = ['PUBSUB_PROJECT_ID', 'PUBSUB_INBOUND_TOPIC'].filter((name) => !process.env[name]);
+if (missingEnv.length > 0) {
+    throw new Error(`Define ${missingEnv.join(' y ')}: el publicador no tiene valores por defecto para no escribir por error en un topic compartido.`);
+}
 
 if (!process.env.GOOGLE_APPLICATION_CREDENTIALS) {
     throw new Error(
@@ -96,11 +102,12 @@ if (missingEnvelopeFields) {
     throw new Error('Cada mensaje debe incluir messageId, type, source, schemaVersion, occurredAt y data.');
 }
 
-// Create the real GCP client before enabling the emulator variable for the local client.
+// The client library reads PUBSUB_EMULATOR_HOST when it is constructed and redirects to the emulator,
+// so it is removed before building the real GCP client. The emulator client gets its endpoint explicitly
+// (apiEndpoint wins over the variable), so neither client depends on the order of reads or on the env.
 delete process.env.PUBSUB_EMULATOR_HOST;
 const gcp = new PubSub({ projectId });
-process.env.PUBSUB_EMULATOR_HOST = emulatorHost;
-const emulator = new PubSub({ projectId: 'delivery-dispatch-local' });
+const emulator = new PubSub({ projectId: 'delivery-dispatch-local', apiEndpoint: emulatorHost });
 
 try {
     for (const message of messages) {

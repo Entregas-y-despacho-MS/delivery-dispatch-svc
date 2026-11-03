@@ -1,3 +1,6 @@
+# The base image is pinned by digest (same value in the three stages) for reproducible builds; it receives no
+# security patches by itself. Refresh it every month or two: `docker buildx imagetools inspect node:22-bookworm-slim`,
+# copy the top-level "Digest", replace it in the three FROM lines and check with `docker build .`.
 FROM node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 AS deps
 WORKDIR /app
 ENV PUPPETEER_SKIP_DOWNLOAD=true

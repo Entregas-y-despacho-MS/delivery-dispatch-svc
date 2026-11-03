@@ -68,6 +68,14 @@ src/
 docker compose up --build
 ```
 
+### Actualizar la imagen base
+
+El `Dockerfile` fija `node:22-bookworm-slim` por digest (el mismo valor en las tres etapas `FROM`). Eso hace el
+build reproducible, pero la imagen queda congelada y no recibe parches de seguridad. Cada uno o dos meses, o ante un
+aviso de seguridad de Node o Debian, obtén el digest vigente con
+`docker buildx imagetools inspect node:22-bookworm-slim` (campo `Digest` de nivel superior), reemplázalo en las tres
+líneas `FROM` y comprueba con `docker build .`.
+
 ## Consumir un topic real de Google Cloud Pub/Sub
 
 El adaptador usa Google Application Default Credentials cuando `PUBSUB_EMULATOR_HOST` no está definido.
@@ -127,7 +135,7 @@ de servicio se monta solo en lectura:
 ```bash
 docker compose up -d --build delivery-dispatch-svc
 docker compose run --rm --no-deps \
-  -v "$HOME/Downloads/project-a96e5fe1-5ba6-4698-a85-1637705fb6b3 SIS 323 - 17102026.json:/run/gcp/service-account.json:ro" \
+  -v "/ruta/a/service-account.json:/run/gcp/service-account.json:ro" \
   -e GOOGLE_APPLICATION_CREDENTIALS=/run/gcp/service-account.json \
   -e PUBSUB_PROJECT_ID=project-a96e5fe1-5ba6-4698-a85 \
   -e PUBSUB_INBOUND_TOPIC=ucb-sis323-sub-h \
@@ -135,12 +143,13 @@ docker compose run --rm --no-deps \
   delivery-dispatch-svc node scripts/pubsub/publish-grupo-h-and-simulate.mjs
 ```
 
-Sin argumento, genera un pedido manual y publica `marketplace.sales_order.confirmed` seguido de
+`PUBSUB_PROJECT_ID` y `PUBSUB_INBOUND_TOPIC` son obligatorios (el script falla si faltan): no hay valores por
+defecto para evitar publicar por descuido en el topic compartido. Sin argumento, genera un pedido manual y publica `marketplace.sales_order.confirmed` seguido de
 `inventory.shipment.ready`. También puedes pasar un archivo JSON con un sobre o una lista de sobres:
 
 ```bash
 docker compose run --rm --no-deps \
-  -v "$HOME/Downloads/project-a96e5fe1-5ba6-4698-a85-1637705fb6b3 SIS 323 - 17102026.json:/run/gcp/service-account.json:ro" \
+  -v "/ruta/a/service-account.json:/run/gcp/service-account.json:ro" \
   -e GOOGLE_APPLICATION_CREDENTIALS=/run/gcp/service-account.json \
   -e PUBSUB_PROJECT_ID=project-a96e5fe1-5ba6-4698-a85 \
   -e PUBSUB_INBOUND_TOPIC=ucb-sis323-sub-h \

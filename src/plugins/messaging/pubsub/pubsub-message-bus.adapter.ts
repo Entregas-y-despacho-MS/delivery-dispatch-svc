@@ -104,6 +104,11 @@ export class PubsubMessageBusAdapter extends MessageBus implements OnApplication
         this.logger.log(`Subscribed to ${topic} (${name}).`);
     }
 
+    /**
+     * Shared mode: every consumer provider registers its handlers in `onModuleInit`, which Nest runs for
+     * all modules before any `onApplicationBootstrap`, so the listener starts with the routing table complete.
+     * A new consumer must keep calling `subscribe()` no later than `onModuleInit`.
+     */
     async onApplicationBootstrap(): Promise<void> {
         if (this.config.inboundTopic && this.config.inboundSubscription) {
             await this.ensureSharedSubscription();
