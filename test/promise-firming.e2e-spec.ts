@@ -248,7 +248,7 @@ describe('Promise firming (e2e, ST-215.4)', () => {
         const queued = await orders(ref);
         expect(queued.map((q) => q.payload.data.recordVersion)).toEqual([1, 2]);
         expect(queued[1].payload.messageId).not.toBe(queued[0].payload.messageId);
-        expect((await events(dispatchId, 'preparation_order_reissued'))[0].metadata).toEqual({ recordVersion: 2 });
+        expect((await events(dispatchId, 'preparation_order_reissued'))[0].metadata).toEqual({ reason: 'customer_rescheduled', recordVersion: 2 });
         const after = await row(dispatchId);
         expect(after.promise_notified_at).toEqual(notifiedAt);
         expect(after.customer_confirmation).toBe('confirmed');

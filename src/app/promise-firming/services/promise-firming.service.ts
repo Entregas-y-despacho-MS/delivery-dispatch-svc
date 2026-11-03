@@ -9,6 +9,7 @@ import {
     PREPARE_REQUESTED_TOPIC,
     PromiseFirmingReason,
     PromiseFirmingResult,
+    PromiseReissueReason,
 } from '../domain/promise-firming.types.js';
 
 export const PROMISE_RESPONSE_WINDOW_KEY = 'promise_response_window_minutes';
@@ -18,6 +19,11 @@ const FIRMING_REASON_TEXT: Record<PromiseFirmingReason, string> = {
     window_elapsed: 'Response window elapsed with a valid notice',
     customer_confirmed: 'Customer confirmed the promise',
     customer_rescheduled: 'Customer rescheduled the delivery, which accepts the promise',
+};
+
+const REISSUE_REASON_TEXT: Record<PromiseReissueReason, string> = {
+    customer_rescheduled: 'Customer rescheduled; a new preparation order replaces the previous one',
+    coordinator_rescheduled: 'Coordinator re-planned the dispatch; a new preparation order replaces the previous one',
 };
 
 /** States in which a promise can still be firmed (the 2nd approval does not undo a communicated promise). */
@@ -58,6 +64,10 @@ export interface ReissueOrderOptions {
     now?: Date;
     /** The transaction in which the caller moved the dispatch and bumped `version`. */
     manager?: EntityManager;
+    /** Who triggered the new order; drives `actor_type`/`reason` of the stored event. Defaults to `customer_rescheduled` (ES-224's own caller never set this). */
+    reason?: PromiseReissueReason;
+    /** `actor_user_id` of the stored event when `reason` is `coordinator_rescheduled`; ignored otherwise. */
+    actorUserId?: number;
 }
 
 /**
@@ -71,6 +81,8 @@ export interface ReissueOrderOptions {
  * The task of the 12 h window uses `firm` with `window_elapsed`; the public confirmation endpoint (ST-224.1)
  * uses it with `customer_confirmed`; its rescheduling uses `firm` with `customer_rescheduled` the first time
  * (the promise is not firm yet) and `reissue` afterwards, always after moving the dispatch and bumping `version`.
+ * The coordinator's 1st approval (ST-241.2) calls `reissue` with `coordinator_rescheduled` when it approves a
+ * `rescheduled` dispatch that was already firm before leaving its previous route batch.
  * `firm` does NOT touch `dispatches.version`: confirming or staying silent does not move the plan
  * (DICTIONARY, `version`); `recordVersion` is that version as it stands.
  */
@@ -102,8 +114,11 @@ export class PromiseFirmingService {
      */
     async reissue(dispatchId: number, options: ReissueOrderOptions = {}): Promise<PromiseFirmingResult> {
         const now = options.now ?? new Date();
-        if (options.manager) return await this.reissueIn(options.manager, dispatchId, now);
-        return await this.dataSource.transaction(async (manager) => await this.reissueIn(manager, dispatchId, now));
+        const reason = options.reason ?? 'customer_rescheduled';
+        if (options.manager) return await this.reissueIn(options.manager, dispatchId, now, reason, options.actorUserId);
+        return await this.dataSource.transaction(
+            async (manager) => await this.reissueIn(manager, dispatchId, now, reason, options.actorUserId),
+        );
     }
 
     private async firmIn(
@@ -157,7 +172,13 @@ export class PromiseFirmingService {
         return { outcome: 'firmed', dispatchId, recordVersion: row.version, reason };
     }
 
-    private async reissueIn(manager: EntityManager, dispatchId: number, now: Date): Promise<PromiseFirmingResult> {
+    private async reissueIn(
+        manager: EntityManager,
+        dispatchId: number,
+        now: Date,
+        reason: PromiseReissueReason,
+        actorUserId?: number,
+    ): Promise<PromiseFirmingResult> {
         const row = await this.loadRow(manager, dispatchId);
         if (!row) return { outcome: 'not_eligible', dispatchId, cause: 'not_found' };
         if (!row.promise_firmed_at) return { outcome: 'not_eligible', dispatchId, cause: 'promise_not_firm' };
@@ -177,13 +198,16 @@ export class PromiseFirmingService {
         const missing = this.missingData(row, packages);
         if (missing) return { outcome: 'incomplete', dispatchId, cause: missing };
 
+        const actorType = reason === 'coordinator_rescheduled' ? 'user' : 'customer';
         await manager.query(
-            `INSERT INTO dispatch_events (dispatch_id, event_type, actor_type, reason, metadata)
-             VALUES ($1, 'preparation_order_reissued', 'customer', $2, $3::jsonb)`,
+            `INSERT INTO dispatch_events (dispatch_id, event_type, actor_user_id, actor_type, reason, metadata)
+             VALUES ($1, 'preparation_order_reissued', $2, $3, $4, $5::jsonb)`,
             [
                 dispatchId,
-                'Customer rescheduled; a new preparation order replaces the previous one',
-                JSON.stringify({ recordVersion: row.version }),
+                actorType === 'user' ? (actorUserId ?? null) : null,
+                actorType,
+                REISSUE_REASON_TEXT[reason],
+                JSON.stringify({ reason, recordVersion: row.version }),
             ],
         );
         await this.enqueueOrder(manager, row, packages, now);

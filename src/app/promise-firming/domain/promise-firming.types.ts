@@ -8,6 +8,12 @@ export const PREPARE_REQUESTED_TOPIC = 'dispatch.shipment.prepare_requested';
 export type PromiseFirmingReason = 'window_elapsed' | 'customer_confirmed' | 'customer_rescheduled';
 
 /**
+ * Why an already-firm promise gets a new preparation order (`reissue`): the customer rescheduled it
+ * themselves (ES-224) or the coordinator did, re-planning a `rescheduled` dispatch (ST-241.2, D-47).
+ */
+export type PromiseReissueReason = 'customer_rescheduled' | 'coordinator_rescheduled';
+
+/**
  * - `firmed`: promise firm and order queued.
  * - `reissued`: a new order with a higher `recordVersion` replaced the previous one (D-47).
  * - `already_firmed`: someone got there first; nothing written.
