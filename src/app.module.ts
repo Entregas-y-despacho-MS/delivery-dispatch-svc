@@ -55,6 +55,7 @@ import { AuditLogsModule } from './modules/audit/audit-logs/audit-logs.module.js
 import { DispatchEventsAppModule } from './app/dispatch-events/dispatch-events.module.js';
 import { DispatchIncidentsAppModule } from './app/dispatch-incidents/dispatch-incidents.module.js';
 import { SupplierPickupModule } from './app/supplier-pickup/supplier-pickup.module.js';
+import { SlaReportModule } from './app/sla-report/sla-report.module.js';
 
 @Module({
   imports: [
@@ -82,6 +83,7 @@ import { SupplierPickupModule } from './app/supplier-pickup/supplier-pickup.modu
     DispatchStatusModule,
     DispatchOtpModule,
     DriverMetricsModule,
+    SlaReportModule,
     DispatchEvidenceModule,
     AuditLogsModule,
     RouteBatchCorrectionModule,
