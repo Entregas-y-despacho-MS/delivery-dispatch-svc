@@ -1,0 +1,93 @@
+{
+  "scenario": "rma-stale-version",
+  "script": "inventory",
+  "description": "recordVersion antiguo: llega una versión menor a la ya aplicada del mismo RMA.",
+  "expected": "La versión 2 se ignora; el recojo conserva los datos de la versión 3 y no se crea un segundo despacho ni se emite otro evento.",
+  "anchor": "2026-10-14T12:00:00Z",
+  "steps": [
+    {
+      "label": "Almacén aprueba la devolución (v3)",
+      "message": {
+        "messageId": "01930000-0000-7000-8000-000000000055",
+        "type": "inventory.return.requested",
+        "schemaVersion": 1,
+        "source": "inventory",
+        "occurredAt": "2026-10-14T12:00:00Z",
+        "data": {
+          "rmaId": "RMA-SIM-0006",
+          "salesOrderId": "SO-2026-000123",
+          "recordVersion": 3,
+          "updatedAt": "2026-10-14T12:00:00Z",
+          "approvedAt": "2026-10-14T11:58:30Z",
+          "warehouseId": "WH-LPZ-01",
+          "contact": {
+            "name": "María Fernández Quispe",
+            "phone": "+59171234567",
+            "email": "maria.fernandez@example.com"
+          },
+          "pickupAddress": {
+            "line": "Calle 21 de Calacoto 8790, casa 12",
+            "reference": "Condominio Las Palmas, segunda garita",
+            "location": {
+              "latitude": -16.5421,
+              "longitude": -68.0802
+            }
+          },
+          "returnReason": "Producto con falla de encendido dentro de garantía",
+          "packages": [
+            {
+              "packageId": "PKG-RMA-SIM-0006-1",
+              "lengthCm": 40,
+              "widthCm": 30,
+              "heightCm": 25,
+              "grossWeightKg": 6.4
+            }
+          ],
+          "preferredPickupDate": "2026-10-16T15:00:00Z"
+        }
+      }
+    },
+    {
+      "label": "Llega tarde una versión anterior (v2) con otra dirección",
+      "message": {
+        "messageId": "01930000-0000-7000-8000-000000000056",
+        "type": "inventory.return.requested",
+        "schemaVersion": 1,
+        "source": "inventory",
+        "occurredAt": "2026-10-14T12:10:00Z",
+        "data": {
+          "rmaId": "RMA-SIM-0006",
+          "salesOrderId": "SO-2026-000123",
+          "recordVersion": 2,
+          "updatedAt": "2026-10-14T12:00:00Z",
+          "approvedAt": "2026-10-14T11:58:30Z",
+          "warehouseId": "WH-LPZ-01",
+          "contact": {
+            "name": "María Fernández Quispe",
+            "phone": "+59171234567",
+            "email": "maria.fernandez@example.com"
+          },
+          "pickupAddress": {
+            "line": "Av. Busch 1500, zona Miraflores",
+            "reference": "Condominio Las Palmas, segunda garita",
+            "location": {
+              "latitude": -16.5421,
+              "longitude": -68.0802
+            }
+          },
+          "returnReason": "Producto con falla de encendido dentro de garantía",
+          "packages": [
+            {
+              "packageId": "PKG-RMA-SIM-0006-1",
+              "lengthCm": 40,
+              "widthCm": 30,
+              "heightCm": 25,
+              "grossWeightKg": 6.4
+            }
+          ],
+          "preferredPickupDate": "2026-10-16T15:00:00Z"
+        }
+      }
+    }
+  ]
+}

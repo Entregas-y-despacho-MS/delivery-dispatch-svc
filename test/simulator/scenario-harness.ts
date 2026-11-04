@@ -19,6 +19,7 @@ import { MemoryWarehouseCodeLookup } from '../../src/modules/messaging/shipment-
 import { ShipmentOrderRepository } from '../../src/modules/messaging/shipment-intake/repositories/shipment-order.repository.js';
 import { TypeOrmShipmentBlocksReader } from '../../src/modules/messaging/shipment-intake/repositories/typeorm-shipment-blocks.reader.js';
 import { ShipmentOrderConsumer } from '../../src/modules/messaging/shipment-intake/services/shipment-order-consumer.service.js';
+import { RmaPickupConsumer } from '../../src/modules/messaging/rma-pickup-intake/services/rma-pickup-consumer.service.js';
 import { ProcurementPickupConsumer } from '../../src/modules/messaging/procurement-pickup-intake/services/procurement-pickup-consumer.service.js';
 import { MessageValidator } from '../../src/plugins/messaging/envelope/message-validator.js';
 import type { ConsumeOutcome } from '../../src/plugins/messaging/message-consumer.js';
@@ -26,6 +27,7 @@ import { MemoryInboundMessageLogAdapter } from '../../src/plugins/messaging/memo
 import { MemoryInboundMessageRejectionAdapter } from '../../src/plugins/messaging/memory/memory-inbound-message-rejection.adapter.js';
 import { MemoryInboundMessageTransactionAdapter } from '../../src/plugins/messaging/memory/memory-inbound-message-transaction.adapter.js';
 import { MemoryMessageBusAdapter } from '../../src/plugins/messaging/memory/memory-message-bus.adapter.js';
+import { MemoryPickupOrderService, MemoryRmaSyncStateAdapter } from './memory-rma-pickup.js';
 import type { BuiltScenario, BuiltStep } from './scenario.types.js';
 
 const CONTRACTS_DIR = resolve(import.meta.dirname, '../../contracts/messages');
@@ -132,6 +134,10 @@ export async function createHarness() {
         },
     } as never);
     const procurement = new RecordingProcurementRepository();
+    const rmaSyncStates = new MemoryRmaSyncStateAdapter();
+    const rmaPickups = new MemoryPickupOrderService(new Set(KNOWN_WAREHOUSES));
+    transaction.registerParticipant(rmaSyncStates);
+    transaction.registerParticipant(rmaPickups);
 
     await new MarketplaceOrderConsumer(
         bus, transaction, marketplaceOrders, consolidator, dispatchChanges, events,
@@ -141,6 +147,12 @@ export async function createHarness() {
         consolidator, dispatchChanges, events,
     ).onModuleInit();
     await new ProcurementPickupConsumer(bus, transaction, syncStates, procurement as never, events).onModuleInit();
+    // The RMA consumer emits straight to the event bus: `emitted` records `dispatch.status_changed` for the web.
+    await new RmaPickupConsumer(bus, transaction, rmaSyncStates, rmaPickups, {
+        emit: (event: string, payload: unknown) => {
+            emitted.push({ event, payload });
+        },
+    } as never).onModuleInit();
 
     /** Publishes a step as the broker would (`repeat` times, same `messageId`). */
     const publish = async (step: BuiltStep): Promise<PublishedOutcome[]> => {
@@ -176,6 +188,8 @@ export async function createHarness() {
         generator,
         dispatchChanges,
         procurement,
+        /** Recojos domiciliarios created from `inventory.return.requested` (in-memory `PickupOrderService`). */
+        rmaPickups,
         emitted,
         run,
         publish,

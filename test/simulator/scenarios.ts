@@ -18,7 +18,8 @@ import type {
 export const FIXTURES_DIR = resolve(import.meta.dirname, 'fixtures');
 
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
-const ORDER_ID_KEYS = ['salesOrderId', 'purchaseOrderId'] as const;
+// `rmaId` first: an RMA may also carry the `salesOrderId` it comes from, but the RMA is what each run suffixes.
+const ORDER_ID_KEYS = ['rmaId', 'salesOrderId', 'purchaseOrderId'] as const;
 
 export function loadScenarios(dir: string = FIXTURES_DIR): ScenarioFixture[] {
     return readdirSync(dir)

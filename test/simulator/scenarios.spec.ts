@@ -53,6 +53,29 @@ describe('fixtures del simulador', () => {
         );
     });
 
+    it('cubre los escenarios del RMA que pide ST-238.3, todos en `simulate:inventory`', () => {
+        const rma = fixtures.filter((fixture) => fixture.scenario.startsWith('rma-'));
+        expect(rma.map((fixture) => fixture.scenario).sort()).toEqual([
+            'rma-duplicate',
+            'rma-invalid',
+            'rma-requested',
+            'rma-stale-version',
+            'rma-unknown-warehouse',
+            'rma-without-coordinates',
+        ]);
+        for (const fixture of rma) {
+            expect(fixture.script).toBe('inventory');
+            for (const step of fixture.steps) expect(step.message['type']).toBe('inventory.return.requested');
+        }
+    });
+
+    it('los RMA inválidos a propósito son solo el de campo faltante', () => {
+        const invalid = fixtures.filter((fixture) => fixture.steps.some((step) => step.expectInvalid === true));
+        expect(invalid.map((fixture) => fixture.scenario).filter((name) => name.startsWith('rma-'))).toEqual([
+            'rma-invalid',
+        ]);
+    });
+
     it('el pedido completo lleva confirmedAt y physicallyPacked', () => {
         const [confirmed, ready] = loadScenario('complete-order')!.steps.map(
             (step) => step.message['data'] as Record<string, unknown>,
@@ -126,6 +149,25 @@ describe('buildScenario', () => {
         const built = buildScenario(loadScenario('pickup-requested')!, { runId: 'abc123', now: NOW });
         const window = (built.steps[0]!.envelope['data'] as { pickupWindow: { startsAt: string } }).pickupWindow;
         expect(Date.parse(window.startsAt)).toBeGreaterThan(NOW.getTime());
+    });
+
+    it('un RMA se identifica por su rmaId: se sufija con el runId, igual que sus bultos, y el pedido de origen no', () => {
+        const built = buildScenario(loadScenario('rma-requested')!, { runId: 'abc123', now: NOW });
+        const data = built.steps[0]!.envelope['data'] as {
+            rmaId: string;
+            salesOrderId: string;
+            packages: Array<{ packageId: string }>;
+        };
+        expect(built.steps[0]!.orderId).toBe(data.rmaId);
+        expect(data.rmaId).toBe('RMA-SIM-0001-abc123');
+        expect(data.packages[0]!.packageId).toBe('PKG-RMA-SIM-0001-abc123-1');
+        expect(data.salesOrderId).toBe('SO-2026-000123');
+    });
+
+    it('la fecha preferida de recojo del RMA queda en el futuro aunque el fixture sea viejo', () => {
+        const built = buildScenario(loadScenario('rma-requested')!, { runId: 'abc123', now: NOW });
+        const data = built.steps[0]!.envelope['data'] as { preferredPickupDate: string };
+        expect(Date.parse(data.preferredPickupDate)).toBeGreaterThan(NOW.getTime());
     });
 
     it('asIs deja ids y fechas tal como están en el fixture', () => {
