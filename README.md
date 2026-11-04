@@ -66,7 +66,7 @@ reservado). Debe coincidir con `PORTAL_ROUTES` del portal web (`config/portal-ro
 | Ajustes | `GET /settings` (Administrador y Coordinador), `PUT /settings/:key` | **No** (ver «Pendiente») |
 | Auditoría | `GET /audit/outbound-message-alerts` | **No**, solo Coordinador |
 | Usuarios | `/users`, `/roles`, `POST /auth/register` | **No**, solo Administrador (el listado de `/users` y `/roles` también lo lee el Coordinador) |
-| Repartidor | `my-assignments`, `my-history`, `drivers/me/metrics`, inicio y aceptación de lotes, estados, evidencias, OTP, incidencias, `tracking/locations`, `push-tokens` | **No**, solo Repartidor |
+| Repartidor | `my-assignments`, `my-history`, `drivers/me/metrics`, inicio y aceptación de lotes, estados, evidencias, OTP, incidencias, `supplier-pickup`, `arrived-at-warehouse`, `tracking/locations`, `push-tokens` | **No**, solo Repartidor |
 
 Cualquier usuario autenticado, incluido el Supervisor, puede usar `POST /auth/logout`,
 `PATCH /auth/change-password` y `/auth/2fa/*` sobre su propia cuenta.
@@ -81,8 +81,6 @@ Cualquier usuario autenticado, incluido el Supervisor, puede usar `POST /auth/lo
 | `ST-63.1` | `POST /route-batches/:id/reassign` | Supervisor |
 | `ST-64.1` | `GET /vehicle-maintenances`, `PATCH /vehicle-maintenances/:id/status` | Supervisor y Coordinador |
 | `ST-67.1` | `GET /settings/alert-thresholds` (Supervisor y Coordinador), `PUT /settings/alert-thresholds` (solo Supervisor) | Los umbrales del Supervisor van en su propio endpoint; `/settings` no cambia |
-| `ST-241.1` | Cancelación extendida a estados previos a la ruta | Coordinador (PR pendiente de merge) |
-| `ST-239.2` | `POST /dispatches/:id/supplier-pickup`, `arrived-at-warehouse` | Por confirmar (PR pendiente de merge) |
 
 Quien agregue uno de estos endpoints añade su fila a la tabla de arriba y su caso a
 `test/supervisor-permissions.e2e-spec.ts`.

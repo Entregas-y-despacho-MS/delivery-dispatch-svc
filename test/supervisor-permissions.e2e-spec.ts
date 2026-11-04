@@ -7,8 +7,8 @@
 //   - lo reservado responde 403 INSUFFICIENT_PERMISSIONS.
 //
 // Las escrituras permitidas se prueban con un id inexistente y un cuerpo vacío, así que no modifican
-// datos. Los endpoints de ST-241.1 y ST-239.2 (PR sin mergear) no están en esta matriz: se agregan
-// cuando se mergeen, igual que los que traen ST-60.1, ST-61.1, ST-62.1, ST-63.1, ST-64.1 y ST-67.1.
+// datos. Los endpoints que traerán ST-60.1, ST-61.1, ST-62.1, ST-63.1, ST-64.1 y ST-67.1 se agregan
+// a esta matriz cuando existan (ver «Pendiente» en el README del back).
 //
 // Levanta el AppModule real contra una base real. El Supervisor se crea por DataSource, inicia sesión
 // de verdad y se borra en afterAll (seguro de re-correr contra una base compartida).
@@ -131,6 +131,8 @@ const DRIVER_ONLY: Route[] = [
     { method: 'post', path: `/dispatches/${NO_ID}/otp/validate`, body: {} },
     { method: 'post', path: `/dispatches/${NO_ID}/otp/resend`, body: {} },
     { method: 'post', path: `/dispatches/${NO_ID}/incidents`, body: {} },
+    { method: 'post', path: `/dispatches/${NO_ID}/supplier-pickup`, body: {} },
+    { method: 'post', path: `/dispatches/${NO_ID}/arrived-at-warehouse`, body: {} },
     { method: 'post', path: '/tracking/locations', body: {} },
     { method: 'put', path: '/push-tokens/some-device', body: {} },
     { method: 'delete', path: '/push-tokens/some-device' },
