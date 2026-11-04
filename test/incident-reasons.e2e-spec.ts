@@ -86,7 +86,7 @@ describe('Motivos de incidencia (e2e, RF-A32)', () => {
     });
 
     // ── Permisos ───────────────────────────────────────────────────────────────
-    describe('permisos: coordinador y supervisor administran; el repartidor solo lee', () => {
+    describe('permisos: el coordinador administra; supervisor y repartidor solo leen (ST-59.1)', () => {
         it('sin token → 401', async () => {
             expect((await request(app.getHttpServer()).get(url())).status).toBe(401);
         });
@@ -101,9 +101,9 @@ describe('Motivos de incidencia (e2e, RF-A32)', () => {
             expect((await get(reason.id, 'admin')).status).toBe(403);
         });
 
-        it('solo coordinator y supervisor crean/editan; admin y driver no, y no se modifica nada', async () => {
+        it('solo coordinator crea/edita; supervisor, admin y driver no, y no se modifica nada', async () => {
             const reason = await created();
-            for (const role of ['admin', 'driver']) {
+            for (const role of ['supervisor', 'admin', 'driver']) {
                 expect((await post(validBody(), role)).status, `post ${role}`).toBe(403);
                 expect((await put(reason.id, { active: false }, role)).status, `put ${role}`).toBe(403);
             }

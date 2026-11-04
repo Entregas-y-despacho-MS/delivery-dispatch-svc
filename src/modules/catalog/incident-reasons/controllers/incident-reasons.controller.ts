@@ -14,7 +14,7 @@ import { FindAllIncidentReasonsParamsDto } from '../dto/find-all-incident-reason
 import { FindAllIncidentReasonsResponseDto } from '../dto/find-all-incident-reasons-response.dto.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
 import { ApiNotFound, ApiUnauthorized, ApiBadRequests, ApiIdParam, ApiConflict } from '../../../../shared/utils/swagger/index.js';
-import { Roles } from '../../../../app/auth/decorators/index.js';
+import { Roles, CoordinatorOnly } from '../../../../app/auth/decorators/index.js';
 import { ParseIdPipe } from '../../../../shared/pipes/index.js';
 import { RoleEnum } from '../../../../shared/enums/index.js';
 
@@ -25,9 +25,10 @@ import { RoleEnum } from '../../../../shared/enums/index.js';
  *   INVALID_TOKEN                       401 — JWT is missing, malformed, or expired.
  *   INSUFFICIENT_PERMISSIONS            403 — Authenticated but role does not meet the endpoint requirement.
  *
- * RF-A32 — the catalog is managed by the logistics coordinator and the operations supervisor
- * (root bypasses). The list/get endpoints are also open to the driver: the mobile app fetches
- * this catalog to let the driver pick a reason and cache it for offline use.
+ * RF-A32 — the catalog is managed by the logistics coordinator (create/update are
+ * @CoordinatorOnly(), root bypasses). The operations supervisor can only read it (ST-59.1). The
+ * list/get endpoints are also open to the driver: the mobile app fetches this catalog to let the
+ * driver pick a reason and cache it for offline use.
  */
 @ApiTags('Incident Reasons')
 @ApiBearerAuth('access-token')
@@ -64,11 +65,11 @@ export class IncidentReasonsController {
     }
 
     @Post()
-    @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
+    @CoordinatorOnly()
     @HttpCode(HttpStatus.CREATED)
     @ApiOperation({
         summary:     'Create an incident reason',
-        description: 'Creates an incident reason with its unique `code`, its display `name`, and whether it `requiresEvidence` (a photo) — all three are required. The code is trimmed and uppercased. The new reason is always created enabled (`active: true`), so `active` is not accepted here. 409 when the code is taken. Requires coordinator or supervisor role, or root.',
+        description: 'Creates an incident reason with its unique `code`, its display `name`, and whether it `requiresEvidence` (a photo) — all three are required. The code is trimmed and uppercased. The new reason is always created enabled (`active: true`), so `active` is not accepted here. 409 when the code is taken. Requires coordinator role, or root (the supervisor can only read this catalog).',
     })
     @ApiBadRequests({ validation: true, example: ['Code is required.', 'Name is required.', 'Requires evidence must be true or false.'] })
     @ApiCreatedResponse({ type: IncidentReasonDto })
@@ -79,10 +80,10 @@ export class IncidentReasonsController {
     }
 
     @Put(':id')
-    @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
+    @CoordinatorOnly()
     @ApiOperation({
         summary:     'Update an incident reason',
-        description: 'Partially updates an incident reason: only the fields sent are changed, and an empty body changes nothing. `null` is rejected on every field. If any field is invalid nothing is saved. `active: false` disables the reason (RF-A32, Escenario 2 — it stops being offered for new incidents, but incidents already logged with it, and their evidence, are not affected) and `active: true` enables it again; there is no delete endpoint for this catalog. 409 when a changed code is taken. Requires coordinator or supervisor role, or root.',
+        description: 'Partially updates an incident reason: only the fields sent are changed, and an empty body changes nothing. `null` is rejected on every field. If any field is invalid nothing is saved. `active: false` disables the reason (RF-A32, Escenario 2 — it stops being offered for new incidents, but incidents already logged with it, and their evidence, are not affected) and `active: true` enables it again; there is no delete endpoint for this catalog. 409 when a changed code is taken. Requires coordinator role, or root (the supervisor can only read this catalog).',
     })
     @ApiIdParam('Incident reason')
     @ApiBadRequests({ validation: true, id: true, example: ['Code must not be empty.'] })

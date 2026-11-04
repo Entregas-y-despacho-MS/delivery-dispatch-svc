@@ -16,12 +16,74 @@ Scaffolded with [create-nestkit](https://www.npmjs.com/package/@darkj/create-nes
 ```bash
 cp .env.example .env   # fill in your values
 npm run migration:run  # apply the initial schema
-npm run seed            # create the root/admin/user roles + a root user
+npm run seed            # create the 5 roles + a root user + a development Supervisor user
 npm run start:dev
 ```
 
 Swagger UI: `http://localhost:3000/api/docs`
 Health check: `http://localhost:3000/api/health`
+
+### Usuarios de desarrollo (seed)
+
+`npm run seed` es idempotente (se puede correr varias veces) y crea:
+
+| Usuario | Rol | Variables que lo personalizan |
+|---|---|---|
+| `root` | `ROOT` | `SEED_ROOT_USERNAME`, `SEED_ROOT_FULL_NAME`, `SEED_ROOT_EMAIL`, `SEED_ROOT_PASSWORD` |
+| `supervisor` | `SUPERVISOR` | `SEED_SUPERVISOR_USERNAME`, `SEED_SUPERVISOR_FULL_NAME`, `SEED_SUPERVISOR_EMAIL`, `SEED_SUPERVISOR_PASSWORD` |
+
+Los valores por defecto están en `src/database/seeds/seed.ts`. Son solo para desarrollo: en cualquier otro
+entorno define las contraseñas por variable de entorno. Los usuarios del resto de los roles (administrador,
+coordinador, repartidor) se crean con `POST /api/users`.
+
+## Roles y matriz de permisos (ST-59.1, RF-A12)
+
+Hay cinco roles paralelos: `ROOT`, `ADMIN`, `COORDINATOR`, `SUPERVISOR` y `DRIVER`. Ninguno implica los
+permisos de otro: cada endpoint declara su lista con `@Roles(...)` (o un atajo como `@CoordinatorOnly()`).
+`ROOT` es el único especial: salta toda comprobación y es una cuenta de emergencia, no de uso diario. Una ruta
+sin decorador de rol admite a cualquier usuario autenticado, y las marcadas `@Public()` no piden token.
+
+La matriz sale de los `@Roles` de los controladores y la verifica
+`test/supervisor-permissions.e2e-spec.ts` con un token real de Supervisor (200 en lo permitido, 403 en lo
+reservado). Debe coincidir con `PORTAL_ROUTES` del portal web (`config/portal-routes.ts`).
+
+### Qué puede hacer el Supervisor
+
+| Área | Endpoints | Supervisor |
+|---|---|---|
+| Despachos | `GET /dispatches/kanban`, `kanban/filters`, `:id/detail`, `history`, `history/export` | Sí |
+| Despachos | `PATCH /dispatches/:id/priority` | Sí |
+| Despachos | `GET /pending-orders`, `GET /dispatches/change-requests` | Sí |
+| Lotes de ruta | `GET /route-batches`, `:id` | Sí |
+| Lotes de ruta | `POST :id/approve-promises` (1.ª aprobación), `PATCH :id/reviewer`, `:id/driver`, `:id/vehicle` | Sí |
+| Lotes de ruta | `POST :id/approve-final` (2.ª aprobación) | **No**, solo Coordinador |
+| Planificación | `POST /planning/generate`, `/planning/cutoff`, `/dispatch-reservations/*` | **No**, solo Coordinador |
+| Despachos | `POST :id/reschedule`, `:id/return`, `:id/cancel`, `:id/pickup-schedule`, `:id/pickup-reschedule`, `change-requests/:id/tracking-link` | **No**, solo Coordinador |
+| Flota | `/vehicles` (CRUD), `POST /vehicle-maintenances`, `/vehicle-incident-types` (`GET`, `POST`, `PUT`) | Sí |
+| Catálogos | `GET /warehouses`, `GET /incident-reasons`, `GET /reschedule-reasons` | Sí (solo lectura) |
+| Catálogos | `POST` y `PUT` de `/incident-reasons` y `/reschedule-reasons` | **No**, solo Coordinador (desde ST-59.1) |
+| Catálogos | `/service-levels`, `/delivery-zones` | **No**, solo Coordinador |
+| Ajustes | `GET /settings` (Administrador y Coordinador), `PUT /settings/:key` | **No** (ver «Pendiente») |
+| Auditoría | `GET /audit/outbound-message-alerts` | **No**, solo Coordinador |
+| Usuarios | `/users`, `/roles`, `POST /auth/register` | **No**, solo Administrador (el listado de `/users` y `/roles` también lo lee el Coordinador) |
+| Repartidor | `my-assignments`, `my-history`, `drivers/me/metrics`, inicio y aceptación de lotes, estados, evidencias, OTP, incidencias, `supplier-pickup`, `arrived-at-warehouse`, `tracking/locations`, `push-tokens` | **No**, solo Repartidor |
+
+Cualquier usuario autenticado, incluido el Supervisor, puede usar `POST /auth/logout`,
+`PATCH /auth/change-password` y `/auth/2fa/*` sobre su propia cuenta.
+
+### Pendiente: endpoints que aún no están en la matriz
+
+| Tarea | Endpoint | Permiso previsto |
+|---|---|---|
+| `ST-60.1` | `GET /fleet/live-positions` | Supervisor y Coordinador |
+| `ST-61.1` | `GET /fleet/kpis` | Por definir |
+| `ST-62.1` | `PATCH /vehicles/:id/status` | Supervisor y Coordinador |
+| `ST-63.1` | `POST /route-batches/:id/reassign` | Supervisor |
+| `ST-64.1` | `GET /vehicle-maintenances`, `PATCH /vehicle-maintenances/:id/status` | Supervisor y Coordinador |
+| `ST-67.1` | `GET /settings/alert-thresholds` (Supervisor y Coordinador), `PUT /settings/alert-thresholds` (solo Supervisor) | Los umbrales del Supervisor van en su propio endpoint; `/settings` no cambia |
+
+Quien agregue uno de estos endpoints añade su fila a la tabla de arriba y su caso a
+`test/supervisor-permissions.e2e-spec.ts`.
 
 ## Push notifications
 
