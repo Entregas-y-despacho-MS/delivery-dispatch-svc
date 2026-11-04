@@ -54,6 +54,7 @@ import { DispatchEvidenceModule } from './app/dispatch-evidence/dispatch-evidenc
 import { AuditLogsModule } from './modules/audit/audit-logs/audit-logs.module.js';
 import { DispatchEventsAppModule } from './app/dispatch-events/dispatch-events.module.js';
 import { DispatchIncidentsAppModule } from './app/dispatch-incidents/dispatch-incidents.module.js';
+import { SupplierPickupModule } from './app/supplier-pickup/supplier-pickup.module.js';
 
 @Module({
   imports: [
@@ -101,6 +102,7 @@ import { DispatchIncidentsAppModule } from './app/dispatch-incidents/dispatch-in
     TrackingModule,
     DispatchEventsAppModule,
     DispatchIncidentsAppModule,
+    SupplierPickupModule,
     MailerModule.register(),
     SocketModule,
     PdfModule,

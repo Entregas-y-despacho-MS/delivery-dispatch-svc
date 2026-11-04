@@ -39,7 +39,25 @@ export class DispatchStatusPublicationService {
         input: PublishDispatchStatusChangeInput,
     ): Promise<number | null> {
         if (!PUBLISHED_DELIVERY_OUTCOME_STATUSES.includes(input.status)) return null;
+        return await this.publishMessage(manager, input);
+    }
 
+    /**
+     * Supplier-pickup custody updates (ST-239.2): `picked_up_in_transit` is not a delivery outcome
+     * (`PUBLISHED_DELIVERY_OUTCOME_STATUSES`), but Compras still needs to know about it. Unlike
+     * `publish`, this never returns `null` for a skipped status — callers decide when to call it.
+     */
+    async publishTransferUpdate(
+        manager: EntityManager,
+        input: PublishDispatchStatusChangeInput,
+    ): Promise<number> {
+        return await this.publishMessage(manager, input);
+    }
+
+    private async publishMessage(
+        manager: EntityManager,
+        input: PublishDispatchStatusChangeInput,
+    ): Promise<number> {
         const [dispatch]: DispatchIdentityRow[] = await manager.query(
             `SELECT t.name AS dispatch_type, d.source_order_ref, d.tracking_code
                FROM dispatches d
