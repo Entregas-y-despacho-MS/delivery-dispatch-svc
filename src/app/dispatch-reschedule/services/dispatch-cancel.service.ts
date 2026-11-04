@@ -9,8 +9,9 @@ import { DISPATCH_STATUS_CHANGED_EVENT, type DispatchStatusChangedEvent } from '
 import { RouteBatchClosingService } from '../../route-batch-closing/services/route-batch-closing.service.js';
 import { CancelDispatchResultDto } from '../dto/cancel-dispatch-result.dto.js';
 import type { CancelDispatchDto } from '../dto/cancel-dispatch.dto.js';
-import { isCancellableByCoordinator } from '../domain/reschedulable-status.js';
+import { isCancellableByCoordinator, leavesBatchWhenCancelled } from '../domain/reschedulable-status.js';
 import { DispatchCancelNotAllowedException, DispatchTypeNotSupportedException } from '../exceptions/index.js';
+import { BatchExitService, type BatchExitResult } from './batch-exit.service.js';
 import { DispatchLockService } from './dispatch-lock.service.js';
 
 /** Reason published to the ERP when the coordinator cancels (the cancellations that come from Marketplace carry `ORDER-CANCELLED`). */
@@ -22,17 +23,20 @@ interface Applied {
 }
 
 /**
- * Cancellation of a delivery by the coordinator (ES-52). Only from `assigned`: the case that needs it is a stop the
- * driver cannot take, such as a dispatch left out of the route by a failed cotejo (ST-210.1), which keeps its route
- * batch open (D-50) until someone resolves it.
+ * Cancellation of a delivery by the coordinator (ES-52, ES-241) from any state before the route starts: `pending`,
+ * `address_review`, `in_planning`, `scheduled` and `assigned`. The case of `assigned` is a stop the driver cannot take,
+ * such as a dispatch left out of the route by a failed cotejo (ST-210.1), which keeps its route batch open (D-50)
+ * until someone resolves it.
  *
  * In ONE transaction, locking the batch before the dispatch as the rest of the system does: the
  * `dispatch.transfer.status_changed` message is queued in the outbox (before the event, with its
  * `outboundRecordVersion` kept in the event metadata), the dispatch becomes `cancelled` with an explicit `closed_at`,
  * the audit event is written and the batch is closed when nothing in it is left open (`RouteBatchClosingService`).
  *
- * The dispatch stays linked to its route batch (the history takes the driver and the vehicle from it) and its planning
- * `version` does not move: a cancellation is not a change of plan.
+ * From `assigned` the dispatch stays linked to its route batch (the history takes the driver and the vehicle from it)
+ * and its planning `version` does not move: a cancellation is not a change of plan. From `in_planning` and `scheduled`
+ * it is still in a batch that is being planned, so it leaves it (`BatchExitService`, D-09: the `version` of the dispatch
+ * and of the batch go up) and the capacity of the batch is free again.
  */
 @Injectable()
 export class DispatchCancelService {
@@ -42,6 +46,7 @@ export class DispatchCancelService {
         private readonly publication: DispatchStatusPublicationService,
         private readonly dispatchEvents: DispatchEventsService,
         private readonly closing: RouteBatchClosingService,
+        private readonly batchExit: BatchExitService,
         private readonly events: EventEmitter2,
     ) {}
 
@@ -56,6 +61,15 @@ export class DispatchCancelService {
         if (dispatch.type !== 'delivery') throw new DispatchTypeNotSupportedException(dispatch.type);
         if (!isCancellableByCoordinator(dispatch.status)) throw new DispatchCancelNotAllowedException(dispatch.status);
 
+        let exit: BatchExitResult | null = null;
+        if (batch && leavesBatchWhenCancelled(dispatch.status)) {
+            exit = await this.batchExit.leave(manager, batch, dispatchId, {
+                actorUserId: userId,
+                reason: dto.reason,
+                metadata: { cause: 'coordinator_cancelled', reasonCode: COORDINATOR_CANCELLED_REASON_CODE },
+            });
+        }
+
         const outboundRecordVersion = await this.publication.publish(manager, {
             dispatchId,
             status: DispatchStatusEnum.CANCELLED,
@@ -64,12 +78,12 @@ export class DispatchCancelService {
             reasonCode: COORDINATOR_CANCELLED_REASON_CODE,
         });
 
-        const [updatedRows]: [{ updated_at: Date }[], number] = await manager.query(
+        const [updatedRows]: [{ version: number; updated_at: Date }[], number] = await manager.query(
             `UPDATE dispatches
                 SET dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $2),
                     closed_at = $3::timestamptz, updated_at = NOW()
               WHERE dispatch_id = $1
-              RETURNING updated_at`,
+              RETURNING version, updated_at`,
             [dispatchId, DispatchStatusEnum.CANCELLED, now],
         );
 
@@ -83,17 +97,21 @@ export class DispatchCancelService {
             metadata: {
                 previousStatus: dispatch.status,
                 status: DispatchStatusEnum.CANCELLED,
-                version: dispatch.version,
+                version: updatedRows[0].version,
                 reasonCode: COORDINATOR_CANCELLED_REASON_CODE,
-                routeBatchId: batch?.id ?? null,
+                routeBatchId: exit ? null : batch?.id ?? null,
+                ...(exit && { fromBatchId: exit.batchId, batchStatusBefore: exit.batchStatusBefore, batchStatusAfter: exit.batchStatusAfter, batchVersion: exit.batchVersion }),
                 ...(outboundRecordVersion !== null && { outboundRecordVersion }),
             },
             occurredAt: now,
         }, { manager });
 
-        const routeBatchClosed = batch
-            ? await this.closing.closeIfComplete(manager, batch.id, { dispatchId, dispatchStatus: DispatchStatusEnum.CANCELLED, cause: 'dispatch_cancelled_by_coordinator' })
-            : false;
+        // After leaving the batch, `leave` already evaluated the closing of a batch in execution.
+        const routeBatchClosed = exit
+            ? exit.closed
+            : batch
+                ? await this.closing.closeIfComplete(manager, batch.id, { dispatchId, dispatchStatus: DispatchStatusEnum.CANCELLED, cause: 'dispatch_cancelled_by_coordinator' })
+                : false;
 
         return {
             result: {
@@ -102,14 +120,14 @@ export class DispatchCancelService {
                 previousStatus: dispatch.status,
                 closedAt: now.toISOString(),
                 reasonCode: COORDINATOR_CANCELLED_REASON_CODE,
-                routeBatchId: batch?.id ?? null,
+                routeBatchId: exit ? null : batch?.id ?? null,
                 routeBatchClosed,
             },
             event: {
                 dispatchId,
                 status: DispatchStatusEnum.CANCELLED,
                 previousStatus: dispatch.status,
-                version: dispatch.version,
+                version: updatedRows[0].version,
                 updatedAt: new Date(updatedRows[0].updated_at).toISOString(),
             },
         };

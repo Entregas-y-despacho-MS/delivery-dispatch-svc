@@ -710,7 +710,77 @@ describe('Reprogramación y devolución del coordinador (e2e, ST-52.2)', () => {
             expect(res.body.data.map((row: { id: number }) => row.id)).toContain(id);
         });
 
-        it.each(['pending', 'in_planning', 'scheduled', 'out_for_delivery', 'in_transit', 'delivered', 'incident', 'not_delivered', 'rescheduled', 'returned', 'cancelled'])(
+        it.each(['pending', 'address_review'])('%s sin lote: queda cancelled con closed_at, publica el mensaje y la versión no se mueve', async (status) => {
+            const id = await newDispatch({ status });
+            const before = await dispatchRow(id);
+
+            const res = await post(id, 'cancel', cancelBody);
+
+            expect(res.status).toBe(200);
+            expect(res.body).toMatchObject({ dispatchId: id, status: 'cancelled', previousStatus: status, reasonCode: 'COORD-CANCELLED', routeBatchId: null, routeBatchClosed: false });
+            const after = await dispatchRow(id);
+            expect(after).toMatchObject({ status: 'cancelled', route_batch_id: null, version: before.version });
+            expect(after.closed_at).not.toBeNull();
+            const outbound = await outboundFor(id);
+            expect(outbound).toHaveLength(1);
+            expect(outbound[0].data).toMatchObject({ status: 'cancelled', previousStatus: status, reasonCode: 'COORD-CANCELLED', recordVersion: 1 });
+            const events = await cancelEvents(id);
+            expect(events).toHaveLength(1);
+            expect(events[0]).toMatchObject({ actor_user_id: userIds.coordinator, reason: cancelBody.reason });
+        });
+
+        it.each(['in_planning', 'scheduled'])('%s en un lote provisional con otras paradas: sale del lote, sube la versión del despacho y la del lote, cierra el hueco y publica el mensaje', async (status) => {
+            const batchId = await newBatch('provisional', { version: 3 });
+            const first = await newDispatch({ status, batchId, sequence: 1 });
+            const id = await newDispatch({ status, batchId, sequence: 2 });
+            const last = await newDispatch({ status, batchId, sequence: 3 });
+            const before = await dispatchRow(id);
+
+            const res = await post(id, 'cancel', cancelBody);
+
+            expect(res.status).toBe(200);
+            expect(res.body).toMatchObject({ status: 'cancelled', previousStatus: status, routeBatchId: null, routeBatchClosed: false });
+            const after = await dispatchRow(id);
+            expect(after).toMatchObject({ status: 'cancelled', route_batch_id: null, sequence_order: null, version: before.version + 1 });
+            expect(after.closed_at).not.toBeNull();
+            expect(await batchRow(batchId)).toMatchObject({ status: 'provisional', version: 4 });
+            expect((await dispatchRow(first)).sequence_order).toBe(1);
+            expect((await dispatchRow(last)).sequence_order).toBe(2);
+            expect(await batchEvents(batchId, 'order_removed')).toHaveLength(1);
+
+            const outbound = await outboundFor(id);
+            expect(outbound).toHaveLength(1);
+            expect(outbound[0].data).toMatchObject({ status: 'cancelled', previousStatus: status, reasonCode: 'COORD-CANCELLED' });
+            const events = await cancelEvents(id);
+            expect(events).toHaveLength(1);
+            expect(events[0].metadata).toMatchObject({ previousStatus: status, status: 'cancelled', routeBatchId: null, fromBatchId: batchId, version: after.version });
+        });
+
+        it('in_planning, última parada de un lote provisional: el lote queda cancelado', async () => {
+            const batchId = await newBatch('provisional', { version: 1 });
+            const id = await newDispatch({ status: 'in_planning', batchId, sequence: 1 });
+
+            const res = await post(id, 'cancel', cancelBody);
+
+            expect(res.status).toBe(200);
+            expect(await batchRow(batchId)).toMatchObject({ status: 'cancelled', version: 2 });
+            expect(await batchEvents(batchId, 'cancelled')).toHaveLength(1);
+        });
+
+        it('scheduled en un lote confirmed: sale del lote sin renumerar las demás paradas', async () => {
+            const batchId = await newBatch('confirmed', { version: 5 });
+            const id = await newDispatch({ status: 'scheduled', batchId, sequence: 1 });
+            const other = await newDispatch({ status: 'scheduled', batchId, sequence: 2 });
+
+            const res = await post(id, 'cancel', cancelBody);
+
+            expect(res.status).toBe(200);
+            expect(await batchRow(batchId)).toMatchObject({ status: 'confirmed', version: 6 });
+            expect((await dispatchRow(other)).sequence_order).toBe(2);
+            expect((await dispatchRow(id)).route_batch_id).toBeNull();
+        });
+
+        it.each(['out_for_delivery', 'in_transit', 'delivered', 'incident', 'not_delivered', 'rescheduled', 'returned', 'cancelled'])(
             '%s → 409 DISPATCH_CANCEL_NOT_ALLOWED y no cambia nada', async (status) => {
                 const id = await newDispatch({ status });
                 const before = await dispatchRow(id);
