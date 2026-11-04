@@ -14,13 +14,17 @@ import { RouteBatchStartService } from './services/route-batch-start.service.js'
 import { RouteBatchCotejoPhotoService } from './services/route-batch-cotejo-photo.service.js';
 import { RouteBatchReviewerSweepTask } from './route-batch-reviewer-sweep.task.js';
 import { RouteBatchAcceptService } from './services/route-batch-accept.service.js';
+import { RouteBatchCotejoExclusionsService } from './services/route-batch-cotejo-exclusions.service.js';
+import { RouteBatchCotejoResolutionService } from './services/route-batch-cotejo-resolution.service.js';
+import { CotejoResolutionController } from './controllers/cotejo-resolution.controller.js';
+import { PlanningAlertsService } from '../../../app/planning/services/planning-alerts.service.js';
 import { OutboundMessagesModule } from '../../messaging/outbound-messages/outbound-messages.module.js';
 import { PromiseFirmingModule } from '../../../app/promise-firming/promise-firming.module.js';
 
 // Reviewer assignment (ST-50.4, D-42). The batch planner (ST-50.2) calls RouteBatchReviewerService.assignReviewer.
 @Module({
   imports: [TypeOrmModule.forFeature([RouteBatch, RouteBatchEvent]), OutboundMessagesModule, PromiseFirmingModule],
-  controllers: [RouteBatchesController],
+  controllers: [RouteBatchesController, CotejoResolutionController],
   providers: [
     RouteBatchReviewerService,
     RouteBatchReviewerListener,
@@ -33,6 +37,11 @@ import { PromiseFirmingModule } from '../../../app/promise-firming/promise-firmi
     RouteBatchStartService,
     RouteBatchCotejoPhotoService,
     RouteBatchAcceptService,
+    RouteBatchCotejoExclusionsService,
+    RouteBatchCotejoResolutionService,
+    // PlanningModule imports this module, so it cannot be imported back (cycle). The service has no state of its
+    // own (DataSource + the global event emitter), so this module gets its own instance for the cotejo alert.
+    PlanningAlertsService,
   ],
   exports: [RouteBatchReviewerService, RouteCapacityService, RouteBatchResourcesService],
 })

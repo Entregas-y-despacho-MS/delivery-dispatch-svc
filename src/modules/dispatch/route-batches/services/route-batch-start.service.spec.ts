@@ -7,6 +7,7 @@ import {
   DispatchStatusEnum,
   RouteBatchStatusEnum,
 } from '../../../../shared/enums/index.js';
+import { PlanningAlertsService } from '../../../../app/planning/services/planning-alerts.service.js';
 import { OutboxService } from '../../../messaging/outbound-messages/services/outbox.service.js';
 import { RouteBatchStartConflictException } from '../exceptions/route-batch-start-conflict.exception.js';
 import { RouteBatchStartService } from './route-batch-start.service.js';
@@ -138,8 +139,14 @@ function setup(
     }),
   } as unknown as OutboxService;
   const events = { emit: vi.fn() } as unknown as EventEmitter2;
-  const service = new RouteBatchStartService(dataSource, outbox, events);
-  return { service, manager, runner, outbox, events };
+  const alerts = { raise: vi.fn().mockResolvedValue(undefined) };
+  const service = new RouteBatchStartService(
+    dataSource,
+    outbox,
+    events,
+    alerts as unknown as PlanningAlertsService,
+  );
+  return { service, manager, runner, outbox, events, alerts };
 }
 
 describe('RouteBatchStartService.start', () => {
@@ -285,6 +292,78 @@ describe('RouteBatchStartService.start', () => {
     );
     expect(routeStarted?.[1]?.[2]).toContain('"dispatchIds":[21]');
     expect(routeStarted?.[1]?.[2]).toContain('"excludedDispatchIds":[22]');
+  });
+
+  it('raises cotejo_exclusion_pending once, after the commit, when the batch starts with excluded dispatches', async () => {
+    const ctx = setup({
+      dispatches: [
+        dispatches[0],
+        {
+          ...dispatches[1],
+          status: DispatchStatusEnum.SCHEDULED,
+          tracking_code: null,
+        },
+      ],
+      packages: [{ dispatch_id: 21, external_package_id: 'PKG-21-A' }],
+      cotejoEvents: [
+        {
+          dispatch_id: 22,
+          dispatch_event_id: 1,
+          event_type: 'cotejo_failed',
+          created_at: '2026-10-18T11:00:00.000Z',
+          metadata: { routeBatchId: 7, packageIds: ['PKG-22-A'] },
+        },
+      ],
+    });
+
+    await ctx.service.start(7, { eventId }, 9);
+
+    expect(ctx.alerts.raise).toHaveBeenCalledOnce();
+    expect(ctx.alerts.raise).toHaveBeenCalledWith('cotejo_exclusion_pending', {
+      routeBatchId: 7,
+      excludedDispatchIds: [22],
+    });
+    expect(
+      vi.mocked(ctx.runner.commitTransaction).mock.invocationCallOrder[0],
+    ).toBeLessThan(ctx.alerts.raise.mock.invocationCallOrder[0]);
+  });
+
+  it('does not raise the alert when nothing is excluded', async () => {
+    const ctx = setup();
+
+    await ctx.service.start(7, { eventId }, 9);
+
+    expect(ctx.alerts.raise).not.toHaveBeenCalled();
+  });
+
+  it('does not raise the alert again on a replay of the same eventId', async () => {
+    const ctx = setup({
+      batch: [
+        { id: 7, status: RouteBatchStatusEnum.IN_EXECUTION, driver_id: 9 },
+      ],
+      prior: [
+        {
+          route_batch_id: 7,
+          metadata: {
+            dispatchIds: [21],
+            excludedDispatchIds: [22],
+            startedAt: savedAt.toISOString(),
+          },
+        },
+      ],
+    });
+
+    await ctx.service.start(7, { eventId }, 9);
+
+    expect(ctx.alerts.raise).not.toHaveBeenCalled();
+  });
+
+  it('does not raise the alert when the start fails', async () => {
+    const ctx = setup({ outboxFailure: new Error('outbox down') });
+
+    await expect(ctx.service.start(7, { eventId }, 9)).rejects.toThrow('outbox down');
+
+    expect(ctx.alerts.raise).not.toHaveBeenCalled();
   });
 
   it('includes a failed dispatch when a later cotejo resolution exists for the same batch', async () => {
