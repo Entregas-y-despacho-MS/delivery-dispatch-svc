@@ -41,6 +41,13 @@ describe('toMetrics', () => {
     it('rounds to one decimal', () => {
         expect(toMetrics(sums({ deliveredCount: 3, onTimeCount: 2 })).onTimePercentage).toBe(66.7);
     });
+
+    it('shows 100% only when nothing was out of the window: 1999 of 2000 is 99.9, not 100', () => {
+        expect(toMetrics(sums({ deliveredCount: 2000, onTimeCount: 1999 })).onTimePercentage).toBe(99.9);
+        expect(toMetrics(sums({ deliveredCount: 2000, onTimeCount: 2000 })).onTimePercentage).toBe(100);
+        expect(toMetrics(sums({ deliveredCount: 1000, onTimeCount: 999 })).onTimePercentage).toBe(99.9);
+        expect(toMetrics(sums({ deliveredCount: 10, onTimeCount: 9 })).onTimePercentage).toBe(90);
+    });
 });
 
 describe('buildSlaReport', () => {

@@ -159,8 +159,10 @@ describe('GET /reports/sla (e2e, ST-54.2)', () => {
         await insertDispatch({ n: 30, status: 'delivered', zone: 'N', level: 'A', batch: 'A', closedAt: '2031-07-10T18:00:00Z', window: julyWindow });
         await insertDispatch({ n: 31, status: 'delivered', zone: 'N', level: 'A', batch: 'A', closedAt: '2031-07-10T20:00:00Z', window: julyWindow });
         await insertDispatch({ n: 32, status: 'delivered', zone: 'N', level: 'A', batch: 'A', closedAt: '2031-07-10T20:00:01Z', window: julyWindow });
-        // May: one dispatch, for the cache tests.
+        // May: two dispatches, for the cache tests that only read. August: one, for the test that adds another one in the middle.
         await insertDispatch({ n: 20, status: 'delivered', zone: 'N', level: 'A', batch: 'A', closedAt: '2031-05-10T19:00:00Z', window: ['2031-05-10T18:00:00Z', '2031-05-10T20:00:00Z'] });
+        await insertDispatch({ n: 21, status: 'delivered', zone: 'S', level: 'A', batch: 'B', closedAt: '2031-05-11T19:00:00Z', window: ['2031-05-11T18:00:00Z', '2031-05-11T20:00:00Z'] });
+        await insertDispatch({ n: 40, status: 'delivered', zone: 'N', level: 'A', batch: 'A', closedAt: '2031-08-10T19:00:00Z', window: ['2031-08-10T18:00:00Z', '2031-08-10T20:00:00Z'] });
     });
 
     afterEach(() => { vi.restoreAllMocks(); });
@@ -297,26 +299,28 @@ describe('GET /reports/sla (e2e, ST-54.2)', () => {
     });
 
     describe('cache', () => {
+        // The tests below read May (two dispatches); only the first one writes, and it does it on August, so none depends on the others.
         const MAY = { from: '2031-05-01', to: '2031-05-31' };
+        const AUG = { from: '2031-08-01', to: '2031-08-31' };
 
         it('stores the answer for 10 minutes under a key made of the parameters, and serves the second call from it', async () => {
             const setWithTtl = vi.spyOn(cache, 'setWithTtl');
-            await cache.delete(cacheKey('zone', MAY));
+            await cache.delete(cacheKey('zone', AUG));
 
-            const first = await report('zone', MAY);
+            const first = await report('zone', AUG);
             expect(first.status).toBe(200);
             expect(first.body.totals.closedCount).toBe(1);
-            expect(setWithTtl).toHaveBeenCalledWith(cacheKey('zone', MAY), expect.any(String), 600);
-            expect(JSON.parse((await cache.get(cacheKey('zone', MAY)))!)).toEqual(first.body);
+            expect(setWithTtl).toHaveBeenCalledWith(cacheKey('zone', AUG), expect.any(String), 600);
+            expect(JSON.parse((await cache.get(cacheKey('zone', AUG)))!)).toEqual(first.body);
 
-            // A new delivery of May. The entry is still there, so the second call does not see it.
-            await insertDispatch({ n: 21, status: 'delivered', zone: 'S', level: 'A', batch: 'B', closedAt: '2031-05-11T19:00:00Z', window: ['2031-05-11T18:00:00Z', '2031-05-11T20:00:00Z'] });
-            const second = await report('zone', MAY);
+            // A new delivery of August. The entry is still there, so the second call does not see it.
+            await insertDispatch({ n: 41, status: 'delivered', zone: 'S', level: 'A', batch: 'B', closedAt: '2031-08-11T19:00:00Z', window: ['2031-08-11T18:00:00Z', '2031-08-11T20:00:00Z'] });
+            const second = await report('zone', AUG);
             expect(second.body).toEqual(first.body);
 
             // Once the entry is gone (here by hand, in production by expiring), the report is computed again.
-            await cache.delete(cacheKey('zone', MAY));
-            const third = await report('zone', MAY);
+            await cache.delete(cacheKey('zone', AUG));
+            const third = await report('zone', AUG);
             expect(third.body.totals.closedCount).toBe(2);
         });
 

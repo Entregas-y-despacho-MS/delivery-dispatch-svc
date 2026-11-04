@@ -25,6 +25,12 @@ describe('assertSlaRange', () => {
         expect(() => assertSlaRange('2026-01-01', '2027-01-02')).toThrow(SlaRangeTooLargeException);
     });
 
+    it('does not let through something that is not a date (other modules call the service without the DTO)', () => {
+        expect(() => assertSlaRange('not-a-date', '2026-10-31')).toThrow(RangeError);
+        expect(() => assertSlaRange('2026-10-01', 'tomorrow')).toThrow(RangeError);
+        expect(() => assertSlaRange('', '')).toThrow(RangeError);
+    });
+
     it('answers DATE_RANGE_TOO_LARGE with its own code', () => {
         try { assertSlaRange('2020-01-01', '2026-01-01'); expect.unreachable(); } catch (error) {
             expect(error).toBeInstanceOf(SlaRangeTooLargeException);

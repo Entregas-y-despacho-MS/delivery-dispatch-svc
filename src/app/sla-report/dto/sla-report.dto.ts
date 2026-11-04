@@ -20,7 +20,7 @@ export class SlaMetricsDto {
     @ApiProperty({ type: 'number', format: 'double', nullable: true, minimum: 0, example: 18.5, description: 'Average delay, in minutes with one decimal, of the dispatches delivered after the end of the window (counted from that end). null when none was late' })
     averageDelayMinutes!: number | null;
 
-    @ApiProperty({ type: 'number', format: 'double', nullable: true, minimum: 0, example: 143.2, description: 'Average cycle, in minutes with one decimal, from the last departure of the route (`out_for_delivery`) to the delivery, over the delivered dispatches with a recorded departure. null when there is none' })
+    @ApiProperty({ type: 'number', format: 'double', nullable: true, minimum: 0, example: 143.2, description: 'Average cycle, in minutes with one decimal, from the last departure of the route (`out_for_delivery`) to the delivery, over the delivered dispatches with a recorded departure that is not after the delivery (a wrong device clock can put it later: that one is ignored). null when there is none' })
     averageCycleMinutes!: number | null;
 
     @ApiProperty({ type: 'integer', minimum: 0, example: 5, description: 'Incidents (`dispatch_incidents`) of the closed dispatches, whatever their reason (company failures included)' })

@@ -24,6 +24,13 @@ export function round1(value: number): number {
     return Math.round(value * 10) / 10;
 }
 
+/** Over the delivered ones, with one decimal. 1999 of 2000 would round to 100.0: it is shown as 99.9 so that 100 always means «none out of the window». */
+function onTimePercentage(onTimeCount: number, deliveredCount: number): number {
+    if (deliveredCount === 0) return 0;
+    const percentage = round1((onTimeCount / deliveredCount) * 100);
+    return onTimeCount < deliveredCount && percentage === 100 ? 99.9 : percentage;
+}
+
 /** The figures of one group (or of all of them) from its sums. */
 export function toMetrics(sums: Omit<SlaGroupSums, 'groupId' | 'groupName'>): SlaMetricsDto {
     return {
@@ -31,7 +38,7 @@ export function toMetrics(sums: Omit<SlaGroupSums, 'groupId' | 'groupName'>): Sl
         deliveredCount: sums.deliveredCount,
         onTimeCount: sums.onTimeCount,
         lateCount: sums.lateCount,
-        onTimePercentage: sums.deliveredCount === 0 ? 0 : round1((sums.onTimeCount / sums.deliveredCount) * 100),
+        onTimePercentage: onTimePercentage(sums.onTimeCount, sums.deliveredCount),
         averageDelayMinutes: sums.lateCount === 0 ? null : round1(sums.delayMinutesSum / sums.lateCount),
         averageCycleMinutes: sums.cycleCount === 0 ? null : round1(sums.cycleMinutesSum / sums.cycleCount),
         incidentCount: sums.incidentCount,
