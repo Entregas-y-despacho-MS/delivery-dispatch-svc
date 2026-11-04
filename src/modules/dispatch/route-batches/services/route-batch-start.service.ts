@@ -8,6 +8,7 @@ import {
   DispatchStatusEnum,
   RouteBatchStatusEnum,
 } from '../../../../shared/enums/index.js';
+import { PlanningAlertsService } from '../../../../app/planning/services/planning-alerts.service.js';
 import { OutboxService } from '../../../messaging/outbound-messages/services/outbox.service.js';
 import { RouteBatchNotFoundException } from '../exceptions/route-batch-not-found.exception.js';
 import { RouteBatchStartConflictException } from '../exceptions/route-batch-start-conflict.exception.js';
@@ -48,6 +49,8 @@ interface LatestCotejoEventRow {
 }
 interface StartResult extends StartRouteBatchResponseDto {
   events: DispatchStatusChangedEvent[];
+  /** True when the same `eventId` had already started the batch: nothing was written, nothing is announced. */
+  replayed: boolean;
 }
 
 @Injectable()
@@ -56,6 +59,7 @@ export class RouteBatchStartService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly outbox: OutboxService,
     private readonly events: EventEmitter2,
+    private readonly alerts: PlanningAlertsService,
   ) {}
 
   async start(
@@ -81,7 +85,14 @@ export class RouteBatchStartService {
 
     for (const event of result.events)
       this.events.emit(DISPATCH_STATUS_CHANGED_EVENT, event);
-    const { events: _events, ...response } = result;
+    // ST-241.3: stops left out by a failed package check wait for the coordinator. The alert is raised once, on the
+    // first start (not on a replay), and raising it never fails the start: `raise` only logs if it cannot store it.
+    if (!result.replayed && result.excludedDispatchIds.length > 0)
+      await this.alerts.raise('cotejo_exclusion_pending', {
+        routeBatchId: result.routeBatchId,
+        excludedDispatchIds: result.excludedDispatchIds,
+      });
+    const { events: _events, replayed: _replayed, ...response } = result;
     return response;
   }
 
@@ -130,6 +141,7 @@ export class RouteBatchStartService {
         excludedDispatchIds: prior.metadata.excludedDispatchIds ?? [],
         startedAt: prior.metadata.startedAt,
         events: [],
+        replayed: true,
       };
     }
 
@@ -346,6 +358,7 @@ export class RouteBatchStartService {
       excludedDispatchIds: metadata.excludedDispatchIds ?? [],
       startedAt: metadata.startedAt,
       events: dispatchEvents,
+      replayed: false,
     };
   }
 }

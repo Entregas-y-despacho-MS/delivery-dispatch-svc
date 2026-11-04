@@ -17,6 +17,7 @@ import { RouteBatchAcceptService } from './services/route-batch-accept.service.j
 import { RouteBatchCotejoExclusionsService } from './services/route-batch-cotejo-exclusions.service.js';
 import { RouteBatchCotejoResolutionService } from './services/route-batch-cotejo-resolution.service.js';
 import { CotejoResolutionController } from './controllers/cotejo-resolution.controller.js';
+import { PlanningAlertsService } from '../../../app/planning/services/planning-alerts.service.js';
 import { OutboundMessagesModule } from '../../messaging/outbound-messages/outbound-messages.module.js';
 import { PromiseFirmingModule } from '../../../app/promise-firming/promise-firming.module.js';
 
@@ -38,6 +39,9 @@ import { PromiseFirmingModule } from '../../../app/promise-firming/promise-firmi
     RouteBatchAcceptService,
     RouteBatchCotejoExclusionsService,
     RouteBatchCotejoResolutionService,
+    // PlanningModule imports this module, so it cannot be imported back (cycle). The service has no state of its
+    // own (DataSource + the global event emitter), so this module gets its own instance for the cotejo alert.
+    PlanningAlertsService,
   ],
   exports: [RouteBatchReviewerService, RouteCapacityService, RouteBatchResourcesService],
 })

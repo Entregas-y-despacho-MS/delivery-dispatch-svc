@@ -29,7 +29,8 @@ export type PlanAlertKind =
     | 'cutoff_group_stale'
     | 'cutoff_batch_skipped'
     | 'final_review_overdue'
-    | 'final_review_escalated';
+    | 'final_review_escalated'
+    | 'cotejo_exclusion_pending';
 
 export interface PlanningAlertEvent {
     kind: PlanAlertKind;
@@ -57,6 +58,7 @@ const SEVERITY: Record<PlanAlertKind, PlanAlertSeverity> = {
     cutoff_batch_skipped: 'warning',
     final_review_overdue: 'exception',
     final_review_escalated: 'exception',
+    cotejo_exclusion_pending: 'exception',
 };
 
 /**
