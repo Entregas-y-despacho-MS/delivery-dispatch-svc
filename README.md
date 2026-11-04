@@ -292,6 +292,12 @@ su descripción y el resultado esperado. En cada corrida el simulador:
 | inventory | `shipment-cancelled` | El despacho pasa a `cancelled`. |
 | inventory | `invalid-shipment` | Falta `packages`: dead-letter por esquema. |
 | inventory | `lost-shipment` | «Mensaje perdido» desde Almacén: ver abajo. |
+| inventory | `rma-requested` | Devolución aprobada (RMA, `inventory.return.requested`) con coordenadas: se crea un recojo domiciliario `warehouse_return_pickup` en `pickup_scheduled` con destino `WH-LPZ-01` y la web recibe `dispatch.status_changed`. Ver «Demo de devoluciones (RMA)». |
+| inventory | `rma-without-coordinates` | RMA sin coordenadas: el recojo queda en `address_review`, no en `pickup_scheduled`. |
+| inventory | `rma-unknown-warehouse` | `warehouseId` inexistente: dead-letter de `inventory.return.requested` (`unknown_warehouse`), `integration.message_rejected` y sin recojo. |
+| inventory | `rma-invalid` | Falta `returnReason`: dead-letter por esquema (`schema_invalid`), alerta y sin recojo. |
+| inventory | `rma-duplicate` | El mismo `messageId` llega dos veces; la segunda se ignora (un recojo, un solo evento). |
+| inventory | `rma-stale-version` | Llega la versión 3 y después la 2 del mismo RMA; la 2 se ignora y el recojo conserva la dirección de la 3. |
 | procurement | `pickup-requested` | Se crea un despacho de recogida en proveedor (`supplier_pickup`). |
 | procurement | `pickup-window-change` | La recogida toma la nueva ventana y estimaciones. |
 | procurement | `pickup-cancelled` | La recogida pasa a `cancelled`. |
@@ -324,7 +330,44 @@ La tarea no tiene disparo manual (`POST /planning/*` solo cubre el generador y e
 no se completa recibe hasta 3 solicitudes, separadas por 15 minutos, y después una alerta
 `incomplete_order_alert` / evento `integration.order_incomplete`.
 
+### Demo de devoluciones (RMA) — `ES-238`
+Integración entrante de Almacén: al aprobar una devolución publica `inventory.return.requested` y
+Despachos crea el recojo domiciliario sin intervención del coordinador. Requisitos: los de arriba
+(emulador y backend con `MESSAGING_ADAPTER=pubsub`); **no** hace falta la zona de entrega, porque el
+recojo no se asigna a una zona al crearse.
+
+```bash
+npm run simulate:inventory -- --scenario rma-requested
+```
+
+Publica un RMA `RMA-SIM-0001-<runId>` con su dirección en La Paz, un bulto estimado y fecha de recojo
+preferida dos días después. Qué debe observarse:
+
+1. **Recojo creado:** un despacho `warehouse_return_pickup` en `pickup_scheduled`, con
+   `source_order_ref` igual al `rmaId`, el almacén `WH-LPZ-01` como destino, el motivo y los bultos, y
+   un evento `created_from_rma` en su historial:
+   ```sql
+   SELECT d.dispatch_id, ds.name AS status, d.source_order_ref, d.return_reason, d.estimated_boxes
+     FROM dispatches d JOIN dispatch_statuses ds USING (dispatch_status_id)
+    WHERE d.source_order_ref LIKE 'RMA-SIM-%' ORDER BY d.dispatch_id DESC;
+   ```
+2. **Web:** el recojo aparece en la página **Recojos** (`GET /api/pickup-orders`) con origen RMA, y la
+   lista se refresca sola al llegar el evento `dispatch.status_changed` (sala de coordinadores y
+   supervisores). *Esa página y el endpoint son `ST-81.1` y `ST-81.2`, aún «Por hacer» en el Sprint 3:
+   mientras no estén, el recojo se comprueba con la consulta anterior y el evento por socket.*
+3. **Otros resultados:** con `rma-without-coordinates` el recojo queda en `address_review`; con
+   `rma-unknown-warehouse` y `rma-invalid` no se crea nada, el mensaje va a
+   `inventory.return.requested.dead-letter` (`npm run simulate:listen -- --dead-letters`) y aparece la
+   alerta `integration.message_rejected`; con `rma-duplicate` y `rma-stale-version` hay un solo recojo.
+
+Cada corrida usa un `runId` distinto, así que se puede repetir sin que la deduplicación la ignore.
+`--all` publica todos los escenarios de Almacén, los RMA incluidos.
+
 ### Pruebas
 `npm run test` incluye `test/simulator/`: valida cada fixture contra su esquema (`contracts/messages/`)
 y corre cada escenario contra los consumidores reales con adaptadores en memoria. No necesita Docker ni
 PostgreSQL; la persistencia SQL la cubren los `*.integration.spec.ts` de cada consumidor.
+
+El circuito completo del RMA (mensaje → recojo `pickup_scheduled` → evento por socket; inválido →
+dead-letter y alerta) lo recorre `src/modules/messaging/rma-pickup-intake/rma-pickup.integration.spec.ts`
+con el adaptador en memoria y el `DispatchEventsSocketListener` real.
