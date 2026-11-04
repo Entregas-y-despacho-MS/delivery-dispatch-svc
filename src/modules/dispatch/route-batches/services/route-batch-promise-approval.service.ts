@@ -11,6 +11,7 @@ import { ApproveRouteBatchPromisesResponseDto, PromiseEmailResultDto } from '../
 import { RouteBatchApprovalConflictException, RouteBatchNotFoundException, RouteBatchNotProvisionalException, RouteBatchReviewerMismatchException } from '../exceptions/index.js';
 import { RouteCapacityService } from './route-capacity.service.js';
 import { DISPATCH_STATUS_CHANGED_EVENT, type DispatchStatusChangedEvent } from '../../../../app/dispatch-status/dispatch-status-changed.event.js';
+import { PromiseFirmingService } from '../../../../app/promise-firming/services/promise-firming.service.js';
 
 interface BatchRow {
     id: number;
@@ -29,6 +30,7 @@ interface DispatchRow {
     scheduled_window_end: Date | null;
     tracking_token: string | null;
     promise_notified_at: Date | null;
+    promise_firmed_at: Date | null;
 }
 
 interface ApprovalPlan {
@@ -49,6 +51,7 @@ export class RouteBatchPromiseApprovalService {
         private readonly mailer: MailerPort,
         config: ConfigService,
         private readonly events: EventEmitter2,
+        private readonly firming: PromiseFirmingService,
     ) {
         this.webUrl = config.get<string>('PUBLIC_WEB_URL', 'http://localhost:5173')!.replace(/\/$/, '');
     }
@@ -107,7 +110,8 @@ export class RouteBatchPromiseApprovalService {
 
         const dispatches: DispatchRow[] = await manager.query(
             `SELECT d.dispatch_id AS id, d.version, s.name AS status, d.contact_email,
-                    d.scheduled_window_start, d.scheduled_window_end, d.tracking_token, d.promise_notified_at
+                    d.scheduled_window_start, d.scheduled_window_end, d.tracking_token, d.promise_notified_at,
+                    d.promise_firmed_at
                FROM dispatches d
                JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
               WHERE d.route_batch_id = $1
@@ -134,6 +138,12 @@ export class RouteBatchPromiseApprovalService {
         for (const dispatch of removed) await this.removeDispatch(manager, routeBatchId, dispatch, actorUserId);
         await this.capacity.assertAssignable(routeBatchId, batch.vehicle_id, manager);
         for (const dispatch of approved) await this.approveDispatch(manager, routeBatchId, dispatch, actorUserId);
+        // A dispatch that was already firm before leaving its previous route batch (coordinator
+        // reschedule, ST-52.2) is re-entering the plan with a fixed date: the warehouse needs a new
+        // preparation order for it, not just the usual promise notification (ST-241.2, D-47).
+        for (const dispatch of approved) {
+            if (dispatch.promise_firmed_at) await this.reissuePromise(manager, dispatch, actorUserId);
+        }
         await manager.query(
             `UPDATE route_batches SET version = version + 1, updated_at = NOW() WHERE route_batch_id = $1`,
             [routeBatchId],
@@ -177,6 +187,26 @@ export class RouteBatchPromiseApprovalService {
             `INSERT INTO dispatch_events (dispatch_id, event_type, actor_user_id, actor_type, reason, metadata)
              VALUES ($1, 'promise_approved', $2, 'user', 'Coordinator approved the delivery promise', $3::jsonb)`,
             [dispatch.id, actorUserId, JSON.stringify({ routeBatchId, previousVersion: dispatch.version, version: dispatch.version + 1, scheduledWindowStart: dispatch.scheduled_window_start, scheduledWindowEnd: dispatch.scheduled_window_end })],
+        );
+    }
+
+    /**
+     * `approveDispatch` already bumped `dispatches.version` inside this same transaction — `reissue`
+     * compares against it to emit with a higher `recordVersion`. A non-`reissued` outcome (should not
+     * happen right after a version bump, but `reissue` never throws for it) is logged, not fatal: the
+     * dispatch is still validly scheduled either way.
+     */
+    private async reissuePromise(manager: EntityManager, dispatch: DispatchRow, actorUserId: number): Promise<void> {
+        const result = await this.firming.reissue(dispatch.id, {
+            manager,
+            reason: 'coordinator_rescheduled',
+            actorUserId,
+        });
+        if (result.outcome === 'reissued') return;
+        await manager.query(
+            `INSERT INTO dispatch_events (dispatch_id, event_type, actor_user_id, actor_type, reason, metadata)
+             VALUES ($1, 'preparation_order_reissue_skipped', $2, 'user', 'Re-approving a firm promise did not produce a new preparation order', $3::jsonb)`,
+            [dispatch.id, actorUserId, JSON.stringify({ outcome: result.outcome, cause: 'cause' in result ? result.cause : null })],
         );
     }
 

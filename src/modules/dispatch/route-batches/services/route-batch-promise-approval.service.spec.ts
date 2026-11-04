@@ -1,15 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import { RouteBatchPromiseApprovalService } from './route-batch-promise-approval.service.js';
 
-function setup(options?: { reviewerId?: number | null; version?: number; dispatches?: any[]; mail?: any }) {
+function setup(options?: { reviewerId?: number | null; version?: number; dispatches?: any[]; mail?: any; reissue?: any }) {
     const rows = options?.dispatches ?? [{
         id: 21, version: 2, status: 'in_planning', contact_email: 'customer@example.test',
         scheduled_window_start: new Date('2026-10-16T13:00:00.000Z'),
         scheduled_window_end: new Date('2026-10-16T15:00:00.000Z'), tracking_token: null, promise_notified_at: null,
+        promise_firmed_at: null,
     }, {
         id: 22, version: 0, status: 'in_planning', contact_email: null,
         scheduled_window_start: new Date('2026-10-16T15:00:00.000Z'),
         scheduled_window_end: new Date('2026-10-16T17:00:00.000Z'), tracking_token: null, promise_notified_at: null,
+        promise_firmed_at: null,
     }];
     const manager = { query: vi.fn(async (sql: string) => {
         if (sql.includes('FROM route_batches')) return [{ id: 7, version: options?.version ?? 1, status: 'provisional', reviewer_user_id: options?.reviewerId ?? 9, vehicle_id: 4 }];
@@ -21,9 +23,10 @@ function setup(options?: { reviewerId?: number | null; version?: number; dispatc
     const mailer = { send: vi.fn().mockResolvedValue(options?.mail ?? { status: 'sent' }) };
     const config = { get: vi.fn().mockReturnValue('https://dispatch.example.test') };
     const events = { emit: vi.fn() };
+    const firming = { reissue: vi.fn().mockResolvedValue(options?.reissue ?? { outcome: 'reissued', dispatchId: 0, recordVersion: 0 }) };
     return {
-        service: new RouteBatchPromiseApprovalService(dataSource as any, capacity as any, mailer as any, config as any, events as any),
-        manager, dataSource, capacity, mailer, rows, events,
+        service: new RouteBatchPromiseApprovalService(dataSource as any, capacity as any, mailer as any, config as any, events as any, firming as any),
+        manager, dataSource, capacity, mailer, rows, events, firming,
     };
 }
 
@@ -85,5 +88,46 @@ describe('RouteBatchPromiseApprovalService', () => {
         expect(manager.query.mock.calls.some(([sql]) => String(sql).includes('SET promise_notified_at = COALESCE'))).toBe(false);
         expect(manager.query.mock.calls.some(([sql]) => String(sql).includes('contact_management_required'))).toBe(true);
         expect(manager.query.mock.calls.some(([sql]) => String(sql).includes('promise_email_bounced'))).toBe(true);
+    });
+
+    it('reissues the preparation order of an already-firm dispatch coming back from a reschedule (ST-241.2)', async () => {
+        const { service, firming } = setup({
+            dispatches: [{
+                id: 21, version: 2, status: 'in_planning', contact_email: null,
+                scheduled_window_start: new Date('2026-10-16T13:00:00.000Z'),
+                scheduled_window_end: new Date('2026-10-16T15:00:00.000Z'), tracking_token: null, promise_notified_at: new Date('2026-10-01T00:00:00.000Z'),
+                promise_firmed_at: new Date('2026-10-01T00:00:00.000Z'),
+            }],
+        });
+
+        await service.approve(7, { version: 1, dispatches: [{ dispatchId: 21, version: 2 }] }, 9);
+
+        expect(firming.reissue).toHaveBeenCalledWith(21, { manager: expect.anything(), reason: 'coordinator_rescheduled', actorUserId: 9 });
+    });
+
+    it('does not reissue a dispatch whose promise was never firm', async () => {
+        const { service, firming } = setup();
+
+        await service.approve(7, { version: 1, dispatches: [{ dispatchId: 21, version: 2 }, { dispatchId: 22, version: 0 }] }, 9);
+
+        expect(firming.reissue).not.toHaveBeenCalled();
+    });
+
+    it('records a note instead of failing the approval when the reissue is not applied', async () => {
+        const { service, manager, firming } = setup({
+            dispatches: [{
+                id: 21, version: 2, status: 'in_planning', contact_email: null,
+                scheduled_window_start: new Date('2026-10-16T13:00:00.000Z'),
+                scheduled_window_end: new Date('2026-10-16T15:00:00.000Z'), tracking_token: null, promise_notified_at: new Date('2026-10-01T00:00:00.000Z'),
+                promise_firmed_at: new Date('2026-10-01T00:00:00.000Z'),
+            }],
+            reissue: { outcome: 'incomplete', dispatchId: 21, cause: 'no_packages' },
+        });
+
+        await expect(service.approve(7, { version: 1, dispatches: [{ dispatchId: 21, version: 2 }] }, 9)).resolves.toBeDefined();
+
+        expect(firming.reissue).toHaveBeenCalled();
+        const note = manager.query.mock.calls.find(([sql]) => String(sql).includes('preparation_order_reissue_skipped'));
+        expect(note?.[1]).toEqual([21, 9, JSON.stringify({ outcome: 'incomplete', cause: 'no_packages' })]);
     });
 });

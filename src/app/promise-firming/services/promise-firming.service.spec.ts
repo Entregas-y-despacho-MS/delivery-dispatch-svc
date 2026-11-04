@@ -244,7 +244,20 @@ describe('PromiseFirmingService.reissue (customer rescheduling, D-47)', () => {
         expect(sqls.some((sql) => sql.includes('UPDATE dispatches'))).toBe(false);
         const event = manager.query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO dispatch_events'))!;
         expect(String(event[0])).toContain('preparation_order_reissued');
-        expect(JSON.parse(event[1][2])).toEqual({ recordVersion: 4 });
+        expect(event[1][1]).toBeNull(); // actor_user_id — this caller never passes it (customer_rescheduled, the default reason)
+        expect(event[1][2]).toBe('customer');
+        expect(JSON.parse(event[1][4])).toEqual({ reason: 'customer_rescheduled', recordVersion: 4 });
+    });
+
+    it('attributes the event to the coordinator when the reason is coordinator_rescheduled (ST-241.2)', async () => {
+        const { service, manager, queued } = setup({ row: { ...firm, version: 4 }, lastSentVersion: 3 });
+
+        const result = await service.reissue(21, { now: WINDOW_END, reason: 'coordinator_rescheduled', actorUserId: 9 });
+
+        expect(result).toEqual({ outcome: 'reissued', dispatchId: 21, recordVersion: 4 });
+        expect(queued).toHaveLength(1);
+        const event = manager.query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO dispatch_events'))!;
+        expect(event[1]).toEqual([21, 9, 'user', expect.stringContaining('Coordinator'), JSON.stringify({ reason: 'coordinator_rescheduled', recordVersion: 4 })]);
     });
 
     it('refuses a version that does not exceed the last order sent (it would not replace it)', async () => {

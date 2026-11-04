@@ -23,6 +23,7 @@ describe('POST /route-batches/:id/approve-promises (e2e)', () => {
     const batchIds: number[] = [];
     const vehicleIds: number[] = [];
     const userIds: number[] = [];
+    const warehouseIds: number[] = [];
     const sent: any[] = [];
 
     const http = () => request(app.getHttpServer());
@@ -63,6 +64,7 @@ describe('POST /route-batches/:id/approve-promises (e2e)', () => {
                 await manager.query(`DELETE FROM route_batches WHERE route_batch_id = ANY($1::int[])`, [batchIds]);
                 await manager.query(`DELETE FROM vehicles WHERE vehicle_id = ANY($1::int[])`, [vehicleIds]);
                 await manager.query(`DELETE FROM users WHERE user_id = ANY($1::int[])`, [userIds]);
+                await manager.query(`DELETE FROM warehouses WHERE warehouse_id = ANY($1::int[])`, [warehouseIds]);
             });
         }
         await app?.close();
@@ -145,5 +147,75 @@ describe('POST /route-batches/:id/approve-promises (e2e)', () => {
             .set(auth(otherReviewerToken)).send({ version: 0, dispatches: [{ dispatchId, version: 0 }] });
         expect(response.status).toBe(403);
         expect(response.body.error).toBe('ROUTE_BATCH_REVIEWER_MISMATCH');
+    });
+
+    it('reissues the preparation order of a dispatch that was already firm before being re-planned (ST-241.2)', async () => {
+        const [{ dispatch_type_id: deliveryTypeId }] = await db.query(`SELECT dispatch_type_id FROM dispatch_types WHERE name = 'delivery'`);
+        const [{ dispatch_status_id: planningStatusId }] = await db.query(`SELECT dispatch_status_id FROM dispatch_statuses WHERE name = 'in_planning'`);
+        const [{ vehicle_status_id: activeVehicleStatusId }] = await db.query(`SELECT vehicle_status_id FROM vehicle_statuses WHERE name = 'active'`);
+        const [{ warehouse_id: warehouseId }] = await db.query(
+            `INSERT INTO warehouses (code, name, address, latitude, longitude, reception_start_time, reception_end_time)
+             VALUES ($1, 'ES241 e2e warehouse', 'Test warehouse address', -16.5, -68.1, '08:00', '18:00') RETURNING warehouse_id`,
+            [`WH-ES241-${run}`],
+        );
+        warehouseIds.push(warehouseId);
+        const [{ vehicle_id: vehicleId }] = await db.query(
+            `INSERT INTO vehicles (vehicle_status_id, type, model, plate, capacity_kg, capacity_m3)
+             VALUES ($1, 'van', 'ES241 e2e', $2, 100, 10) RETURNING vehicle_id`,
+            [activeVehicleStatusId, `F${run.slice(-5)}${vehicleIds.length}`],
+        );
+        vehicleIds.push(vehicleId);
+        const [{ route_batch_id: routeBatchId }] = await db.query(
+            `INSERT INTO route_batches (status, reviewer_user_id, vehicle_id, shift_date)
+             VALUES ('provisional', $1, $2, '2026-10-22') RETURNING route_batch_id`,
+            [reviewerId, vehicleId],
+        );
+        batchIds.push(routeBatchId);
+        const ref = `ES241-${run}`;
+        sourceRefs.push(ref);
+        const trackingCode = `DSP-2026-${String(Date.now() % 100000).padStart(5, '0')}`;
+        const firmedAt = new Date('2026-10-01T00:00:00Z');
+        const [{ dispatch_id: dispatchId }] = await db.query(
+            `INSERT INTO dispatches (dispatch_type_id, dispatch_status_id, route_batch_id, sequence_order,
+                source_order_ref, delivery_address, contact_name, contact_email, estimated_weight_kg,
+                scheduled_window_start, scheduled_window_end, origin_warehouse_id, tracking_code,
+                promise_firmed_at, customer_confirmation, version)
+             VALUES ($1, $2, $3, 1, $4, 'Test address', 'E2E customer', NULL, 1,
+                '2026-10-22T13:00:00Z', '2026-10-22T15:00:00Z', $5, $6, $7, 'confirmed', 3)
+             RETURNING dispatch_id`,
+            [deliveryTypeId, planningStatusId, routeBatchId, ref, warehouseId, trackingCode, firmedAt],
+        );
+        await db.query(
+            `INSERT INTO dispatch_packages (dispatch_id, external_package_id, length_cm, width_cm, height_cm, gross_weight_kg)
+             VALUES ($1, $2, 30, 20, 15, 4.5)`,
+            [dispatchId, `PKG-${run}`],
+        );
+
+        const response = await http().post(api(`/route-batches/${routeBatchId}/approve-promises`))
+            .set(auth(reviewerToken))
+            .send({ version: 0, dispatches: [{ dispatchId: Number(dispatchId), version: 3 }] });
+
+        expect(response.status).toBe(200);
+
+        const events = await db.query(
+            `SELECT event_type, actor_user_id, actor_type FROM dispatch_events WHERE dispatch_id = $1 ORDER BY dispatch_event_id`,
+            [dispatchId],
+        );
+        expect(events).toEqual(expect.arrayContaining([
+            expect.objectContaining({ event_type: 'promise_approved' }),
+            expect.objectContaining({ event_type: 'preparation_order_reissued', actor_type: 'user', actor_user_id: reviewerId }),
+        ]));
+
+        const [outboxRow] = await db.query(
+            `SELECT type, payload FROM outbound_messages WHERE payload->'data'->>'trackingCode' = $1 ORDER BY created_at DESC LIMIT 1`,
+            [trackingCode],
+        );
+        expect(outboxRow).toBeDefined();
+        expect(outboxRow.type).toBe('dispatch.shipment.prepare_requested');
+        expect(outboxRow.payload.data.recordVersion).toBe(4);
+
+        const [dispatchRow] = await db.query(`SELECT version, promise_firmed_at FROM dispatches WHERE dispatch_id = $1`, [dispatchId]);
+        expect(Number(dispatchRow.version)).toBe(4);
+        expect(dispatchRow.promise_firmed_at).toEqual(firmedAt);
     });
 });
