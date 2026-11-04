@@ -15,13 +15,15 @@ import { RouteBatchCotejoPhotoService } from './services/route-batch-cotejo-phot
 import { RouteBatchReviewerSweepTask } from './route-batch-reviewer-sweep.task.js';
 import { RouteBatchAcceptService } from './services/route-batch-accept.service.js';
 import { RouteBatchCotejoExclusionsService } from './services/route-batch-cotejo-exclusions.service.js';
+import { RouteBatchCotejoResolutionService } from './services/route-batch-cotejo-resolution.service.js';
+import { CotejoResolutionController } from './controllers/cotejo-resolution.controller.js';
 import { OutboundMessagesModule } from '../../messaging/outbound-messages/outbound-messages.module.js';
 import { PromiseFirmingModule } from '../../../app/promise-firming/promise-firming.module.js';
 
 // Reviewer assignment (ST-50.4, D-42). The batch planner (ST-50.2) calls RouteBatchReviewerService.assignReviewer.
 @Module({
   imports: [TypeOrmModule.forFeature([RouteBatch, RouteBatchEvent]), OutboundMessagesModule, PromiseFirmingModule],
-  controllers: [RouteBatchesController],
+  controllers: [RouteBatchesController, CotejoResolutionController],
   providers: [
     RouteBatchReviewerService,
     RouteBatchReviewerListener,
@@ -35,6 +37,7 @@ import { PromiseFirmingModule } from '../../../app/promise-firming/promise-firmi
     RouteBatchCotejoPhotoService,
     RouteBatchAcceptService,
     RouteBatchCotejoExclusionsService,
+    RouteBatchCotejoResolutionService,
   ],
   exports: [RouteBatchReviewerService, RouteCapacityService, RouteBatchResourcesService],
 })
