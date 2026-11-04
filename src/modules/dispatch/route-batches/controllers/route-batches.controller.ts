@@ -24,6 +24,8 @@ import { RouteBatchFinalApprovalService } from '../services/route-batch-final-ap
 import { RouteBatchStartService } from '../services/route-batch-start.service.js';
 import { RouteBatchCotejoPhotoService } from '../services/route-batch-cotejo-photo.service.js';
 import { RouteBatchAcceptService } from '../services/route-batch-accept.service.js';
+import { RouteBatchCotejoExclusionsService } from '../services/route-batch-cotejo-exclusions.service.js';
+import { CotejoExclusionsResponseDto } from '../dto/cotejo-exclusion.dto.js';
 import { AcceptRouteBatchDto } from '../dto/accept-route-batch.dto.js';
 import { AcceptRouteBatchResponseDto } from '../dto/accept-route-batch-response.dto.js';
 import { UploadCotejoPhotoDto } from '../dto/upload-cotejo-photo.dto.js';
@@ -76,7 +78,23 @@ export class RouteBatchesController {
     private readonly startService: RouteBatchStartService,
     private readonly cotejoPhotoService: RouteBatchCotejoPhotoService,
     private readonly acceptService: RouteBatchAcceptService,
+    private readonly cotejoExclusionsService: RouteBatchCotejoExclusionsService,
   ) {}
+
+  // Declared before `:id` so that `cotejo-exclusions` is not read as a route batch id.
+  @Get('cotejo-exclusions')
+  @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
+  @ApiOperation({
+    summary: 'List the stops left out of the route by a failed package check',
+    description:
+      'ST-241.3. Every `assigned` dispatch of an `in_execution` route batch whose latest cotejo event is `cotejo_failed` (the stop did not leave, RF-U24), ordered by shift date, batch and route order. Each stop carries its address and contact and its unresolved `failures`, one per package: `packageId`, `reason` (`missing`, `damaged` or `does_not_fit`), `detail`, `reportedAt` and `photoUrl`, a short-lived signed URL (about 5 minutes; ask again for a fresh one). A stop leaves the list when the coordinator marks it with `POST /dispatches/:id/cotejo-resolved`, or when it is rescheduled or cancelled (it is no longer `assigned`). Read only: it writes nothing. Requires coordinator or supervisor role, or root.',
+  })
+  @ApiOkResponse({ type: CotejoExclusionsResponseDto })
+  @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+  @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
+  async findCotejoExclusions(): Promise<CotejoExclusionsResponseDto> {
+    return await this.cotejoExclusionsService.findAll();
+  }
 
   @Get()
   @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)

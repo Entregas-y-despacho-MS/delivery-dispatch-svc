@@ -14,6 +14,7 @@ import { RouteBatchStartService } from './services/route-batch-start.service.js'
 import { RouteBatchCotejoPhotoService } from './services/route-batch-cotejo-photo.service.js';
 import { RouteBatchReviewerSweepTask } from './route-batch-reviewer-sweep.task.js';
 import { RouteBatchAcceptService } from './services/route-batch-accept.service.js';
+import { RouteBatchCotejoExclusionsService } from './services/route-batch-cotejo-exclusions.service.js';
 import { OutboundMessagesModule } from '../../messaging/outbound-messages/outbound-messages.module.js';
 import { PromiseFirmingModule } from '../../../app/promise-firming/promise-firming.module.js';
 
@@ -33,6 +34,7 @@ import { PromiseFirmingModule } from '../../../app/promise-firming/promise-firmi
     RouteBatchStartService,
     RouteBatchCotejoPhotoService,
     RouteBatchAcceptService,
+    RouteBatchCotejoExclusionsService,
   ],
   exports: [RouteBatchReviewerService, RouteCapacityService, RouteBatchResourcesService],
 })
