@@ -37,7 +37,10 @@ export class SupplierPickupController {
         { code: 'SUPPLIER_PICKUP_ITEMS_MISMATCH', message: 'items must match exactly the items expected for this pickup.' },
         { code: 'EVENT_ID_ALREADY_USED', message: 'This eventId was already used for another event.' },
     )
-    @ApiUnprocessableEntity({ code: 'SUPPLIER_PICKUP_EVIDENCE_REQUIRED', message: 'A reasonCode and a photo already registered for this dispatch are required when a received quantity differs from the expected one.' })
+    @ApiUnprocessableEntity(
+        { code: 'SUPPLIER_PICKUP_EVIDENCE_REQUIRED', message: 'A reasonCode and a photo already registered for this dispatch are required when a received quantity differs from the expected one.' },
+        { code: 'SUPPLIER_PICKUP_SIGNATURE_REQUIRED', message: 'signatureId must reference a signature already registered for this dispatch.' },
+    )
     async registerCollection(
         @Param('id', ParseIdPipe) dispatchId: number,
         @CurrentUser('id') driverId: number,
