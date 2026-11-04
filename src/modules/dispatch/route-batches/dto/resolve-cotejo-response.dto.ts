@@ -16,6 +16,7 @@ export class ResolveCotejoResponseDto {
   routeBatchId!: number;
 
   @ApiProperty({
+    type: String,
     format: 'date-time',
     example: '2026-10-20T09:15:00.000Z',
     description: 'UTC time when the resolution was recorded (`cotejo_resolved` event).',

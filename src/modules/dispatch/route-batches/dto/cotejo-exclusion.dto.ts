@@ -35,6 +35,7 @@ export class CotejoExclusionFailureDto {
   photoUrl!: string | null;
 
   @ApiProperty({
+    type: String,
     format: 'date-time',
     example: '2026-10-20T07:50:00.000Z',
     description: 'UTC time when the failure was recorded.',
@@ -60,6 +61,7 @@ export class CotejoExclusionDto {
 
   @ApiProperty({
     type: String,
+    format: 'date',
     example: '2026-10-20',
     description: 'Shift date of the route batch (`YYYY-MM-DD`).',
   })

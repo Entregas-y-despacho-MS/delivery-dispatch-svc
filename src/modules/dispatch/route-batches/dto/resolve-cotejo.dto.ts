@@ -8,7 +8,7 @@ export class ResolveCotejoDto {
     nullable: true,
     example: 'The package was found in the warehouse and handed to the driver.',
     description:
-      'Optional note of the coordinator about how the failure was resolved; kept in the `cotejo_resolved` event. `null` or omitted records none.',
+      'Optional note of the coordinator about how the failure was resolved; kept in the `cotejo_resolved` event. `null`, omitted or blank (only whitespace) records none.',
   })
   @IsOptional()
   @IsString({ message: 'note must be a string.' })

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { StoragePort } from '../../../../plugins/storage/storage.port.js';
@@ -42,6 +42,8 @@ interface CotejoEventRow {
  */
 @Injectable()
 export class RouteBatchCotejoExclusionsService {
+  private readonly logger = new Logger(RouteBatchCotejoExclusionsService.name);
+
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly storage: StoragePort,
@@ -118,7 +120,12 @@ export class RouteBatchCotejoExclusionsService {
       url = this.storage
         .getAccessUrl(stored, COTEJO_PHOTO_ACCESS_TTL_SECONDS)
         .then(({ url: signedUrl }) => signedUrl)
-        .catch(() => null);
+        .catch((error: unknown) => {
+          this.logger.warn(
+            `Could not sign a cotejo photo url: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return null;
+        });
       cache.set(stored, url);
     }
     return url;
