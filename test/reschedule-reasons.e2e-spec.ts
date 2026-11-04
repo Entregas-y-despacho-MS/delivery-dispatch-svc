@@ -88,19 +88,26 @@ describe('Motivos de reprogramación/reasignación (e2e, RF-A33)', () => {
     });
 
     // ── Permisos ───────────────────────────────────────────────────────────────
-    describe('permisos: coordinador y supervisor administran; admin y driver no entran', () => {
+    describe('permisos: el coordinador administra; el supervisor solo lee; admin y driver no entran (ST-59.1)', () => {
         it('sin token → 401', async () => {
             expect((await request(app.getHttpServer()).get(url())).status).toBe(401);
         });
 
-        it('coordinator y supervisor pueden listar, leer, crear y editar', async () => {
-            for (const role of ['coordinator', 'supervisor']) {
-                const reason = await created();
-                expect((await list('', role)).status, role).toBe(200);
-                expect((await get(reason.id, role)).status, role).toBe(200);
-                expect((await post(validBody(), role)).status, role).toBe(201);
-                expect((await put(reason.id, { active: false }, role)).status, role).toBe(200);
-            }
+        it('coordinator puede listar, leer, crear y editar', async () => {
+            const reason = await created();
+            expect((await list('', 'coordinator')).status).toBe(200);
+            expect((await get(reason.id, 'coordinator')).status).toBe(200);
+            expect((await post(validBody(), 'coordinator')).status).toBe(201);
+            expect((await put(reason.id, { active: false }, 'coordinator')).status).toBe(200);
+        });
+
+        it('supervisor puede listar y leer, pero no crear ni editar, y no se modifica nada', async () => {
+            const reason = await created();
+            expect((await list('', 'supervisor')).status).toBe(200);
+            expect((await get(reason.id, 'supervisor')).status).toBe(200);
+            expect((await post(validBody(), 'supervisor')).status).toBe(403);
+            expect((await put(reason.id, { active: false }, 'supervisor')).status).toBe(403);
+            expect((await get(reason.id)).body.active).toBe(true);
         });
 
         it('admin y driver no pueden ni leer ni escribir, y no se modifica nada', async () => {

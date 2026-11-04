@@ -14,7 +14,7 @@ import { FindAllRescheduleReasonsParamsDto } from '../dto/find-all-reschedule-re
 import { FindAllRescheduleReasonsResponseDto } from '../dto/find-all-reschedule-reasons-response.dto.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
 import { ApiNotFound, ApiUnauthorized, ApiBadRequests, ApiIdParam, ApiConflict } from '../../../../shared/utils/swagger/index.js';
-import { Roles } from '../../../../app/auth/decorators/index.js';
+import { Roles, CoordinatorOnly } from '../../../../app/auth/decorators/index.js';
 import { ParseIdPipe } from '../../../../shared/pipes/index.js';
 import { RoleEnum, RescheduleReasonCategoryEnum } from '../../../../shared/enums/index.js';
 
@@ -25,9 +25,10 @@ import { RoleEnum, RescheduleReasonCategoryEnum } from '../../../../shared/enums
  *   INVALID_TOKEN                           401 — JWT is missing, malformed, or expired.
  *   INSUFFICIENT_PERMISSIONS                403 — Authenticated but role does not meet the endpoint requirement.
  *
- * RF-A33 — the catalog is managed by the dispatch coordinator and the operations supervisor
- * (root bypasses). Unlike incident-reasons, there is no external consumer (mobile app) reading
- * this catalog — it is only for the operations panel's reschedule/reassignment modal.
+ * RF-A33 — the catalog is managed by the dispatch coordinator (create/update are
+ * @CoordinatorOnly(), root bypasses). The operations supervisor can only read it (ST-59.1).
+ * Unlike incident-reasons, there is no external consumer (mobile app) reading this catalog — it
+ * is only for the operations panel's reschedule/reassignment modal.
  */
 @ApiTags('Reschedule Reasons')
 @ApiBearerAuth('access-token')
@@ -66,11 +67,11 @@ export class RescheduleReasonsController {
     }
 
     @Post()
-    @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
+    @CoordinatorOnly()
     @HttpCode(HttpStatus.CREATED)
     @ApiOperation({
         summary:     'Create a reschedule reason',
-        description: 'Creates a reschedule reason with its `code`, its `name`, its `category` (client, operations or force_majeure — required, the coordinator must classify it explicitly) and an optional `description`. The new reason is always created enabled (`active: true`), so `active` is not accepted here. 409 when the code or the name is taken. Requires coordinator or supervisor role, or root.',
+        description: 'Creates a reschedule reason with its `code`, its `name`, its `category` (client, operations or force_majeure — required, the coordinator must classify it explicitly) and an optional `description`. The new reason is always created enabled (`active: true`), so `active` is not accepted here. 409 when the code or the name is taken. Requires coordinator role, or root (the supervisor can only read this catalog).',
     })
     @ApiBadRequests({ validation: true, example: ['Code is required.', 'Name is required.', 'Category must be one of: client, operations, force_majeure.'] })
     @ApiCreatedResponse({ type: RescheduleReasonDto })
@@ -81,10 +82,10 @@ export class RescheduleReasonsController {
     }
 
     @Put(':id')
-    @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
+    @CoordinatorOnly()
     @ApiOperation({
         summary:     'Update a reschedule reason',
-        description: 'Partially updates a reschedule reason: only the fields sent are changed, and an empty body changes nothing. `null` is rejected on every field except `description`, where it (or an empty text) clears the value. If any field is invalid nothing is saved. `active: false` disables the reason (it stops being offered for new reschedules/reassignments, but ones already logged with it are not affected) and `active: true` enables it again; there is no delete endpoint for this catalog. 409 when a changed code or name is taken. Requires coordinator or supervisor role, or root.',
+        description: 'Partially updates a reschedule reason: only the fields sent are changed, and an empty body changes nothing. `null` is rejected on every field except `description`, where it (or an empty text) clears the value. If any field is invalid nothing is saved. `active: false` disables the reason (it stops being offered for new reschedules/reassignments, but ones already logged with it are not affected) and `active: true` enables it again; there is no delete endpoint for this catalog. 409 when a changed code or name is taken. Requires coordinator role, or root (the supervisor can only read this catalog).',
     })
     @ApiIdParam('Reschedule reason')
     @ApiBadRequests({ validation: true, id: true, example: ['Name must not be empty.'] })
