@@ -59,7 +59,7 @@ reservado). Debe coincidir con `PORTAL_ROUTES` del portal web (`config/portal-ro
 | Lotes de ruta | `POST :id/approve-final` (2.ª aprobación) | **No**, solo Coordinador |
 | Planificación | `POST /planning/generate`, `/planning/cutoff`, `/dispatch-reservations/*` | **No**, solo Coordinador |
 | Despachos | `POST :id/reschedule`, `:id/return`, `:id/cancel`, `:id/pickup-schedule`, `:id/pickup-reschedule`, `change-requests/:id/tracking-link` | **No**, solo Coordinador |
-| Flota | `/vehicles` (CRUD), `POST /vehicle-maintenances`, `/vehicle-incident-types` (CRUD) | Sí |
+| Flota | `/vehicles` (CRUD), `POST /vehicle-maintenances`, `/vehicle-incident-types` (`GET`, `POST`, `PUT`) | Sí |
 | Catálogos | `GET /warehouses`, `GET /incident-reasons`, `GET /reschedule-reasons` | Sí (solo lectura) |
 | Catálogos | `POST` y `PUT` de `/incident-reasons` y `/reschedule-reasons` | **No**, solo Coordinador (desde ST-59.1) |
 | Catálogos | `/service-levels`, `/delivery-zones` | **No**, solo Coordinador |
