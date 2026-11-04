@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { ArrayNotEmpty, IsArray, IsDateString, IsInt, IsOptional, IsString, IsUUID, Matches, MaxLength, Min, ValidateNested } from 'class-validator';
+import { ArrayNotEmpty, IsArray, IsDateString, IsInt, IsNumber, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, ValidateNested } from 'class-validator';
 import { SupplierPickupItemDto } from './supplier-pickup-item.dto.js';
 
 export class RegisterSupplierPickupDto {
@@ -20,10 +20,31 @@ export class RegisterSupplierPickupDto {
     @Min(0)
     receivedBoxes!: number;
 
+    @ApiProperty({ format: 'uuid', example: '01933b6e-7f2a-7c3d-9a1b-2f8e6c4d5a12', description: "UUID v7 of a signature evidence already uploaded for this dispatch (ST-31.3) — proof that the supplier's contact released custody of the goods." })
+    @IsUUID('7')
+    signatureId!: string;
+
     @ApiProperty({ format: 'date-time', example: '2026-11-03T14:03:00.000Z', description: 'UTC time when the driver confirmed the pickup.' })
     @IsDateString({ strict: true })
     @Matches(/Z$/, { message: 'occurredAt must be expressed in UTC and end with Z.' })
     occurredAt!: string;
+
+    @ApiProperty({ minimum: -90, maximum: 90, example: -16.5001, description: 'Latitude captured when the driver confirmed the pickup.' })
+    @IsNumber({ allowNaN: false, allowInfinity: false })
+    @Min(-90)
+    @Max(90)
+    lat!: number;
+
+    @ApiProperty({ minimum: -180, maximum: 180, example: -68.1193, description: 'Longitude captured when the driver confirmed the pickup.' })
+    @IsNumber({ allowNaN: false, allowInfinity: false })
+    @Min(-180)
+    @Max(180)
+    lng!: number;
+
+    @ApiProperty({ minimum: 0, example: 8.4, description: 'GPS horizontal accuracy in meters.' })
+    @IsNumber({ allowNaN: false, allowInfinity: false })
+    @Min(0)
+    accuracy!: number;
 
     @ApiPropertyOptional({ example: 'INC-QTY-MISMATCH', description: 'Code of an active incident reason in the catalog. Required when any item differs from its expected quantity.' })
     @IsOptional()

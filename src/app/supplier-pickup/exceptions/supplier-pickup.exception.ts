@@ -7,3 +7,7 @@ export class SupplierPickupConflictException extends ConflictException {
 export class SupplierPickupEvidenceRequiredException extends UnprocessableEntityException {
     constructor() { super({ message: 'A reasonCode and a photo already registered for this dispatch are required when a received quantity differs from the expected one.', error: 'SUPPLIER_PICKUP_EVIDENCE_REQUIRED' }); }
 }
+
+export class SupplierPickupSignatureRequiredException extends UnprocessableEntityException {
+    constructor() { super({ message: 'signatureId must reference a signature already registered for this dispatch.', error: 'SUPPLIER_PICKUP_SIGNATURE_REQUIRED' }); }
+}

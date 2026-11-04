@@ -57,6 +57,13 @@ describe('POST /dispatches/:id/supplier-pickup and /arrived-at-warehouse (ST-239
         return id;
     }
 
+    async function insertEvidence(dispatchId: number, type: string, fileUrl: string): Promise<string> {
+        const evidenceId = uuidv7();
+        evidenceIds.push(evidenceId);
+        await db.query(`INSERT INTO delivery_evidences (delivery_evidence_id, dispatch_id, type, file_url) VALUES ($1,$2,$3,$4)`, [evidenceId, dispatchId, type, fileUrl]);
+        return evidenceId;
+    }
+
     async function status(id: number): Promise<string> {
         const [row] = await db.query(
             `SELECT ds.name FROM dispatches d JOIN dispatch_statuses ds ON ds.dispatch_status_id=d.dispatch_status_id WHERE d.dispatch_id=$1`, [id],
@@ -64,11 +71,23 @@ describe('POST /dispatches/:id/supplier-pickup and /arrived-at-warehouse (ST-239
         return row.name;
     }
 
+    const gps = { lat: -16.5001, lng: -68.1193, accuracy: 8.4 };
+    // Only a validation placeholder — passes DTO validation for tests whose failure is expected
+    // before the signature is ever checked (ownership, type, status). Tests exercising the real
+    // signature requirement pass their own signatureId from insertEvidence(..., 'signature', ...).
     const conformBody = (extra: Record<string, unknown> = {}) => ({
         eventId: uuidv7(),
         items: [{ itemCode: 'SKU-1', receivedQuantity: 2 }, { itemCode: 'SKU-2', receivedQuantity: 3 }],
         receivedBoxes: 5,
         occurredAt: new Date(Date.now() - 60_000).toISOString(),
+        signatureId: uuidv7(),
+        ...gps,
+        ...extra,
+    });
+    const arrivalBody = (extra: Record<string, unknown> = {}) => ({
+        eventId: uuidv7(),
+        occurredAt: new Date().toISOString(),
+        ...gps,
         ...extra,
     });
 
@@ -124,7 +143,8 @@ describe('POST /dispatches/:id/supplier-pickup and /arrived-at-warehouse (ST-239
 
     it('registers a conforming collection, moves to picked_up_in_transit and publishes the transfer status', async () => {
         const id = await dispatch();
-        const payload = conformBody();
+        const signatureId = await insertEvidence(id, 'signature', 'https://files.test/signature.png');
+        const payload = conformBody({ signatureId });
 
         const response = await postPickup(id, payload);
 
@@ -158,7 +178,8 @@ describe('POST /dispatches/:id/supplier-pickup and /arrived-at-warehouse (ST-239
 
     it('rejects a quantity difference without reasonCode/photoId with 422', async () => {
         const id = await dispatch();
-        const payload = conformBody({ items: [{ itemCode: 'SKU-1', receivedQuantity: 1 }, { itemCode: 'SKU-2', receivedQuantity: 3 }] });
+        const signatureId = await insertEvidence(id, 'signature', 'https://files.test/signature.png');
+        const payload = conformBody({ signatureId, items: [{ itemCode: 'SKU-1', receivedQuantity: 1 }, { itemCode: 'SKU-2', receivedQuantity: 3 }] });
 
         const response = await postPickup(id, payload);
 
@@ -167,12 +188,26 @@ describe('POST /dispatches/:id/supplier-pickup and /arrived-at-warehouse (ST-239
         expect(await status(id)).toBe('in_transit');
     });
 
+    it('rejects a missing or foreign signature with 422', async () => {
+        const id = await dispatch();
+
+        const missing = await postPickup(id, conformBody({ signatureId: uuidv7() }));
+        expect(missing.status).toBe(422);
+        expect(missing.body.error).toBe('SUPPLIER_PICKUP_SIGNATURE_REQUIRED');
+
+        const other = await dispatch();
+        const foreignSignatureId = await insertEvidence(other, 'signature', 'https://files.test/signature.png');
+        const foreign = await postPickup(id, conformBody({ signatureId: foreignSignatureId }));
+        expect(foreign.status).toBe(422);
+        expect(foreign.body.error).toBe('SUPPLIER_PICKUP_SIGNATURE_REQUIRED');
+    });
+
     it('registers a valid difference as an incident and publishes dispatch.transfer.incident_reported', async () => {
         const id = await dispatch();
-        const evidenceId = uuidv7();
-        evidenceIds.push(evidenceId);
-        await db.query(`INSERT INTO delivery_evidences (delivery_evidence_id, dispatch_id, type, file_url) VALUES ($1,$2,'photo','https://files.test/pickup.jpg')`, [evidenceId, id]);
+        const signatureId = await insertEvidence(id, 'signature', 'https://files.test/signature.png');
+        const evidenceId = await insertEvidence(id, 'photo', 'https://files.test/pickup.jpg');
         const payload = conformBody({
+            signatureId,
             items: [{ itemCode: 'SKU-1', receivedQuantity: 1 }, { itemCode: 'SKU-2', receivedQuantity: 3 }],
             reasonCode,
             photoId: evidenceId,
@@ -210,22 +245,59 @@ describe('POST /dispatches/:id/supplier-pickup and /arrived-at-warehouse (ST-239
 
     it('registers the arrival at the warehouse without changing the status, and is idempotent', async () => {
         const id = await dispatch();
-        await postPickup(id, conformBody());
+        const signatureId = await insertEvidence(id, 'signature', 'https://files.test/signature.png');
+        await postPickup(id, conformBody({ signatureId }));
         const eventId = uuidv7();
 
-        const response = await postArrival(id, { eventId, occurredAt: new Date().toISOString() });
+        const response = await postArrival(id, arrivalBody({ eventId }));
 
         expect(response.status).toBe(200);
         expect(response.body).toMatchObject({ dispatchId: id });
         expect(response.body.arrivedAtWarehouseAt).toBeTruthy();
         expect(await status(id)).toBe('picked_up_in_transit');
 
-        const replay = await postArrival(id, { eventId, occurredAt: new Date().toISOString() });
+        const replay = await postArrival(id, arrivalBody({ eventId }));
         expect(replay.status).toBe(200);
         expect(replay.body).toEqual(response.body);
 
-        const again = await postArrival(id, { eventId: uuidv7(), occurredAt: new Date().toISOString() });
+        const again = await postArrival(id, arrivalBody());
         expect(again.status).toBe(409);
         expect(again.body.error).toBe('WAREHOUSE_ARRIVAL_ALREADY_REGISTERED');
+    });
+
+    it('rejects a dispatch that is not a supplier_pickup, a wrong status, and items that do not match', async () => {
+        const [{ dispatch_type_id: deliveryTypeId }] = await db.query(`SELECT dispatch_type_id FROM dispatch_types WHERE name='delivery'`);
+        const wrongType = await dispatch();
+        await db.query('UPDATE dispatches SET dispatch_type_id = $1 WHERE dispatch_id = $2', [deliveryTypeId, wrongType]);
+        const wrongTypeResponse = await postPickup(wrongType, conformBody());
+        expect(wrongTypeResponse.status).toBe(409);
+        expect(wrongTypeResponse.body.error).toBe('DISPATCH_NOT_SUPPLIER_PICKUP');
+
+        const notInTransit = await dispatch('picked_up_in_transit');
+        const wrongStatusResponse = await postPickup(notInTransit, conformBody());
+        expect(wrongStatusResponse.status).toBe(409);
+        expect(wrongStatusResponse.body.error).toBe('DISPATCH_NOT_IN_TRANSIT');
+
+        const id = await dispatch();
+        const signatureId = await insertEvidence(id, 'signature', 'https://files.test/signature.png');
+        const mismatchResponse = await postPickup(id, conformBody({ signatureId, items: [{ itemCode: 'SKU-1', receivedQuantity: 2 }] }));
+        expect(mismatchResponse.status).toBe(409);
+        expect(mismatchResponse.body.error).toBe('SUPPLIER_PICKUP_ITEMS_MISMATCH');
+    });
+
+    it('rejects a reused eventId against a different dispatch or the other endpoint', async () => {
+        const id = await dispatch();
+        const other = await dispatch();
+        const signatureId = await insertEvidence(id, 'signature', 'https://files.test/signature.png');
+        const payload = conformBody({ signatureId });
+        await postPickup(id, payload);
+
+        const reusedAcrossDispatches = await postPickup(other, { ...payload, eventId: payload.eventId });
+        expect(reusedAcrossDispatches.status).toBe(409);
+        expect(reusedAcrossDispatches.body.error).toBe('EVENT_ID_ALREADY_USED');
+
+        const reusedAcrossEndpoints = await postArrival(id, arrivalBody({ eventId: payload.eventId }));
+        expect(reusedAcrossEndpoints.status).toBe(409);
+        expect(reusedAcrossEndpoints.body.error).toBe('EVENT_ID_ALREADY_USED');
     });
 });

@@ -1,7 +1,7 @@
 import { ForbiddenException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { v7 as uuidv7 } from 'uuid';
-import { SupplierPickupConflictException, SupplierPickupEvidenceRequiredException } from './exceptions/supplier-pickup.exception.js';
+import { SupplierPickupConflictException, SupplierPickupEvidenceRequiredException, SupplierPickupSignatureRequiredException } from './exceptions/supplier-pickup.exception.js';
 import { SupplierPickupService } from './supplier-pickup.service.js';
 
 const DISPATCH_ID = 21;
@@ -34,12 +34,14 @@ describe('SupplierPickupService', () => {
 
     const items = [{ itemCode: 'SKU-1', receivedQuantity: 2 }, { itemCode: 'SKU-2', receivedQuantity: 3 }];
     const expectedItems = [{ item_code: 'SKU-1', expected_quantity: '2' }, { item_code: 'SKU-2', expected_quantity: '3' }];
+    const gps = { lat: -16.5, lng: -68.12, accuracy: 8.4 };
+    const SIGNATURE_ID = uuidv7();
 
     beforeEach(() => {
         manager = { query: vi.fn() };
         dataSource = { transaction: vi.fn((work: (manager: unknown) => Promise<unknown>) => work(manager)) };
         dispatchEvents = { findByClientEventId: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue(undefined) };
-        evidences = { findById: vi.fn() };
+        evidences = { findById: vi.fn(async (id: string) => (id === SIGNATURE_ID ? { dispatchId: DISPATCH_ID, type: 'signature', fileUrl: 'https://files.test/sig.png' } : null)) };
         incidents = { create: vi.fn().mockResolvedValue(undefined) };
         statusPublication = { publishTransferUpdate: vi.fn().mockResolvedValue(1) };
         outbox = { enqueue: vi.fn().mockResolvedValue(true) };
@@ -67,7 +69,7 @@ describe('SupplierPickupService', () => {
         });
 
         await expect(service.registerCollection(DISPATCH_ID, DRIVER_ID, {
-            eventId: uuidv7(), items, receivedBoxes: 5, occurredAt: new Date().toISOString(),
+            eventId: uuidv7(), items, receivedBoxes: 5, occurredAt: new Date().toISOString(), signatureId: SIGNATURE_ID, ...gps,
         })).rejects.toBeInstanceOf(ForbiddenException);
     });
 
@@ -75,7 +77,7 @@ describe('SupplierPickupService', () => {
         mockOwnership(baseDispatch({ dispatch_type: 'delivery' }));
 
         await expect(service.registerCollection(DISPATCH_ID, DRIVER_ID, {
-            eventId: uuidv7(), items, receivedBoxes: 5, occurredAt: new Date().toISOString(),
+            eventId: uuidv7(), items, receivedBoxes: 5, occurredAt: new Date().toISOString(), signatureId: SIGNATURE_ID, ...gps,
         })).rejects.toMatchObject({ response: { error: 'DISPATCH_NOT_SUPPLIER_PICKUP' } });
     });
 
@@ -89,8 +91,16 @@ describe('SupplierPickupService', () => {
         });
 
         await expect(service.registerCollection(DISPATCH_ID, DRIVER_ID, {
-            eventId: uuidv7(), items, receivedBoxes: 5, occurredAt: new Date().toISOString(),
+            eventId: uuidv7(), items, receivedBoxes: 5, occurredAt: new Date().toISOString(), signatureId: SIGNATURE_ID, ...gps,
         })).rejects.toMatchObject({ response: { error: 'SUPPLIER_PICKUP_ITEMS_MISMATCH' } });
+    });
+
+    it('rejects a missing or foreign signature', async () => {
+        mockOwnership();
+
+        await expect(service.registerCollection(DISPATCH_ID, DRIVER_ID, {
+            eventId: uuidv7(), items, receivedBoxes: 5, occurredAt: new Date().toISOString(), signatureId: uuidv7(), ...gps,
+        })).rejects.toBeInstanceOf(SupplierPickupSignatureRequiredException);
     });
 
     it('requires reasonCode and a valid photo when a quantity differs from the expected one', async () => {
@@ -105,7 +115,7 @@ describe('SupplierPickupService', () => {
         await expect(service.registerCollection(DISPATCH_ID, DRIVER_ID, {
             eventId: uuidv7(),
             items: [{ itemCode: 'SKU-1', receivedQuantity: 1 }, { itemCode: 'SKU-2', receivedQuantity: 3 }],
-            receivedBoxes: 5, occurredAt: new Date().toISOString(),
+            receivedBoxes: 5, occurredAt: new Date().toISOString(), signatureId: SIGNATURE_ID, ...gps,
         })).rejects.toBeInstanceOf(SupplierPickupEvidenceRequiredException);
     });
 
@@ -117,12 +127,14 @@ describe('SupplierPickupService', () => {
             if (sql.includes('FROM dispatch_pickup_items')) return expectedItems;
             return [];
         });
-        evidences.findById.mockResolvedValue({ dispatchId: 999, type: 'photo', fileUrl: 'https://files.test/x.jpg' });
+        evidences.findById.mockImplementation(async (id: string) =>
+            id === SIGNATURE_ID ? { dispatchId: DISPATCH_ID, type: 'signature', fileUrl: 'https://files.test/sig.png' } : { dispatchId: 999, type: 'photo', fileUrl: 'https://files.test/x.jpg' },
+        );
 
         await expect(service.registerCollection(DISPATCH_ID, DRIVER_ID, {
             eventId: uuidv7(),
             items: [{ itemCode: 'SKU-1', receivedQuantity: 1 }, { itemCode: 'SKU-2', receivedQuantity: 3 }],
-            receivedBoxes: 5, occurredAt: new Date().toISOString(), reasonCode: 'INC-QTY', photoId: uuidv7(),
+            receivedBoxes: 5, occurredAt: new Date().toISOString(), reasonCode: 'INC-QTY', photoId: uuidv7(), signatureId: SIGNATURE_ID, ...gps,
         })).rejects.toBeInstanceOf(SupplierPickupEvidenceRequiredException);
     });
 
@@ -130,11 +142,11 @@ describe('SupplierPickupService', () => {
         const dispatch = baseDispatch({ custody_received_at: new Date('2026-11-03T14:00:00.000Z') });
         mockOwnership(dispatch);
         dispatchEvents.findByClientEventId.mockResolvedValue({
-            dispatchId: DISPATCH_ID, eventType: 'status_changed', createdAt: new Date('2026-11-03T14:00:00.000Z'), metadata: {},
+            dispatchId: DISPATCH_ID, eventType: 'status_changed', createdAt: new Date('2026-11-03T14:00:00.000Z'), metadata: { kind: 'supplier_pickup_collection' },
         });
 
         const result = await service.registerCollection(DISPATCH_ID, DRIVER_ID, {
-            eventId: uuidv7(), items, receivedBoxes: 5, occurredAt: new Date().toISOString(),
+            eventId: uuidv7(), items, receivedBoxes: 5, occurredAt: new Date().toISOString(), signatureId: SIGNATURE_ID, ...gps,
         });
 
         expect(result).toEqual({ dispatchId: DISPATCH_ID, status: 'picked_up_in_transit', custodyReceivedAt: dispatch.custody_received_at, hasDiscrepancy: false });
@@ -147,21 +159,39 @@ describe('SupplierPickupService', () => {
         dispatchEvents.findByClientEventId.mockResolvedValue({ dispatchId: 999, eventType: 'status_changed', createdAt: new Date(), metadata: {} });
 
         await expect(service.registerCollection(DISPATCH_ID, DRIVER_ID, {
-            eventId: uuidv7(), items, receivedBoxes: 5, occurredAt: new Date().toISOString(),
+            eventId: uuidv7(), items, receivedBoxes: 5, occurredAt: new Date().toISOString(), signatureId: SIGNATURE_ID, ...gps,
         })).rejects.toBeInstanceOf(SupplierPickupConflictException);
     });
 
     it('registers the arrival only after the pickup was collected', async () => {
         mockOwnership(baseDispatch({ status: 'in_transit' }));
 
-        await expect(service.registerArrival(DISPATCH_ID, DRIVER_ID, { eventId: uuidv7(), occurredAt: new Date().toISOString() }))
+        await expect(service.registerArrival(DISPATCH_ID, DRIVER_ID, { eventId: uuidv7(), occurredAt: new Date().toISOString(), ...gps }))
             .rejects.toMatchObject({ response: { error: 'DISPATCH_NOT_PICKED_UP' } });
     });
 
     it('refuses a second arrival for the same dispatch', async () => {
         mockOwnership(baseDispatch({ status: 'picked_up_in_transit', arrived_at_warehouse_at: new Date() }));
 
-        await expect(service.registerArrival(DISPATCH_ID, DRIVER_ID, { eventId: uuidv7(), occurredAt: new Date().toISOString() }))
+        await expect(service.registerArrival(DISPATCH_ID, DRIVER_ID, { eventId: uuidv7(), occurredAt: new Date().toISOString(), ...gps }))
             .rejects.toMatchObject({ response: { error: 'WAREHOUSE_ARRIVAL_ALREADY_REGISTERED' } });
+    });
+
+    it('rejects a collection eventId reused against the arrival endpoint, and vice versa', async () => {
+        mockOwnership(baseDispatch({ status: 'picked_up_in_transit' }));
+        dispatchEvents.findByClientEventId.mockResolvedValue({
+            dispatchId: DISPATCH_ID, eventType: 'status_changed', createdAt: new Date(), metadata: { kind: 'supplier_pickup_collection' },
+        });
+
+        await expect(service.registerArrival(DISPATCH_ID, DRIVER_ID, { eventId: uuidv7(), occurredAt: new Date().toISOString(), ...gps }))
+            .rejects.toBeInstanceOf(SupplierPickupConflictException);
+
+        dispatchEvents.findByClientEventId.mockResolvedValue({
+            dispatchId: DISPATCH_ID, eventType: 'status_changed', createdAt: new Date(), metadata: { kind: 'warehouse_arrival' },
+        });
+
+        await expect(service.registerCollection(DISPATCH_ID, DRIVER_ID, {
+            eventId: uuidv7(), items, receivedBoxes: 5, occurredAt: new Date().toISOString(), signatureId: SIGNATURE_ID, ...gps,
+        })).rejects.toBeInstanceOf(SupplierPickupConflictException);
     });
 });

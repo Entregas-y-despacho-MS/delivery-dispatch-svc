@@ -13,9 +13,15 @@ import { DispatchStatusPublicationService } from '../../modules/dispatch/dispatc
 import { RegisterSupplierPickupDto } from './dto/register-supplier-pickup.dto.js';
 import { ArrivedAtWarehouseDto } from './dto/arrived-at-warehouse.dto.js';
 import { ArrivedAtWarehouseResponseDto, SupplierPickupResponseDto } from './dto/supplier-pickup-response.dto.js';
-import { SupplierPickupConflictException, SupplierPickupEvidenceRequiredException } from './exceptions/supplier-pickup.exception.js';
+import { SupplierPickupConflictException, SupplierPickupEvidenceRequiredException, SupplierPickupSignatureRequiredException } from './exceptions/supplier-pickup.exception.js';
 
 const DISPATCH_TRANSFER_INCIDENT_REPORTED_TOPIC = 'dispatch.transfer.incident_reported';
+
+// Both endpoints write dispatch_events with the same eventType ('status_changed'); this
+// discriminator in metadata stops an eventId issued by one from being replayed as a valid
+// idempotent retry of the other.
+const SUPPLIER_PICKUP_COLLECTION_KIND = 'supplier_pickup_collection';
+const WAREHOUSE_ARRIVAL_KIND = 'warehouse_arrival';
 
 interface DispatchIdentity { route_batch_id: number | null; }
 interface RouteIdentity { route_batch_id: number; driver_id: number | null; }
@@ -64,7 +70,7 @@ export class SupplierPickupService {
 
         const previous = await this.dispatchEvents.findByClientEventId(dto.eventId, { manager });
         if (previous) {
-            if (previous.dispatchId !== dispatchId || previous.eventType !== 'status_changed') {
+            if (previous.dispatchId !== dispatchId || previous.eventType !== 'status_changed' || previous.metadata?.kind !== SUPPLIER_PICKUP_COLLECTION_KIND) {
                 throw new SupplierPickupConflictException('EVENT_ID_ALREADY_USED', 'This eventId was already used for another event.');
             }
             return {
@@ -77,6 +83,11 @@ export class SupplierPickupService {
 
         if (dispatch.status !== 'in_transit') {
             throw new SupplierPickupConflictException('DISPATCH_NOT_IN_TRANSIT', 'A supplier pickup can only be collected while in_transit.');
+        }
+
+        const signature = await this.evidences.findById(dto.signatureId, { manager });
+        if (!signature || signature.dispatchId !== dispatchId || signature.type !== 'signature' || !signature.fileUrl?.trim()) {
+            throw new SupplierPickupSignatureRequiredException();
         }
 
         const expected: ExpectedItemRow[] = await manager.query(
@@ -144,9 +155,11 @@ export class SupplierPickupService {
             actorType: 'user',
             reason: hasDiscrepancy ? 'Driver confirmed supplier pickup with a quantity difference' : 'Driver confirmed supplier pickup',
             metadata: {
+                kind: SUPPLIER_PICKUP_COLLECTION_KIND,
                 previousStatus: 'in_transit', status: 'picked_up_in_transit',
                 receivedBoxes: dto.receivedBoxes, items: dto.items,
                 outboundRecordVersion,
+                lat: dto.lat, lng: dto.lng, accuracy: dto.accuracy,
                 ...(hasDiscrepancy && { reasonCode: dto.reasonCode, photoId: dto.photoId }),
             },
             occurredAt,
@@ -194,7 +207,7 @@ export class SupplierPickupService {
 
         const previous = await this.dispatchEvents.findByClientEventId(dto.eventId, { manager });
         if (previous) {
-            if (previous.dispatchId !== dispatchId || previous.eventType !== 'status_changed') {
+            if (previous.dispatchId !== dispatchId || previous.eventType !== 'status_changed' || previous.metadata?.kind !== WAREHOUSE_ARRIVAL_KIND) {
                 throw new SupplierPickupConflictException('EVENT_ID_ALREADY_USED', 'This eventId was already used for another event.');
             }
             return { dispatchId, arrivedAtWarehouseAt: dispatch.arrived_at_warehouse_at ?? new Date(previous.createdAt) };
@@ -235,8 +248,10 @@ export class SupplierPickupService {
             actorType: 'user',
             reason: 'Driver arrived at the destination warehouse',
             metadata: {
+                kind: WAREHOUSE_ARRIVAL_KIND,
                 previousStatus: 'picked_up_in_transit', status: 'picked_up_in_transit',
                 arrivedAtWarehouseAt: occurredAt.toISOString(), outboundRecordVersion,
+                lat: dto.lat, lng: dto.lng, accuracy: dto.accuracy,
             },
             occurredAt,
         }, { manager });
