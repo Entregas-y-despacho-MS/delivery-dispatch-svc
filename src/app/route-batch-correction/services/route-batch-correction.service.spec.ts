@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { RouteBatchApprovalConflictException } from '../../../modules/dispatch/route-batches/exceptions/route-batch-approval-conflict.exception.js';
 import { RouteBatchNotCorrectableException } from '../../../modules/dispatch/route-batches/exceptions/route-batch-not-correctable.exception.js';
 import { RouteBatchNotFoundException } from '../../../modules/dispatch/route-batches/exceptions/route-batch-not-found.exception.js';
+import { RouteBatchVehicleChangeReasonRequiredException } from '../exceptions/route-batch-vehicle-change-reason-required.exception.js';
 import { OsrmUnavailableException } from '../../../plugins/osrm/exceptions/index.js';
 import type { CutoffValidation } from '../../route-cutoff/domain/cutoff-validation.js';
 import { RouteBatchCorrectionService } from './route-batch-correction.service.js';
@@ -21,6 +22,7 @@ function build(over: {
     statusAtLock?: string;
     vehicleId?: number | null;
     driverId?: number | null;
+    confirmedAccepted?: boolean;
     outcome?: { kind: 'evaluated'; validation: CutoffValidation } | { kind: 'stale'; issues: Array<{ code: string }> };
     prepareFails?: boolean;
     gateFails?: 'driver' | 'vehicle-active' | 'vehicle-resources' | 'capacity';
@@ -35,6 +37,9 @@ function build(over: {
         shift_date: '2026-10-20',
         vehicle_id: over.vehicleId === undefined ? 56 : over.vehicleId,
         proposed_driver_id: over.driverId === undefined ? 34 : over.driverId,
+        driver_id: 34,
+        accepted_at: over.confirmedAccepted ? new Date('2026-10-20T07:50:00.000Z') : null,
+        zone_name: 'Centro',
     };
     const order: string[] = [];
     const manager = {
@@ -46,6 +51,8 @@ function build(over: {
                 return [rows, rows.length]; // the shape TypeORM gives an UPDATE ... RETURNING
             }
             if (sql.includes('INSERT INTO route_batch_events')) { order.push('event'); return []; }
+            if (sql.includes('SELECT plate FROM vehicles')) return [{ plate: 'NEW-PLATE' }];
+            if (sql.includes('UPDATE dispatches')) { order.push('dispatch-refresh'); return []; }
             return [];
         }),
     };
@@ -80,12 +87,13 @@ function build(over: {
             return over.outcome ?? { kind: 'evaluated', validation: PASSED };
         }),
     };
-    const service = new RouteBatchCorrectionService(dataSource as any, capacity as any, resources as any, revalidation as any);
+    const emitter = { emit: vi.fn() };
+    const service = new RouteBatchCorrectionService(dataSource as any, capacity as any, resources as any, revalidation as any, emitter as any);
     const events = () => manager.query.mock.calls
         .filter(([sql]) => (sql as string).includes('INSERT INTO route_batch_events'))
         .map(([, params]) => ({ type: (params as unknown[])[1], actor: (params as unknown[])[2], actorType: (params as unknown[])[3], reason: (params as unknown[])[4], metadata: JSON.parse((params as unknown[])[5] as string) }));
     const updates = () => manager.query.mock.calls.filter(([sql]) => (sql as string).includes('UPDATE route_batches'));
-    return { service, manager, dataSource, capacity, resources, revalidation, prepared, order, events, updates };
+    return { service, manager, dataSource, capacity, resources, revalidation, prepared, order, events, updates, emitter };
 }
 
 const catchError = async (call: Promise<unknown>) => await call.then(() => null, (error: unknown) => error);
@@ -100,7 +108,7 @@ describe('RouteBatchCorrectionService — driver', () => {
         expect(h.revalidation.prepare).not.toHaveBeenCalled();
         expect(h.revalidation.evaluate).not.toHaveBeenCalled();
         expect(h.resources.assertDriverAvailable).toHaveBeenCalledWith(h.manager, 50, '2026-10-20', 12);
-        expect(h.updates()[0][1]).toEqual([12, 4, 56, 50, 'provisional']);
+        expect(h.updates()[0][1]).toEqual([12, 4, 56, 50, 'provisional', false]);
         expect(h.events()).toEqual([{
             type: 'driver_changed', actor: 9, actorType: 'user', reason: null,
             metadata: { previous: null, current: 50, previousVersion: 4, version: 5, previousStatus: 'provisional', status: 'provisional' },
@@ -114,7 +122,7 @@ describe('RouteBatchCorrectionService — driver', () => {
 
         expect(result).toMatchObject({ version: 5, status: 'pending_final_review', changed: true, validation: { passed: true, failures: [] } });
         expect(h.revalidation.evaluate).toHaveBeenCalledWith(h.manager, h.prepared, { version: 4, vehicleId: 56, proposedDriverId: 50 });
-        expect(h.updates()[0][1]).toEqual([12, 4, 56, 50, 'pending_final_review']);
+        expect(h.updates()[0][1]).toEqual([12, 4, 56, 50, 'pending_final_review', false]);
         expect(h.events().map((e) => e.type)).toEqual(['driver_changed', 'cutoff_validated']);
         expect(h.events()[1]).toMatchObject({ actor: null, actorType: 'system', reason: null, metadata: { trigger: 'correction', correction: 'driver', correctedByUserId: 9 } });
     });
@@ -127,7 +135,7 @@ describe('RouteBatchCorrectionService — driver', () => {
         expect(result).toMatchObject({ version: 5, status: 'provisional', proposedDriverId: 50, validation: { passed: false } });
         expect(result.validation!.failures.map((f) => f.code)).toEqual(['slot_not_met', 'packages_missing']);
         expect(h.updates()).toHaveLength(1);
-        expect(h.updates()[0][1]).toEqual([12, 4, 56, 50, 'provisional']);
+        expect(h.updates()[0][1]).toEqual([12, 4, 56, 50, 'provisional', false]);
         const [correction, validation] = h.events();
         expect(correction.metadata).toMatchObject({ previousStatus: 'pending_final_review', status: 'provisional', version: 5 });
         expect(validation).toMatchObject({ type: 'cutoff_failed', reason: 'slot_not_met,packages_missing', metadata: { trigger: 'correction', status: 'provisional' } });
@@ -179,6 +187,56 @@ describe('RouteBatchCorrectionService — vehicle', () => {
         expect(h.events().map((e) => e.type)).toEqual(['vehicle_changed', 'cutoff_validated']);
     });
 
+    it('replaces the vehicle of a confirmed batch, preserving its driver and status, auditing the reason, and emitting after commit', async () => {
+        const h = build({ status: 'confirmed' });
+        let transactionResolved = false;
+        h.dataSource.transaction.mockImplementationOnce(async (callback: (m: unknown) => unknown) => {
+            const result = await callback(h.manager);
+            transactionResolved = true;
+            return result;
+        });
+        h.emitter.emit.mockImplementation(() => { expect(transactionResolved).toBe(true); return true; });
+
+        const result = await h.service.changeVehicle(12, 60, 4, 9, 'Avería reportada');
+
+        expect(h.capacity.assertAssignable).toHaveBeenCalledWith(12, 60, h.manager);
+        expect(h.resources.assertVehicleActive).toHaveBeenCalledWith(h.manager, 60);
+        expect(h.resources.assertResourcesAvailable).toHaveBeenCalledWith(h.manager, null, 60, '2026-10-20', 12);
+        expect(result).toMatchObject({ version: 5, status: 'confirmed', vehicleId: 60, proposedDriverId: 34, changed: true, validation: null });
+        expect(h.updates()[0][1]).toEqual([12, 4, 60, 34, 'confirmed', false]);
+        expect(h.events()[0]).toMatchObject({
+            type: 'vehicle_changed', actor: 9, reason: 'Avería reportada',
+            metadata: { previous: 56, current: 60, previousStatus: 'confirmed', status: 'confirmed', version: 5 },
+        });
+        expect(h.emitter.emit).toHaveBeenCalledWith('route.vehicle_changed', {
+            routeId: 12, driverId: 34, vehicleId: 60, vehiclePlate: 'NEW-PLATE', zoneName: 'Centro', version: 5, acceptanceRevoked: false,
+        });
+        expect(h.order.indexOf('dispatch-refresh')).toBeLessThan(h.order.indexOf('event'));
+    });
+
+    it('revokes a prior driver acceptance, refreshes stops and reports the revocation event', async () => {
+        const h = build({ status: 'confirmed', confirmedAccepted: true });
+        const result = await h.service.changeVehicle(12, 60, 4, 9, 'Cambio por mantenimiento');
+
+        expect(result).toMatchObject({ version: 5, status: 'confirmed', changed: true });
+        expect(h.updates()[0][1]).toEqual([12, 4, 60, 34, 'confirmed', true]);
+        expect(h.order).toContain('dispatch-refresh');
+        expect(h.events()[0]).toMatchObject({
+            reason: 'Cambio por mantenimiento',
+            metadata: { acceptanceRevoked: true, previousStatus: 'confirmed', status: 'confirmed' },
+        });
+        expect(h.emitter.emit).toHaveBeenCalledWith('route.vehicle_changed', expect.objectContaining({ acceptanceRevoked: true }));
+    });
+
+    it('requires a nonblank reason for a confirmed vehicle replacement and writes nothing', async () => {
+        const h = build({ status: 'confirmed' });
+        const error = await catchError(h.service.changeVehicle(12, 60, 4, 9, '   '));
+        expect(error).toBeInstanceOf(RouteBatchVehicleChangeReasonRequiredException);
+        expect(h.updates()).toHaveLength(0);
+        expect(h.events()).toHaveLength(0);
+        expect(h.emitter.emit).not.toHaveBeenCalled();
+    });
+
     it.each(['capacity', 'vehicle-active', 'vehicle-resources'] as const)('rejects the vehicle when %s fails, without writing', async (gateFails) => {
         const h = build({ gateFails });
         expect(await catchError(h.service.changeVehicle(12, 60, 4, 9))).toBeInstanceOf(Error);
@@ -197,11 +255,18 @@ describe('RouteBatchCorrectionService — concurrency and state', () => {
         expect(h.updates()).toHaveLength(0);
     });
 
-    it.each(['confirmed', 'in_execution', 'closed', 'cancelled'])('answers 409 ROUTE_BATCH_NOT_CORRECTABLE for a %s batch, without asking OSRM', async (status) => {
+    it.each(['in_execution', 'closed', 'cancelled'])('answers 409 ROUTE_BATCH_NOT_CORRECTABLE for a %s vehicle batch, without asking OSRM', async (status) => {
         const h = build({ status });
-        const error = await catchError(h.service.changeVehicle(12, 60, 4, 9));
+        const error = await catchError(h.service.changeVehicle(12, 60, 4, 9, 'Motivo'));
         expect(error).toBeInstanceOf(RouteBatchNotCorrectableException);
         expect(h.revalidation.prepare).not.toHaveBeenCalled();
+        expect(h.dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('continues rejecting driver changes for confirmed batches', async () => {
+        const h = build({ status: 'confirmed' });
+        const error = await catchError(h.service.changeDriver(12, 50, 4, 9));
+        expect(error).toBeInstanceOf(RouteBatchNotCorrectableException);
         expect(h.dataSource.transaction).not.toHaveBeenCalled();
     });
 

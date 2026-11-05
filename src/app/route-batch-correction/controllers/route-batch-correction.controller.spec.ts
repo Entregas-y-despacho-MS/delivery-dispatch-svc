@@ -10,11 +10,11 @@ describe('RouteBatchCorrectionController', () => {
         expect(correction.changeDriver).toHaveBeenCalledWith(5, 34, 2, 9);
     });
 
-    it('delegates the vehicle change with the batch, the vehicle, the expected version and the actor of the token', async () => {
+    it('delegates the vehicle change with the batch, the vehicle, the expected version, actor and reason', async () => {
         const correction = { changeVehicle: vi.fn().mockResolvedValue({ routeBatchId: 5, vehicleId: 8 }) };
         const controller = new RouteBatchCorrectionController(correction as any);
 
-        await expect(controller.changeVehicle(5, { vehicleId: 8, version: 2 }, 9)).resolves.toMatchObject({ vehicleId: 8 });
-        expect(correction.changeVehicle).toHaveBeenCalledWith(5, 8, 2, 9);
+        await expect(controller.changeVehicle(5, { vehicleId: 8, version: 2, reason: 'Vehicle fault' }, 9)).resolves.toMatchObject({ vehicleId: 8 });
+        expect(correction.changeVehicle).toHaveBeenCalledWith(5, 8, 2, 9, 'Vehicle fault');
     });
 });
