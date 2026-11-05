@@ -4,12 +4,15 @@ import { FindOptionsWhere, ILike, QueryFailedError, Repository } from 'typeorm';
 import { escapeLike } from '../../../../shared/utils/like.util.js';
 import { Vehicle } from '../entities/vehicle.entity.js';
 import { VehicleStatus } from '../../vehicle-statuses/entities/vehicle-status.entity.js';
+import { AuditLog } from '../../../audit/audit-logs/entities/audit-log.entity.js';
 import { VehicleDto } from '../dto/vehicle.dto.js';
 import { CreateVehicleDto } from '../dto/create-vehicle.dto.js';
 import { UpdateVehicleDto } from '../dto/update-vehicle.dto.js';
+import { ChangeVehicleStatusDto } from '../dto/change-vehicle-status.dto.js';
 import { FindAllVehiclesParamsDto } from '../dto/find-all-vehicles-params.dto.js';
 import {
-    VehicleNotFoundException, VehiclePlateAlreadyExistsException, InvalidVehicleStatusException,
+    VehicleNotFoundException, VehiclePlateAlreadyExistsException,
+    VehicleHasActiveBatchesException, VehicleStatusChangeRequiresPatchException,
 } from '../exceptions/index.js';
 import { DtoRepository } from '../../../../shared/orm/index.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
@@ -18,6 +21,7 @@ import { VehicleStatusEnum } from '../../../../shared/enums/index.js';
 
 // Postgres error code for unique_violation.
 const UNIQUE_VIOLATION = '23505';
+const VEHICLE_STATUS_CHANGED_ACTION = 'vehicle_status_changed';
 
 @Injectable()
 export class VehiclesService {
@@ -99,24 +103,22 @@ export class VehiclesService {
 
     async update<T>(returnDto: new () => T, id: number, dto: UpdateVehicleDto, options?: MutationOptions): Promise<T> {
         const repo       = options?.manager?.getRepository(Vehicle) ?? this.rawRepo;
-        const statusRepo = options?.manager?.getRepository(VehicleStatus) ?? this.statusRepo;
 
         const current = await this.findOneById(VehicleDto, id);
+
+        // A status change has additional safety and audit requirements. Keep PUT for regular
+        // vehicle edits, but route every status transition through the reason-bearing PATCH.
+        if (dto.vehicleStatusId !== undefined) throw new VehicleStatusChangeRequiresPatchException();
 
         if (dto.plate !== undefined && dto.plate !== current.plate) {
             if (await repo.existsBy({ plate: dto.plate })) throw new VehiclePlateAlreadyExistsException();
         }
-        if (dto.vehicleStatusId !== undefined && !(await statusRepo.existsBy({ id: dto.vehicleStatusId }))) {
-            throw new InvalidVehicleStatusException();
-        }
-
         const payload: Record<string, any> = {};
         if (dto.type            !== undefined) payload.type            = dto.type;
         if (dto.model           !== undefined) payload.model           = dto.model;
         if (dto.plate           !== undefined) payload.plate           = dto.plate;
         if (dto.capacityKg      !== undefined) payload.capacityKg      = dto.capacityKg;
         if (dto.capacityM3      !== undefined) payload.capacityM3      = dto.capacityM3;
-        if (dto.vehicleStatusId !== undefined) payload.vehicleStatusId = dto.vehicleStatusId;
 
         // update() with an empty payload throws in TypeORM — an empty PUT is just a no-op read.
         if (Object.keys(payload).length > 0) {
@@ -141,6 +143,58 @@ export class VehiclesService {
 
         const status = await statusRepo.findOneByOrFail({ name: statusName });
         await repo.update(id, { vehicleStatusId: status.id });
+    }
+
+    /**
+     * Performs the user-requested operational status transition with its guard and audit entry
+     * in one transaction. setStatusByName remains the shared write path so existing maintenance
+     * incident behavior is unchanged.
+     */
+    async changeStatus(id: number, dto: ChangeVehicleStatusDto, userId: number): Promise<VehicleDto> {
+        return this.rawRepo.manager.transaction(async (manager) => {
+            const currentRows = await manager.query(
+                `SELECT s.name AS status
+                 FROM vehicles v
+                 JOIN vehicle_statuses s ON s.vehicle_status_id = v.vehicle_status_id
+                 WHERE v.vehicle_id = $1 AND v.deleted_at IS NULL
+                 FOR UPDATE OF v`,
+                [id],
+            ) as { status: VehicleStatusEnum }[];
+
+            if (currentRows.length === 0) throw new VehicleNotFoundException();
+            const previousStatus = currentRows[0].status;
+
+            if (previousStatus !== dto.status && dto.status !== VehicleStatusEnum.ACTIVE) {
+                const activeBatches = await manager.query(
+                    `SELECT route_batch_id AS id, TO_CHAR(shift_date, 'YYYY-MM-DD') AS "shiftDate"
+                     FROM route_batches
+                     WHERE vehicle_id = $1 AND status IN ('confirmed', 'in_execution')
+                     ORDER BY shift_date, route_batch_id`,
+                    [id],
+                ) as { id: number; shiftDate: string }[];
+
+                if (activeBatches.length > 0) throw new VehicleHasActiveBatchesException(activeBatches);
+            }
+
+            if (previousStatus !== dto.status) {
+                await this.setStatusByName(id, dto.status, { manager });
+
+                const auditRepo = manager.getRepository(AuditLog);
+                await auditRepo.save(auditRepo.create({
+                    userId,
+                    action: VEHICLE_STATUS_CHANGED_ACTION,
+                    detail: JSON.stringify({
+                        vehicleId: id,
+                        previousStatus,
+                        newStatus: dto.status,
+                        reason: dto.reason,
+                    }),
+                }));
+            }
+
+            return (await new DtoRepository(manager.getRepository(Vehicle))
+                .findOne({ dto: VehicleDto, where: { id } }))!;
+        });
     }
 
     async remove(id: number, options?: MutationOptions): Promise<void> {

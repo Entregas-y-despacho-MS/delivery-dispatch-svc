@@ -29,6 +29,8 @@ describe('Vehículos — validaciones de peso y volumen (e2e, RF-A30)', () => {
     let apiPrefix: string;
     const tokens: Record<string, string> = {};
     const createdUserIds: number[] = [];
+    const statusChangeVehicleIds: number[] = [];
+    const routeBatchIds: number[] = [];
 
     const run = Date.now().toString(36).toUpperCase();
     let seq = 0;
@@ -46,6 +48,12 @@ describe('Vehículos — validaciones de peso y volumen (e2e, RF-A30)', () => {
         (await dataSource.query(
             `SELECT vehicle_id, model, capacity_kg::text AS kg, capacity_m3::text AS m3, updated_at FROM vehicles WHERE plate = $1`, [plate],
         ))[0] as { vehicle_id: number; model: string; kg: string; m3: string; updated_at: Date } | undefined;
+    const createVehicleForStatusChange = async () => {
+        const created = await create(validBody());
+        expect(created.status).toBe(201);
+        statusChangeVehicleIds.push(created.body.id as number);
+        return created.body.id as number;
+    };
 
     beforeAll(async () => {
         const moduleRef: TestingModule = await Test.createTestingModule({ imports: [AppModule] }).compile();
@@ -83,6 +91,16 @@ describe('Vehículos — validaciones de peso y volumen (e2e, RF-A30)', () => {
     });
 
     afterAll(async () => {
+        if (routeBatchIds.length > 0) {
+            await dataSource.query('DELETE FROM route_batches WHERE route_batch_id = ANY($1::int[])', [routeBatchIds]);
+        }
+        if (statusChangeVehicleIds.length > 0) {
+            await dataSource.query(
+                `DELETE FROM audit_logs
+                 WHERE action = $1 AND detail::jsonb->>'vehicleId' = ANY($2::text[])`,
+                ['vehicle_status_changed', statusChangeVehicleIds.map(String)],
+            );
+        }
         await dataSource.query(`DELETE FROM vehicles WHERE plate LIKE $1`, [`IT${run}-%`]);
         if (createdUserIds.length > 0) await dataSource.getRepository(User).delete(createdUserIds);
         await app.close();
@@ -323,6 +341,157 @@ describe('Vehículos — validaciones de peso y volumen (e2e, RF-A30)', () => {
             const fixed = await update(vehicle_id, { model: 'Honda XR150', capacityM3: 0.4 });
             expect(fixed.status).toBe(200);
             expect(fixed.body).toMatchObject({ model: 'Honda XR150', capacityM3: 0.4 });
+        });
+    });
+
+    describe('PATCH /vehicles/:id/status (ST-62.1)', () => {
+        it('supervisor y coordinator cambian el estado y registran actor, estados y motivo', async () => {
+            const cases = [
+                { role: 'supervisor', status: 'maintenance' },
+                { role: 'coordinator', status: 'out_of_service' },
+            ];
+            for (const { role, status } of cases) {
+                const vehicleId = await createVehicleForStatusChange();
+                const reason = `Inspection ${role}`;
+                const res = await request(app.getHttpServer())
+                    .patch(`/${apiPrefix}/vehicles/${vehicleId}/status`)
+                    .set(auth(role))
+                    .send({ status, reason });
+
+                expect(res.status).toBe(200);
+                expect(res.body.vehicleStatus.name).toBe(status);
+
+                const auditRows = await dataSource.query(
+                    `SELECT user_id, detail FROM audit_logs
+                     WHERE action = $1 AND detail::jsonb->>'vehicleId' = $2
+                     ORDER BY audit_log_id`,
+                    ['vehicle_status_changed', String(vehicleId)],
+                ) as { user_id: number; detail: string }[];
+                expect(auditRows).toHaveLength(1);
+                expect(auditRows[0].user_id).toBeGreaterThan(0);
+                expect(JSON.parse(auditRows[0].detail)).toMatchObject({
+                    vehicleId,
+                    previousStatus: 'active',
+                    newStatus: status,
+                    reason,
+                });
+            }
+        });
+
+        it('requires both status and reason and does not mutate the vehicle', async () => {
+            const vehicleId = await createVehicleForStatusChange();
+            for (const body of [{ status: 'maintenance' }, { reason: 'Reason without status.' }]) {
+                const res = await request(app.getHttpServer())
+                    .patch(`/${apiPrefix}/vehicles/${vehicleId}/status`)
+                    .set(auth('supervisor'))
+                    .send(body);
+                expect(res.status).toBe(400);
+            }
+            const [{ status }] = await dataSource.query(
+                `SELECT s.name AS status FROM vehicles v
+                 JOIN vehicle_statuses s ON s.vehicle_status_id = v.vehicle_status_id
+                 WHERE v.vehicle_id = $1`, [vehicleId],
+            ) as { status: string }[];
+            expect(status).toBe('active');
+        });
+
+        it.each(['confirmed', 'in_execution'])('rejects maintenance and out_of_service when a %s batch uses the vehicle', async (batchStatus) => {
+            for (const targetStatus of ['maintenance', 'out_of_service']) {
+                const vehicleId = await createVehicleForStatusChange();
+                const shiftDate = '2026-11-20';
+                const [batch] = await dataSource.query(
+                    `INSERT INTO route_batches (status, vehicle_id, shift_date)
+                     VALUES ($1, $2, $3) RETURNING route_batch_id`,
+                    [batchStatus, vehicleId, shiftDate],
+                ) as { route_batch_id: number }[];
+                routeBatchIds.push(batch.route_batch_id);
+
+                const res = await request(app.getHttpServer())
+                    .patch(`/${apiPrefix}/vehicles/${vehicleId}/status`)
+                    .set(auth('supervisor'))
+                    .send({ status: targetStatus, reason: 'Scheduled service.' });
+
+                expect(res.status).toBe(409);
+                expect(res.body.error).toBe('VEHICLE_HAS_ACTIVE_BATCHES');
+                expect(res.body.details.batches).toContainEqual({ id: batch.route_batch_id, shiftDate });
+
+                const [{ status }] = await dataSource.query(
+                    `SELECT s.name AS status FROM vehicles v
+                     JOIN vehicle_statuses s ON s.vehicle_status_id = v.vehicle_status_id
+                     WHERE v.vehicle_id = $1`,
+                    [vehicleId],
+                ) as { status: string }[];
+                expect(status).toBe('active');
+                const [{ count }] = await dataSource.query(
+                    `SELECT count(*)::int AS count FROM audit_logs
+                     WHERE action = $1 AND detail::jsonb->>'vehicleId' = $2`,
+                    ['vehicle_status_changed', String(vehicleId)],
+                ) as { count: number }[];
+                expect(count).toBe(0);
+            }
+        });
+
+        it('allows reactivation and audits both actual transitions', async () => {
+            const vehicleId = await createVehicleForStatusChange();
+            const change = (status: string, reason: string) => request(app.getHttpServer())
+                .patch(`/${apiPrefix}/vehicles/${vehicleId}/status`)
+                .set(auth('supervisor'))
+                .send({ status, reason });
+
+            expect((await change('maintenance', 'Repair completed inspection.')).status).toBe(200);
+            const reactivated = await change('active', 'Repairs completed.');
+            expect(reactivated.status).toBe(200);
+            expect(reactivated.body.vehicleStatus.name).toBe('active');
+
+            const auditRows = await dataSource.query(
+                `SELECT detail FROM audit_logs
+                 WHERE action = $1 AND detail::jsonb->>'vehicleId' = $2
+                 ORDER BY audit_log_id`,
+                ['vehicle_status_changed', String(vehicleId)],
+            ) as { detail: string }[];
+            expect(auditRows.map(({ detail }) => JSON.parse(detail))).toEqual([
+                expect.objectContaining({ previousStatus: 'active', newStatus: 'maintenance', reason: 'Repair completed inspection.' }),
+                expect.objectContaining({ previousStatus: 'maintenance', newStatus: 'active', reason: 'Repairs completed.' }),
+            ]);
+        });
+
+        it('returns 403 for a driver and does not change or audit the vehicle', async () => {
+            const vehicleId = await createVehicleForStatusChange();
+            const res = await request(app.getHttpServer())
+                .patch(`/${apiPrefix}/vehicles/${vehicleId}/status`)
+                .set(auth('driver'))
+                .send({ status: 'maintenance', reason: 'Should be denied.' });
+
+            expect(res.status).toBe(403);
+            const [{ status }] = await dataSource.query(
+                `SELECT s.name AS status FROM vehicles v
+                 JOIN vehicle_statuses s ON s.vehicle_status_id = v.vehicle_status_id
+                 WHERE v.vehicle_id = $1`, [vehicleId],
+            ) as { status: string }[];
+            expect(status).toBe('active');
+            const [{ count }] = await dataSource.query(
+                `SELECT count(*)::int AS count FROM audit_logs
+                 WHERE action = $1 AND detail::jsonb->>'vehicleId' = $2`,
+                ['vehicle_status_changed', String(vehicleId)],
+            ) as { count: number }[];
+            expect(count).toBe(0);
+        });
+
+        it('rejects the legacy PUT status field and leaves the vehicle unchanged', async () => {
+            const vehicleId = await createVehicleForStatusChange();
+            const [{ vehicle_status_id }] = await dataSource.query(
+                `SELECT vehicle_status_id FROM vehicle_statuses WHERE name = 'maintenance'`,
+            ) as { vehicle_status_id: number }[];
+
+            const res = await update(vehicleId, { vehicleStatusId: vehicle_status_id });
+            expect(res.status).toBe(400);
+            expect(res.body.error).toBe('VEHICLE_STATUS_CHANGE_REQUIRES_PATCH');
+            const [{ status }] = await dataSource.query(
+                `SELECT s.name AS status FROM vehicles v
+                 JOIN vehicle_statuses s ON s.vehicle_status_id = v.vehicle_status_id
+                 WHERE v.vehicle_id = $1`, [vehicleId],
+            ) as { status: string }[];
+            expect(status).toBe('active');
         });
     });
 });
