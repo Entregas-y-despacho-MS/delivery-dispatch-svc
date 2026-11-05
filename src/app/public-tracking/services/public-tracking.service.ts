@@ -5,8 +5,10 @@ import { SettingsService } from '../../../modules/settings/services/settings.ser
 import { PROMISE_RESPONSE_WINDOW_KEY } from '../../promise-firming/services/promise-firming.service.js';
 import { evaluateSelfService, type SelfServiceState } from '../domain/self-service.js';
 import { isWellFormedTrackingToken } from '../domain/tracking-token.js';
-import { PublicTrackingDto } from '../dto/public-tracking.dto.js';
+import { DispatchStatusEnum } from '../../../shared/enums/dispatch-status.enum.js';
+import { DriverDto, LocationDto, PublicTrackingDto } from '../dto/public-tracking.dto.js';
 import { RescheduleNotAvailableException, TrackingLinkNotFoundException } from '../exceptions/index.js';
+import { TrackingEtaService } from './tracking-eta.service.js';
 
 export const MAX_RESCHEDULE_ATTEMPTS_KEY = 'max_reschedule_attempts';
 export const WAREHOUSE_PREP_LEAD_KEY = 'warehouse_prep_lead_minutes';
@@ -30,6 +32,18 @@ interface TrackingRow {
     reschedule_attempts: number;
 }
 
+interface LiveRow {
+    driver_name: string | null;
+    vehicle_type: string | null;
+    vehicle_plate: string | null;
+    last_latitude: string | null;
+    last_longitude: string | null;
+    last_location_at: Date | null;
+}
+
+/** The states in which the route is under way and the customer may see who is coming. */
+const LIVE_STATUSES: DispatchStatusEnum[] = [DispatchStatusEnum.OUT_FOR_DELIVERY, DispatchStatusEnum.IN_TRANSIT];
+
 /** What the next stages of the public flow need after the token has been resolved. */
 export interface TrackingContext {
     dispatchId: number;
@@ -51,10 +65,16 @@ export class PublicTrackingService {
     constructor(
         @InjectDataSource() private readonly dataSource: DataSource,
         private readonly settings: SettingsService,
+        private readonly etaService: TrackingEtaService,
     ) {}
 
     async view(token: string, now: Date = new Date()): Promise<PublicTrackingDto> {
         const { row, selfService } = await this.resolve(token, now);
+        const live = await this.liveData(row);
+        const eta = await this.etaService.estimate(
+            { dispatchId: row.dispatch_id, status: row.status, routeBatchId: row.route_batch_id, windowEnd: row.scheduled_window_end },
+            now,
+        );
         return {
             trackingCode: row.tracking_code,
             status: row.status,
@@ -62,6 +82,9 @@ export class PublicTrackingService {
             deliveryDate: row.delivery_date,
             windowStart: row.scheduled_window_start,
             windowEnd: row.scheduled_window_end,
+            eta,
+            driver: live.driver,
+            location: live.location,
             selfService: {
                 open: selfService.open,
                 closedReason: selfService.closedReason,
@@ -72,6 +95,38 @@ export class PublicTrackingService {
                 canRequestChange: selfService.canRequestChange,
             },
         };
+    }
+
+    /**
+     * Who delivers and where they are (ST-40.1, RF-U15, RF-U18). Only once the route has started: `driver` while
+     * the order is `out_for_delivery` or `in_transit`, `location` only in `in_transit` (it is this customer's
+     * turn). Never the phone: the query does not even select it.
+     */
+    private async liveData(row: TrackingRow): Promise<{ driver: DriverDto | null; location: LocationDto | null }> {
+        const none = { driver: null, location: null };
+        if (!LIVE_STATUSES.includes(row.status as DispatchStatusEnum) || row.route_batch_id === null) return none;
+
+        const [live]: LiveRow[] = await this.dataSource.query(
+            `SELECT u.full_name AS driver_name, v.type AS vehicle_type, v.plate AS vehicle_plate,
+                    d.last_latitude, d.last_longitude, d.last_location_at
+               FROM dispatches d
+               JOIN route_batches rb ON rb.route_batch_id = d.route_batch_id
+               LEFT JOIN users u ON u.user_id = rb.driver_id
+               LEFT JOIN vehicles v ON v.vehicle_id = rb.vehicle_id
+              WHERE d.dispatch_id = $1`,
+            [row.dispatch_id],
+        );
+        if (!live) return none;
+
+        const driver = live.driver_name === null
+            ? null
+            : { name: live.driver_name, vehicleType: live.vehicle_type, vehiclePlate: live.vehicle_plate };
+        const hasPosition = live.last_latitude !== null && live.last_longitude !== null && live.last_location_at !== null;
+        const location = row.status === DispatchStatusEnum.IN_TRANSIT && hasPosition
+            // NUMERIC columns come back from the driver as strings.
+            ? { latitude: Number(live.last_latitude), longitude: Number(live.last_longitude), recordedAt: live.last_location_at as Date }
+            : null;
+        return { driver, location };
     }
 
     async resolve(token: string, now: Date = new Date()): Promise<TrackingContext> {
