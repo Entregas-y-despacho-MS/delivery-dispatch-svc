@@ -7,6 +7,7 @@ import { CustomerRescheduleService } from './services/customer-reschedule.servic
 import { CustomerResponseService } from './services/customer-response.service.js';
 import { PublicTrackingService } from './services/public-tracking.service.js';
 import { SlotOfferService } from './services/slot-offer.service.js';
+import { TrackingEtaService } from './services/tracking-eta.service.js';
 import { VerificationCodeService } from './services/verification-code.service.js';
 
 /**
@@ -16,7 +17,7 @@ import { VerificationCodeService } from './services/verification-code.service.js
 @Module({
     imports: [PlanningModule, PromiseFirmingModule, RouteBatchesModule],
     controllers: [PublicTrackingController],
-    providers: [PublicTrackingService, VerificationCodeService, CustomerResponseService, SlotOfferService, CustomerRescheduleService],
+    providers: [PublicTrackingService, TrackingEtaService, VerificationCodeService, CustomerResponseService, SlotOfferService, CustomerRescheduleService],
     exports: [PublicTrackingService, VerificationCodeService, CustomerResponseService, SlotOfferService, CustomerRescheduleService],
 })
 export class PublicTrackingModule {}

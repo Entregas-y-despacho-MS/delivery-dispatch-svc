@@ -51,8 +51,9 @@ function setup(rows: unknown[], settings: Record<string, string> = {}, live: unk
         const parsed = Number(values[key]);
         return values[key] !== undefined && Number.isFinite(parsed) ? parsed : fallback;
     });
-    const service = new PublicTrackingService({ query } as any, { getString, getNumber } as any);
-    return { service, query };
+    const estimate = vi.fn(async (): Promise<unknown> => null);
+    const service = new PublicTrackingService({ query } as any, { getString, getNumber } as any, { estimate } as any);
+    return { service, query, estimate };
 }
 
 describe('PublicTrackingService', () => {
@@ -204,6 +205,20 @@ describe('PublicTrackingService', () => {
             const liveSql = String(query.mock.calls.map(([sql]) => String(sql)).find((sql) => sql.includes('driver_name')));
             expect(liveSql).not.toMatch(/phone|tracking_token/);
         });
+    });
+
+    it('puts the estimate of the ETA service in the view, asking for this order and this instant', async () => {
+        const { service, estimate } = setup([row({ status: 'in_transit' })], {}, [liveRow()]);
+        const eta = { minutes: 12, calculatedAt: NOW, source: 'osrm' };
+        estimate.mockResolvedValueOnce(eta);
+
+        const view = await service.view(TOKEN, NOW);
+
+        expect(view.eta).toEqual(eta);
+        expect(estimate).toHaveBeenCalledWith(
+            { dispatchId: 7, status: 'in_transit', routeBatchId: 500, windowEnd: new Date('2026-10-20T15:00:00Z') },
+            NOW,
+        );
     });
 
     it('uses the documented defaults when the settings are missing', async () => {

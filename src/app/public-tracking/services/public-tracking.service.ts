@@ -8,6 +8,7 @@ import { isWellFormedTrackingToken } from '../domain/tracking-token.js';
 import { DispatchStatusEnum } from '../../../shared/enums/dispatch-status.enum.js';
 import { DriverDto, LocationDto, PublicTrackingDto } from '../dto/public-tracking.dto.js';
 import { RescheduleNotAvailableException, TrackingLinkNotFoundException } from '../exceptions/index.js';
+import { TrackingEtaService } from './tracking-eta.service.js';
 
 export const MAX_RESCHEDULE_ATTEMPTS_KEY = 'max_reschedule_attempts';
 export const WAREHOUSE_PREP_LEAD_KEY = 'warehouse_prep_lead_minutes';
@@ -64,11 +65,16 @@ export class PublicTrackingService {
     constructor(
         @InjectDataSource() private readonly dataSource: DataSource,
         private readonly settings: SettingsService,
+        private readonly etaService: TrackingEtaService,
     ) {}
 
     async view(token: string, now: Date = new Date()): Promise<PublicTrackingDto> {
         const { row, selfService } = await this.resolve(token, now);
         const live = await this.liveData(row);
+        const eta = await this.etaService.estimate(
+            { dispatchId: row.dispatch_id, status: row.status, routeBatchId: row.route_batch_id, windowEnd: row.scheduled_window_end },
+            now,
+        );
         return {
             trackingCode: row.tracking_code,
             status: row.status,
@@ -76,7 +82,7 @@ export class PublicTrackingService {
             deliveryDate: row.delivery_date,
             windowStart: row.scheduled_window_start,
             windowEnd: row.scheduled_window_end,
-            eta: null,
+            eta,
             driver: live.driver,
             location: live.location,
             selfService: {
