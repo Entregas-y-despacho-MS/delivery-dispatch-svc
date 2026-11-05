@@ -16,7 +16,7 @@ interface Options {
   batch?: {
     status: string;
     driver_id: number | null;
-    accepted_at: Date | null;
+    accepted_at: Date | string | number | null;
   }[];
   prior?: { route_batch_id: number; metadata: Record<string, unknown> }[];
   dispatches?: { dispatch_id: number; status: string }[];
@@ -149,6 +149,7 @@ describe('RouteBatchAcceptService', () => {
 
   it('returns the original result for a retry of the same eventId without writing', async () => {
     const { service, writes } = setup({
+      batch: [{ status: 'confirmed', driver_id: 7, accepted_at: new Date('2026-10-20T07:50:00.000Z') }],
       prior: [
         {
           route_batch_id: 5,
@@ -166,6 +167,77 @@ describe('RouteBatchAcceptService', () => {
       failedDispatchIds: [21],
     });
     expect(writes).toHaveLength(0);
+  });
+
+  it('matches an ISO event timestamp to a database epoch-seconds timestamp', async () => {
+    const acceptedAt = '2026-10-20T07:50:00.000Z';
+    const { service, writes } = setup({
+      batch: [{ status: 'confirmed', driver_id: 7, accepted_at: Date.parse(acceptedAt) / 1000 }],
+      prior: [{
+        route_batch_id: 5,
+        metadata: { acceptedAt, failedDispatchIds: [21] },
+      }],
+    });
+
+    await expect(service.accept(5, { eventId }, 7)).resolves.toEqual({
+      routeBatchId: 5,
+      acceptedAt,
+      failedDispatchIds: [21],
+    });
+    expect(writes).toHaveLength(0);
+  });
+
+  it('rejects a retry of the old acceptance event after vehicle replacement revoked the acceptance', async () => {
+    const { service, writes } = setup({
+      batch: [{ status: 'confirmed', driver_id: 7, accepted_at: null }],
+      prior: [{
+        route_batch_id: 5,
+        metadata: { acceptedAt: '2026-10-20T07:50:00.000Z', failedDispatchIds: [] },
+      }],
+    });
+
+    await expect(service.accept(5, { eventId }, 7)).rejects.toMatchObject({
+      response: { error: 'ROUTE_BATCH_ACCEPTANCE_REVOKED' },
+    });
+    expect(writes).toHaveLength(0);
+  });
+
+  it('rejects an old eventId replay after revocation and a newer acceptance', async () => {
+    const newEventId = '01933b6e-7f2a-7c3d-9a1b-2f8e6c4d5a13';
+    const batch = { status: 'confirmed', driver_id: 7, accepted_at: null as Date | null };
+    const events: { route_batch_id: number; metadata: Record<string, unknown> }[] = [];
+    const manager = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        if (sql.includes('FROM route_batches')) return [batch];
+        if (sql.includes('pg_advisory_xact_lock')) return [];
+        if (sql.includes("metadata->>'eventId'")) {
+          return events.filter(({ metadata }) => metadata.eventId === params[1]);
+        }
+        if (sql.startsWith('UPDATE route_batches')) {
+          batch.accepted_at = params[1] as Date;
+          return [[{ route_batch_id: 5 }], 1];
+        }
+        if (sql.includes('INSERT INTO route_batch_events')) {
+          events.push({ route_batch_id: params[0] as number, metadata: JSON.parse(params[3] as string) });
+          return [];
+        }
+        throw new Error(`unexpected query: ${sql}`);
+      }),
+    };
+    const dataSource = {
+      transaction: vi.fn(async (work: (m: typeof manager) => unknown) => work(manager)),
+    } as unknown as DataSource;
+    const service = new RouteBatchAcceptService(dataSource);
+
+    const firstAcceptance = await service.accept(5, { eventId }, 7);
+    batch.accepted_at = null; // vehicle replacement revoked the first acceptance
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await service.accept(5, { eventId: newEventId }, 7);
+
+    expect(batch.accepted_at?.toISOString()).not.toBe(firstAcceptance.acceptedAt);
+    await expect(service.accept(5, { eventId }, 7)).rejects.toMatchObject({
+      response: { error: 'ROUTE_BATCH_ACCEPTANCE_REVOKED' },
+    });
   });
 
   it('rejects an eventId already used by another batch', async () => {

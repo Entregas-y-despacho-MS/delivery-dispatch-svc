@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 
 export type RouteBatchAcceptConflictCode =
   | 'ROUTE_BATCH_ALREADY_ACCEPTED'
+  | 'ROUTE_BATCH_ACCEPTANCE_REVOKED'
   | 'ROUTE_ACCEPT_EVENT_ID_ALREADY_USED';
 
 export class RouteBatchAcceptConflictException extends ConflictException {
