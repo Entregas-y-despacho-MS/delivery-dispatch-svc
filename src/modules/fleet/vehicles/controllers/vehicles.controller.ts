@@ -87,7 +87,15 @@ export class VehiclesController {
         description: 'Changes a vehicle status with a required reason. A vehicle cannot be moved to `maintenance` or `out_of_service` while it has a `confirmed` or `in_execution` route batch. Each actual status transition is recorded in `audit_logs`. Requires supervisor or coordinator role, or root.',
     })
     @ApiIdParam('Vehicle')
-    @ApiBadRequests({ validation: true, id: true })
+    @ApiBadRequests({
+        validation: true,
+        id: true,
+        example: [
+            'Status must be active, maintenance, or out_of_service.',
+            'Reason must be a string.',
+            'Reason is required.',
+        ],
+    })
     @ApiOkResponse({ type: VehicleDto })
     @ApiNotFound({ code: 'VEHICLE_NOT_FOUND', message: 'Vehicle not found.' })
     @ApiResponse({

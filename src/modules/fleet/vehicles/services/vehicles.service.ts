@@ -166,7 +166,7 @@ export class VehiclesService {
 
             if (previousStatus !== dto.status && dto.status !== VehicleStatusEnum.ACTIVE) {
                 const activeBatches = await manager.query(
-                    `SELECT route_batch_id AS id, shift_date AS "shiftDate"
+                    `SELECT route_batch_id AS id, TO_CHAR(shift_date, 'YYYY-MM-DD') AS "shiftDate"
                      FROM route_batches
                      WHERE vehicle_id = $1 AND status IN ('confirmed', 'in_execution')
                      ORDER BY shift_date, route_batch_id`,
