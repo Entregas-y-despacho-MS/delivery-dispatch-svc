@@ -46,7 +46,7 @@ export class UpdateVehicleDto {
     @Max(MAX_CAPACITY, { message: 'Capacity in m3 is too large.' })
     capacityM3?: number;
 
-    @ApiPropertyOptional({ type: 'integer', example: 2, description: 'New operational status: 1 = active (available for routes), 2 = maintenance, 3 = out_of_service. Any other ID is a 400 INVALID_VEHICLE_STATUS. null is rejected' })
+    @ApiPropertyOptional({ type: 'integer', example: 2, description: 'Deprecated: PUT rejects this field. Change operational status with PATCH /vehicles/:id/status and provide a reason.' })
     @OptionalNotNull()
     @IsInt({ message: 'Vehicle status ID must be an integer.' })
     @IsPositive({ message: 'Vehicle status ID must be a positive number.' })
