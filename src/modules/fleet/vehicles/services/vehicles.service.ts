@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsWhere, ILike, QueryFailedError, Repository } from 'typeorm';
+import { EntityManager, FindOptionsWhere, ILike, QueryFailedError, Repository } from 'typeorm';
 import { escapeLike } from '../../../../shared/utils/like.util.js';
 import { Vehicle } from '../entities/vehicle.entity.js';
 import { VehicleStatus } from '../../vehicle-statuses/entities/vehicle-status.entity.js';
@@ -165,15 +165,7 @@ export class VehiclesService {
             const previousStatus = currentRows[0].status;
 
             if (previousStatus !== dto.status && dto.status !== VehicleStatusEnum.ACTIVE) {
-                const activeBatches = await manager.query(
-                    `SELECT route_batch_id AS id, TO_CHAR(shift_date, 'YYYY-MM-DD') AS "shiftDate"
-                     FROM route_batches
-                     WHERE vehicle_id = $1 AND status IN ('confirmed', 'in_execution')
-                     ORDER BY shift_date, route_batch_id`,
-                    [id],
-                ) as { id: number; shiftDate: string }[];
-
-                if (activeBatches.length > 0) throw new VehicleHasActiveBatchesException(activeBatches);
+                await this.assertNoActiveBatches(id, manager);
             }
 
             if (previousStatus !== dto.status) {
@@ -195,6 +187,40 @@ export class VehiclesService {
             return (await new DtoRepository(manager.getRepository(Vehicle))
                 .findOne({ dto: VehicleDto, where: { id } }))!;
         });
+    }
+
+    /**
+     * Locks the (not removed) vehicle row for the rest of the transaction and returns its current
+     * operational status, or null if there is no such vehicle. Callers that check a condition and
+     * then change the status (maintenance registration/closing) take this lock first, so two of
+     * them on the same vehicle cannot interleave.
+     */
+    async lockStatusById(id: number, manager: EntityManager): Promise<VehicleStatusEnum | null> {
+        const rows = await manager.query(
+            `SELECT s.name AS status
+             FROM vehicles v
+             JOIN vehicle_statuses s ON s.vehicle_status_id = v.vehicle_status_id
+             WHERE v.vehicle_id = $1 AND v.deleted_at IS NULL
+             FOR UPDATE OF v`,
+            [id],
+        ) as { status: VehicleStatusEnum }[];
+        return rows.length > 0 ? rows[0].status : null;
+    }
+
+    /**
+     * ST-62.1 guard: a vehicle with a `confirmed` or `in_execution` route batch cannot leave
+     * `active`. Throws VehicleHasActiveBatchesException (409) listing those batches.
+     */
+    async assertNoActiveBatches(id: number, manager: EntityManager): Promise<void> {
+        const activeBatches = await manager.query(
+            `SELECT route_batch_id AS id, TO_CHAR(shift_date, 'YYYY-MM-DD') AS "shiftDate"
+             FROM route_batches
+             WHERE vehicle_id = $1 AND status IN ('confirmed', 'in_execution')
+             ORDER BY shift_date, route_batch_id`,
+            [id],
+        ) as { id: number; shiftDate: string }[];
+
+        if (activeBatches.length > 0) throw new VehicleHasActiveBatchesException(activeBatches);
     }
 
     async remove(id: number, options?: MutationOptions): Promise<void> {

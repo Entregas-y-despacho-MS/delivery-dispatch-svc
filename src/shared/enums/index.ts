@@ -6,3 +6,4 @@ export * from './dispatch-status.enum.js';
 export * from './reschedule-reason-category.enum.js';
 export * from './vehicle-incident-severity.enum.js';
 export * from './route-batch-status.enum.js';
+export * from './maintenance-status.enum.js';
