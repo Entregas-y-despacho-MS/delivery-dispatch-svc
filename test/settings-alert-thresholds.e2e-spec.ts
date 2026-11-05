@@ -116,6 +116,20 @@ describe('Alert thresholds (e2e)', () => {
         });
     });
 
+    describe('generic PUT /settings/:key', () => {
+        it.each(KEYS)('refuses %s with 403 SETTING_MANAGED_SEPARATELY and stores nothing', async (key) => {
+            const before = await stored();
+            const version = await settingsService.getVersion();
+
+            const response = await http().put(`/${apiPrefix}/settings/${key}`).set(as('coordinator')).send({ value: '50' });
+
+            expect(response.status).toBe(403);
+            expect(response.body.error).toBe('SETTING_MANAGED_SEPARATELY');
+            expect(await stored()).toEqual(before);
+            expect(await settingsService.getVersion()).toBe(version);
+        });
+    });
+
     describe('validation', () => {
         it.each([
             ['percentage above 100', { ...VALID, slaAlertMinOnTimePct: 101 }],
