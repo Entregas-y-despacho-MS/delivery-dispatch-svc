@@ -201,6 +201,77 @@ describe('escenarios de Compras contra el consumidor real', () => {
     });
 });
 
+describe('escenarios del RMA de Almacén contra el consumidor real', () => {
+    const statusChanged = (harness: Awaited<ReturnType<typeof play>>['harness']) =>
+        harness.emitted.filter((entry) => entry.event === 'dispatch.status_changed');
+
+    it('rma-requested: crea el recojo en pickup_scheduled y avisa a la web', async () => {
+        const { harness, outcomes, orderId } = await play('rma-requested');
+
+        expect(outcomesOf(outcomes)).toEqual(['processed']);
+        expect(harness.rmaPickups.records).toHaveLength(1);
+        expect(harness.rmaPickups.records[0]).toMatchObject({
+            rmaId: orderId,
+            dispatchType: 'warehouse_return_pickup',
+            status: 'pickup_scheduled',
+            warehouseCode: 'WH-LPZ-01',
+            estimatedBoxes: 1,
+        });
+        expect(statusChanged(harness)).toHaveLength(1);
+        expect(harness.rejection.alerts).toEqual([]);
+    });
+
+    it('rma-without-coordinates: el recojo queda en address_review', async () => {
+        const { harness, outcomes } = await play('rma-without-coordinates');
+
+        expect(outcomesOf(outcomes)).toEqual(['processed']);
+        expect(harness.rmaPickups.records).toHaveLength(1);
+        expect(harness.rmaPickups.records[0]).toMatchObject({ status: 'address_review', hasCoordinates: false });
+        expect(statusChanged(harness)).toHaveLength(1);
+    });
+
+    it('rma-unknown-warehouse: dead-letter por almacén desconocido y sin recojo', async () => {
+        const { harness, outcomes } = await play('rma-unknown-warehouse');
+
+        expect(outcomesOf(outcomes)).toEqual(['rejected']);
+        expect(harness.bus.deadLettersOf('inventory.return.requested')).toHaveLength(1);
+        expect(harness.rejection.alerts.map((alert) => alert.reasonCode)).toEqual(['unknown_warehouse']);
+        expect(harness.rmaPickups.records).toEqual([]);
+        expect(statusChanged(harness)).toEqual([]);
+    });
+
+    it('rma-invalid: dead-letter por esquema y sin recojo', async () => {
+        const { harness, outcomes } = await play('rma-invalid');
+
+        expect(outcomesOf(outcomes)).toEqual(['rejected']);
+        const deadLetters = harness.bus.deadLettersOf('inventory.return.requested');
+        expect(deadLetters).toHaveLength(1);
+        expect(deadLetters[0]!.errors.map((error) => error.message).join(' ')).toContain('returnReason');
+        expect(harness.rejection.alerts.map((alert) => alert.reasonCode)).toEqual(['schema_invalid']);
+        expect(harness.rmaPickups.records).toEqual([]);
+    });
+
+    it('rma-duplicate: la segunda entrega se ignora y hay un solo recojo y un solo evento', async () => {
+        const { harness, outcomes } = await play('rma-duplicate');
+
+        expect(outcomesOf(outcomes)).toEqual(['processed', 'duplicate']);
+        expect(harness.rmaPickups.records).toHaveLength(1);
+        expect(statusChanged(harness)).toHaveLength(1);
+    });
+
+    it('rma-stale-version: la versión 2 no pisa lo aplicado de la versión 3', async () => {
+        const { harness, outcomes } = await play('rma-stale-version');
+
+        expect(outcomesOf(outcomes)).toEqual(['processed', 'processed']);
+        expect(harness.rmaPickups.records).toHaveLength(1);
+        expect(harness.rmaPickups.records[0]).toMatchObject({
+            address: 'Calle 21 de Calacoto 8790, casa 12',
+            recordVersion: 3,
+        });
+        expect(statusChanged(harness)).toHaveLength(1);
+    });
+});
+
 describe('cobertura de escenarios', () => {
     it('todo fixture tiene una prueba de comportamiento (corre al final del archivo)', () => {
         const all = (['marketplace', 'inventory', 'procurement'] as const).flatMap((script) =>

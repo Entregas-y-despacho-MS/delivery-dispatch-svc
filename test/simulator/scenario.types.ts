@@ -42,7 +42,7 @@ export interface BuiltStep {
     repeat: number;
     respondsTo?: SyncEntityType;
     expectInvalid: boolean;
-    /** Order the message belongs to (`salesOrderId` or `purchaseOrderId`, already suffixed with the run). */
+    /** Order the message belongs to (`rmaId`, `salesOrderId` or `purchaseOrderId`, already suffixed with the run). */
     orderId: string;
 }
 
