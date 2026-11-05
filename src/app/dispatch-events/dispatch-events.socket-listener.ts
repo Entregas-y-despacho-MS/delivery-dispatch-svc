@@ -8,6 +8,7 @@ import { SOCKET_CONNECTED_EVENT, type SocketConnectedEvent } from '../../plugins
 import { todayInOperatingTimeZone } from '../../modules/dispatch/dispatches/utils/operating-date.util.js';
 import { DISPATCH_STATUS_CHANGED_EVENT } from '../dispatch-status/dispatch-status-changed.event.js';
 import { ROUTE_ASSIGNED_EVENT, type RouteAssignedEvent } from '../../modules/dispatch/route-batches/events/route-assigned.event.js';
+import { ROUTE_VEHICLE_CHANGED_EVENT, type RouteVehicleChangedEvent } from '../../modules/dispatch/route-batches/events/route-vehicle-changed.event.js';
 import { DELIVERY_ZONE_CREATED_EVENT, type DeliveryZoneCreatedEvent } from '../../modules/catalog/delivery-zones/events/delivery-zone-created.event.js';
 
 const ROLE_ROOMS = ['coordinators', 'supervisors'];
@@ -108,6 +109,20 @@ export class DispatchEventsSocketListener {
             version: event.version,
         };
         this.socket.emitToRooms([...new Set(rooms)], ROUTE_ASSIGNED_EVENT, payload);
+    }
+
+    @OnEvent(ROUTE_VEHICLE_CHANGED_EVENT, { async: true })
+    async forwardRouteVehicleChanged(event: RouteVehicleChangedEvent): Promise<void> {
+        const rooms = ['coordinators', 'supervisors'];
+        if (event.driverId !== null) rooms.push(`driver:${event.driverId}`);
+        this.socket.emitToRooms([...new Set(rooms)], ROUTE_VEHICLE_CHANGED_EVENT, {
+            routeId: event.routeId,
+            driverId: event.driverId,
+            vehicleId: event.vehicleId,
+            vehiclePlate: event.vehiclePlate,
+            version: event.version,
+            acceptanceRevoked: event.acceptanceRevoked,
+        });
     }
 
     @OnEvent('integration.message_rejected', { async: true })
