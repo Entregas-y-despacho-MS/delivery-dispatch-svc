@@ -57,7 +57,7 @@ export class PublicTrackingController {
     @Header('Cache-Control', 'no-store')
     @ApiOperation({
         summary: 'View a delivery from its tracking link',
-        description: 'Public, no login. Returns the state, the delivery date and slot, and what the customer can still do (`selfService`): confirm, reschedule or ask for a change. The `token` of the link is the only credential; the tracking code never gives access. The page shows the minimum: no address, phone, delivery OTP or proof photos. An unknown, malformed or expired token answers the same 404, and each client IP has a request limit (429).',
+        description: 'Public, no login. Returns the state, the delivery date and slot, and what the customer can still do (`selfService`): confirm, reschedule or ask for a change. While the delivery is on its way it also returns the estimated arrival (`eta`, from OSRM or, when OSRM cannot answer, the promised slot: `source: window`; kept for 60 seconds per delivery), who delivers (`driver`: name, vehicle type and plate) and, only when it is this customer\'s turn (`in_transit`), the last position of the driver (`location`); all three are `null` in any other state. The `token` of the link is the only credential; the tracking code never gives access. The page shows the minimum: no address, no phone (of the customer or the driver), no email, delivery OTP or proof photos. An unknown, malformed or expired token answers the same 404, and each client IP has a request limit (429).',
     })
     @ApiParam(TOKEN_PARAM)
     @ApiOkResponse({ type: PublicTrackingDto })

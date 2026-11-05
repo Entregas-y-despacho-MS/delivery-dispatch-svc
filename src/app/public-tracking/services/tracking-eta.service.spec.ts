@@ -142,11 +142,19 @@ describe('TrackingEtaService', () => {
             }
         });
 
-        it('rethrows what is not an OSRM failure, so a bug is not hidden as a slot', async () => {
+        it('also falls back to the slot for an unexpected failure of the OSRM call: the page never answers 500 for the estimate', async () => {
             const { service, osrm } = setup();
-            osrm.failWith = new TypeError('bug');
+            osrm.failWith = new TypeError('unexpected shape');
 
-            await expect(service.estimate(subject(), NOW)).rejects.toThrow('bug');
+            expect(await service.estimate(subject(), NOW)).toEqual(slot);
+        });
+
+        it('asks for one single OSRM request: a route with more points than one request takes gets the slot', async () => {
+            const { service, osrm } = setup(); // path of 3 points
+            osrm.tableMaxCoordinates = 2;
+
+            expect(await service.estimate(subject(), NOW)).toEqual(slot);
+            expect(osrm.calls).toHaveLength(0);
         });
 
         it('there is no route between two of the points', async () => {
@@ -241,6 +249,26 @@ describe('TrackingEtaService', () => {
             expect(second).toEqual(first);
             expect(osrm.calls).toHaveLength(1);
             expect(setWithTtl).toHaveBeenCalledTimes(1);
+        });
+
+        it('requests of the same delivery that arrive together share one calculation (no stampede on OSRM)', async () => {
+            const { service, osrm, query } = setup();
+
+            const answers = await Promise.all([1, 2, 3, 4, 5].map(() => service.estimate(subject(), NOW)));
+
+            expect(osrm.calls).toHaveLength(1);
+            expect(query).toHaveBeenCalledTimes(2); // position + stops, once
+            for (const answer of answers) expect(answer).toEqual(answers[0]);
+        });
+
+        it('a failed calculation does not stay in flight: the next request tries again', async () => {
+            const { service, osrm, store } = setup();
+            osrm.failWith = new OsrmUnavailableException(5000);
+            await service.estimate(subject(), NOW);
+            store.clear();
+            osrm.failWith = null;
+
+            expect((await service.estimate(subject(), LATER))?.source).toBe('osrm');
         });
 
         it('calculates again when the entry is gone (the 60 seconds are over)', async () => {

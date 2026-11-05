@@ -87,13 +87,13 @@ export class PublicTrackingDto {
     @ApiProperty({ type: String, format: 'date-time', nullable: true, description: 'End of the promised delivery slot. `null` while there is none.' })
     windowEnd!: Date | null;
 
-    @ApiProperty({ ...nullableRef(EtaDto),description: 'Estimated arrival. Only while the delivery is `out_for_delivery` or `in_transit`; `null` otherwise.' })
+    @ApiProperty({ ...nullableRef(EtaDto), description: 'Estimated arrival. Only while the delivery is `out_for_delivery` or `in_transit`; `null` otherwise.' })
     eta!: EtaDto | null;
 
-    @ApiProperty({ ...nullableRef(DriverDto),description: 'Who delivers. Only while the delivery is `out_for_delivery` or `in_transit`; `null` otherwise, or when the route has no driver.' })
+    @ApiProperty({ ...nullableRef(DriverDto), description: 'Who delivers. Only while the delivery is `out_for_delivery` or `in_transit`; `null` otherwise, or when the route has no driver.' })
     driver!: DriverDto | null;
 
-    @ApiProperty({ ...nullableRef(LocationDto),description: 'Last position of the driver. Only while the delivery is `in_transit` (it is this customer\'s turn) and a position was reported; `null` otherwise, including `out_for_delivery`.' })
+    @ApiProperty({ ...nullableRef(LocationDto), description: 'Last position of the driver. Only while the delivery is `in_transit` (it is this customer\'s turn) and a position was reported; `null` otherwise, including `out_for_delivery`.' })
     location!: LocationDto | null;
 
     @ApiProperty({ type: () => SelfServiceDto, description: 'What the customer can do from this link right now.' })

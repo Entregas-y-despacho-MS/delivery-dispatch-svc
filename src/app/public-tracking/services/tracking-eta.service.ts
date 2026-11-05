@@ -43,6 +43,7 @@ interface PositionRow {
 @Injectable()
 export class TrackingEtaService {
     private readonly logger = new Logger(TrackingEtaService.name);
+    private readonly inFlight = new Map<string, Promise<EtaDto | null>>();
 
     constructor(
         @InjectDataSource() private readonly dataSource: DataSource,
@@ -58,6 +59,16 @@ export class TrackingEtaService {
         const cached = await this.read(key);
         if (cached) return cached;
 
+        // Single flight: requests of the same delivery that arrive while it is being calculated (or while OSRM
+        // is timing out) share that one calculation instead of each paying for its own.
+        const pending = this.inFlight.get(key);
+        if (pending) return await pending;
+        const work = this.calculateAndStore(subject, key, now).finally(() => this.inFlight.delete(key));
+        this.inFlight.set(key, work);
+        return await work;
+    }
+
+    private async calculateAndStore(subject: EtaSubject, key: string, now: Date): Promise<EtaDto | null> {
         const eta = await this.calculate(subject, now);
         if (eta) await this.write(key, eta);
         return eta;
@@ -75,15 +86,24 @@ export class TrackingEtaService {
     private async drivingSeconds(subject: EtaSubject): Promise<number | null> {
         const path = await this.path(subject);
         if (!path) return null;
+        // One request only: a route too long for a single `table` would be split into several by the adapter, and
+        // this is a public page. A route that long has no honest estimate worth that cost.
+        if (path.length > this.osrm.tableMaxCoordinates) {
+            this.logger.warn(`ETA of dispatch ${subject.dispatchId} falls back to the slot: ${path.length} points exceed the ${this.osrm.tableMaxCoordinates} of one OSRM request.`);
+            return null;
+        }
         try {
             const { durations } = await this.osrm.getDurationMatrix(path);
             return pathSeconds(durations, path.length);
         } catch (error) {
+            // The estimate is an extra of the page: whatever OSRM does, the customer still sees the slot. The
+            // expected failures are a warning; anything else is logged with its stack so a bug is not lost.
             if (error instanceof OsrmUnavailableException || error instanceof OsrmRequestException || error instanceof OsrmTableTooBigException) {
                 this.logger.warn(`ETA of dispatch ${subject.dispatchId} falls back to the slot: ${error.message}`);
-                return null;
+            } else {
+                this.logger.error(`ETA of dispatch ${subject.dispatchId} failed unexpectedly and falls back to the slot.`, error instanceof Error ? error.stack : String(error));
             }
-            throw error;
+            return null;
         }
     }
 
