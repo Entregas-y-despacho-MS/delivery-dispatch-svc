@@ -31,6 +31,41 @@ export class SelfServiceDto {
     canRequestChange!: boolean;
 }
 
+export type EtaSource = 'osrm' | 'window';
+
+export class EtaDto {
+    @ApiProperty({ type: 'integer', minimum: 0, description: 'Minutes left until the driver arrives, rounded up. With `source: window` it is the minutes left until the end of the promised slot (never negative).' })
+    minutes!: number;
+
+    @ApiProperty({ type: String, format: 'date-time', description: 'When this estimate was calculated. It can be up to 60 seconds old: it is cached per delivery.' })
+    calculatedAt!: Date;
+
+    @ApiProperty({ enum: ['osrm', 'window'], type: String, description: '`osrm`: driving time from the last known position through the pending stops before this one. `window`: OSRM is down, there is no position yet or the address has no coordinates, so the promised slot stands in for the estimate.' })
+    source!: EtaSource;
+}
+
+export class DriverDto {
+    @ApiProperty({ description: 'Full name of the driver assigned to the route. No phone or other personal data is returned.' })
+    name!: string;
+
+    @ApiProperty({ type: String, nullable: true, description: 'Type of the vehicle (for example `moto` or `camioneta`). `null` when the route has no vehicle.' })
+    vehicleType!: string | null;
+
+    @ApiProperty({ type: String, nullable: true, description: 'Licence plate of the vehicle. `null` when the route has no vehicle.' })
+    vehiclePlate!: string | null;
+}
+
+export class LocationDto {
+    @ApiProperty({ type: 'number', format: 'double', minimum: -90, maximum: 90, description: 'Latitude of the last position reported by the driver.' })
+    latitude!: number;
+
+    @ApiProperty({ type: 'number', format: 'double', minimum: -180, maximum: 180, description: 'Longitude of the last position reported by the driver.' })
+    longitude!: number;
+
+    @ApiProperty({ type: String, format: 'date-time', description: 'When the device recorded that position.' })
+    recordedAt!: Date;
+}
+
 export class PublicTrackingDto {
     @ApiProperty({ type: String, nullable: true, description: 'Tracking code printed on the order. It identifies the delivery but never gives access to this page.' })
     trackingCode!: string | null;
@@ -49,6 +84,15 @@ export class PublicTrackingDto {
 
     @ApiProperty({ type: String, format: 'date-time', nullable: true, description: 'End of the promised delivery slot. `null` while there is none.' })
     windowEnd!: Date | null;
+
+    @ApiProperty({ type: () => EtaDto, nullable: true, description: 'Estimated arrival. Only while the delivery is `out_for_delivery` or `in_transit`; `null` otherwise.' })
+    eta!: EtaDto | null;
+
+    @ApiProperty({ type: () => DriverDto, nullable: true, description: 'Who delivers. Only while the delivery is `out_for_delivery` or `in_transit`; `null` otherwise, or when the route has no driver.' })
+    driver!: DriverDto | null;
+
+    @ApiProperty({ type: () => LocationDto, nullable: true, description: 'Last position of the driver. Only while the delivery is `in_transit` (it is this customer\'s turn) and a position was reported; `null` otherwise, including `out_for_delivery`.' })
+    location!: LocationDto | null;
 
     @ApiProperty({ type: () => SelfServiceDto, description: 'What the customer can do from this link right now.' })
     selfService!: SelfServiceDto;
