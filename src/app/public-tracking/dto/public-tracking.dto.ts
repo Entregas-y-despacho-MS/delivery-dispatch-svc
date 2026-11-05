@@ -1,4 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiExtraModels, ApiProperty } from '@nestjs/swagger';
+import { nullableRef } from '../../../modules/dispatch/route-batches/dto/nullable-ref.js';
 import type { SelfServiceClosedReason } from '../domain/self-service.js';
 
 const CLOSED_REASONS: SelfServiceClosedReason[] = [
@@ -66,6 +67,7 @@ export class LocationDto {
     recordedAt!: Date;
 }
 
+@ApiExtraModels(EtaDto, DriverDto, LocationDto)
 export class PublicTrackingDto {
     @ApiProperty({ type: String, nullable: true, description: 'Tracking code printed on the order. It identifies the delivery but never gives access to this page.' })
     trackingCode!: string | null;
@@ -85,13 +87,13 @@ export class PublicTrackingDto {
     @ApiProperty({ type: String, format: 'date-time', nullable: true, description: 'End of the promised delivery slot. `null` while there is none.' })
     windowEnd!: Date | null;
 
-    @ApiProperty({ type: () => EtaDto, nullable: true, description: 'Estimated arrival. Only while the delivery is `out_for_delivery` or `in_transit`; `null` otherwise.' })
+    @ApiProperty({ ...nullableRef(EtaDto),description: 'Estimated arrival. Only while the delivery is `out_for_delivery` or `in_transit`; `null` otherwise.' })
     eta!: EtaDto | null;
 
-    @ApiProperty({ type: () => DriverDto, nullable: true, description: 'Who delivers. Only while the delivery is `out_for_delivery` or `in_transit`; `null` otherwise, or when the route has no driver.' })
+    @ApiProperty({ ...nullableRef(DriverDto),description: 'Who delivers. Only while the delivery is `out_for_delivery` or `in_transit`; `null` otherwise, or when the route has no driver.' })
     driver!: DriverDto | null;
 
-    @ApiProperty({ type: () => LocationDto, nullable: true, description: 'Last position of the driver. Only while the delivery is `in_transit` (it is this customer\'s turn) and a position was reported; `null` otherwise, including `out_for_delivery`.' })
+    @ApiProperty({ ...nullableRef(LocationDto),description: 'Last position of the driver. Only while the delivery is `in_transit` (it is this customer\'s turn) and a position was reported; `null` otherwise, including `out_for_delivery`.' })
     location!: LocationDto | null;
 
     @ApiProperty({ type: () => SelfServiceDto, description: 'What the customer can do from this link right now.' })
