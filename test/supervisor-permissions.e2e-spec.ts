@@ -45,6 +45,7 @@ const ALLOWED_LISTS: Route[] = [
     { method: 'get', path: '/route-batches' },
     { method: 'get', path: '/vehicles' },
     { method: 'get', path: '/vehicle-incident-types' },
+    { method: 'get', path: '/vehicle-maintenances' },
     { method: 'get', path: '/warehouses' },
     { method: 'get', path: '/incident-reasons' },
     { method: 'get', path: '/reschedule-reasons' },
@@ -73,6 +74,7 @@ const ALLOWED_PASS: Route[] = [
     { method: 'put', path: `/vehicles/${NO_ID}`, body: {} },
     { method: 'delete', path: `/vehicles/${NO_ID}` },
     { method: 'post', path: '/vehicle-maintenances', body: {} },
+    { method: 'patch', path: `/vehicle-maintenances/${NO_ID}/status`, body: {} },
     { method: 'post', path: '/vehicle-incident-types', body: {} },
     { method: 'put', path: `/vehicle-incident-types/${NO_ID}`, body: {} },
 ];

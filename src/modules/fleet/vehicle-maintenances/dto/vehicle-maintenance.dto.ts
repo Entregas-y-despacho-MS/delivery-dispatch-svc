@@ -11,16 +11,24 @@ export class VehicleMaintenanceDto {
     vehicleId!: number;
 
     @DtoField()
-    @ApiProperty({ type: 'integer', example: 3, description: 'Vehicle incident type registered' })
-    vehicleIncidentTypeId!: number;
+    @ApiProperty({ type: 'integer', nullable: true, example: 3, description: 'Vehicle incident type registered; null for a routine (preventive) maintenance' })
+    vehicleIncidentTypeId!: number | null;
 
     @DtoField()
     @ApiProperty({ example: 'Se sintió ruido metálico en las pastillas de freno delanteras', description: 'Free-text detail of what happened' })
     description!: string;
 
     @DtoField()
-    @ApiProperty({ example: 'pending', description: 'pending, in_progress or completed — always pending right after registering (RF-A17 tracks it from here on, out of scope of this endpoint)' })
+    @ApiProperty({ example: 'pending', description: 'pending, in_progress or completed — always pending right after registering; `PATCH /vehicle-maintenances/:id/status` moves it forward' })
     status!: string;
+
+    @DtoField()
+    @ApiProperty({ type: String, format: 'date-time', nullable: true, example: '2026-11-10T14:00:00.000Z', description: 'Scheduled date (UTC), if any' })
+    scheduledAt!: Date | null;
+
+    @DtoField()
+    @ApiProperty({ type: String, format: 'date-time', nullable: true, example: '2026-11-04T18:30:00.000Z', description: 'Closing date (UTC); null until the maintenance is completed' })
+    completedAt!: Date | null;
 
     @DtoField()
     @ApiProperty({ type: String, format: 'date-time', example: '2024-01-01T00:00:00.000Z', description: 'Creation timestamp (UTC)' })

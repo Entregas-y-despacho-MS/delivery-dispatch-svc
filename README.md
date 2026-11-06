@@ -59,7 +59,7 @@ reservado). Debe coincidir con `PORTAL_ROUTES` del portal web (`config/portal-ro
 | Lotes de ruta | `POST :id/approve-final` (2.ª aprobación) | **No**, solo Coordinador |
 | Planificación | `POST /planning/generate`, `/planning/cutoff`, `/dispatch-reservations/*` | **No**, solo Coordinador |
 | Despachos | `POST :id/reschedule`, `:id/return`, `:id/cancel`, `:id/pickup-schedule`, `:id/pickup-reschedule`, `change-requests/:id/tracking-link` | **No**, solo Coordinador |
-| Flota | `/vehicles` (CRUD), `POST /vehicle-maintenances`, `/vehicle-incident-types` (`GET`, `POST`, `PUT`) | Sí |
+| Flota | `/vehicles` (CRUD), `GET`, `POST` y `PATCH :id/status` de `/vehicle-maintenances`, `/vehicle-incident-types` (`GET`, `POST`, `PUT`) | Sí |
 | Catálogos | `GET /warehouses`, `GET /incident-reasons`, `GET /reschedule-reasons` | Sí (solo lectura) |
 | Catálogos | `POST` y `PUT` de `/incident-reasons` y `/reschedule-reasons` | **No**, solo Coordinador (desde ST-59.1) |
 | Catálogos | `/service-levels`, `/delivery-zones` | **No**, solo Coordinador |
@@ -81,7 +81,6 @@ Cualquier usuario autenticado, incluido el Supervisor, puede usar `POST /auth/lo
 | `ST-61.1` | `GET /fleet/kpis` | Por definir |
 | `ST-62.1` | `PATCH /vehicles/:id/status` | Supervisor y Coordinador |
 | `ST-63.1` | `POST /route-batches/:id/reassign` | Supervisor |
-| `ST-64.1` | `GET /vehicle-maintenances`, `PATCH /vehicle-maintenances/:id/status` | Supervisor y Coordinador |
 
 Quien agregue uno de estos endpoints añade su fila a la tabla de arriba y su caso a
 `test/supervisor-permissions.e2e-spec.ts`.
