@@ -56,6 +56,7 @@ describe('Mi Jornada del repartidor (e2e, RF-U02)', () => {
         ))[0].dispatch_package_id as number;
 
     let batches: number[] = [];
+    const warehouseIds: number[] = [];
 
     beforeAll(async () => {
         const moduleRef: TestingModule = await Test.createTestingModule({ imports: [AppModule] }).compile();
@@ -87,6 +88,7 @@ describe('Mi Jornada del repartidor (e2e, RF-U02)', () => {
         await withEventPurge(dataSource, { dispatchRefs: [`asg-${run}-%`], routeBatchIds: batches, userNames: [`e2e_asg_%_${run}`] }, async (manager) => {
             await manager.query(`DELETE FROM dispatch_packages WHERE dispatch_id IN (SELECT dispatch_id FROM dispatches WHERE source_order_ref LIKE $1)`, [`asg-${run}-%`]);
             await manager.query(`DELETE FROM dispatches WHERE source_order_ref LIKE $1`, [`asg-${run}-%`]);
+            if (warehouseIds.length) await manager.query(`DELETE FROM warehouses WHERE warehouse_id = ANY($1)`, [warehouseIds]);
             if (batches.length) await manager.query(`DELETE FROM route_batches WHERE route_batch_id = ANY($1)`, [batches]);
             await manager.query(`DELETE FROM users WHERE username LIKE $1`, [`e2e_asg_%_${run}`]);
         });
@@ -237,6 +239,41 @@ describe('Mi Jornada del repartidor (e2e, RF-U02)', () => {
             ]);
             expect(pkgs[0]).not.toHaveProperty('id');
             expect(find(body, 'K-NONE').packages).toEqual([]);
+        });
+    });
+
+    describe('recogida en proveedor (ST-239.2)', () => {
+        it('supplier_pickup publica ítems esperados y almacén destino; la entrega los devuelve en null', async () => {
+            const [{ warehouse_id: warehouseId }] = await dataSource.query(
+                `INSERT INTO warehouses (code, name, address, latitude, longitude, reception_start_time, reception_end_time)
+                 VALUES ($1, 'ST239 e2e warehouse', 'Av. Test 450', -16.5, -68.1, '08:00', '18:00') RETURNING warehouse_id`,
+                [`WH-ASG-${run}`],
+            );
+            warehouseIds.push(warehouseId);
+            const batch = await newBatch('driver1', '2031-09-01', 'confirmed');
+            batches.push(batch);
+            const pickup = await newStop(batch, 1, 'scheduled', 'P-ITEMS', { type: 'supplier_pickup' });
+            const emptyPickup = await newStop(batch, 2, 'scheduled', 'P-EMPTY', { type: 'supplier_pickup' });
+            await newStop(batch, 3, 'scheduled', 'P-DELIVERY');
+            await dataSource.query(`UPDATE dispatches SET destination_warehouse_id = $1 WHERE dispatch_id = $2`, [warehouseId, pickup]);
+            await dataSource.query(
+                `INSERT INTO dispatch_pickup_items (dispatch_id, item_code, description, expected_quantity) VALUES ($1, 'B-2', 'Arena', 3), ($1, 'A-1', 'Cemento', 12.5)`,
+                [pickup],
+            );
+
+            const { body } = await get('driver1', '?date=2031-09-01');
+            const found = (ref: string) => body.data.find((s: any) => s.sourceOrderRef === `asg-${run}-${ref}`);
+
+            expect(found('P-ITEMS').pickupItems).toEqual([
+                { itemCode: 'B-2', description: 'Arena', expectedQuantity: 3 },
+                { itemCode: 'A-1', description: 'Cemento', expectedQuantity: 12.5 },
+            ]);
+            expect(found('P-ITEMS').destinationWarehouse).toEqual({ id: warehouseId, name: 'ST239 e2e warehouse', address: 'Av. Test 450' });
+            expect(found('P-EMPTY').pickupItems).toEqual([]);
+            expect(found('P-EMPTY').destinationWarehouse).toBeNull();
+            expect(found('P-DELIVERY').pickupItems).toBeNull();
+            expect(found('P-DELIVERY').destinationWarehouse).toBeNull();
+            expect(emptyPickup).toBeGreaterThan(0);
         });
     });
 
