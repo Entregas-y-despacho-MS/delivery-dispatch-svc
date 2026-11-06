@@ -4,7 +4,7 @@ import { SettingsService } from './settings.service.js';
 import { SettingDto } from '../dto/setting.dto.js';
 import { Setting } from '../entities/setting.entity.js';
 import { InvalidSettingValueException, SettingNotFoundException } from '../exceptions/index.js';
-import { SETTINGS_VERSION_KEY } from '../settings.constants.js';
+import { SETTINGS_CACHE_KEY, SETTINGS_VERSION_KEY } from '../settings.constants.js';
 import { MemoryCacheAdapter } from '../../../plugins/cache/memory/memory-cache.adapter.js';
 
 function build() {
@@ -20,6 +20,9 @@ function build() {
         afternoon_window_end: '18:00',
         final_review_escalation_time: '07:00',
         warehouse_prep_end_time: '08:15',
+        sla_alert_min_on_time_pct: '90',
+        gps_stale_alert_minutes: '5',
+        driver_incident_alert_per_day: '3',
     };
     const settings = new Map<string, Setting>([
         ['delivery_window_start', { key: 'delivery_window_start', value: '08:00', description: null, updatedAt: new Date() }],
@@ -106,6 +109,72 @@ describe('SettingsService', () => {
         const settings = await service.findAll(SettingDto);
         expect(settings.some(({ key }) => key === SETTINGS_VERSION_KEY)).toBe(false);
         await expect(service.update(SettingDto, SETTINGS_VERSION_KEY, '10')).rejects.toThrow(InvalidSettingValueException);
+    });
+
+    describe('updateMany', () => {
+        const thresholds = { sla_alert_min_on_time_pct: '85', gps_stale_alert_minutes: '10', driver_incident_alert_per_day: '4' };
+
+        it('saves the whole group, bumps the version once and refreshes the shared snapshot', async () => {
+            const { service, repository, cache } = build();
+            await service.refresh();
+            await expect(service.getNumber('gps_stale_alert_minutes', 0)).resolves.toBe(5);
+
+            const updated = await service.updateMany(SettingDto, thresholds);
+
+            expect(updated.map(({ key, value }) => [key, value])).toEqual(Object.entries(thresholds));
+            expect(repository.update).toHaveBeenCalledTimes(4);
+            expect(repository.update).toHaveBeenCalledWith(SETTINGS_VERSION_KEY, { value: '1' });
+            await expect(service.getVersion()).resolves.toBe(1);
+            // The cache is read first: a stale snapshot would still answer 5 / 90 / 3.
+            expect(await cache.get(SETTINGS_CACHE_KEY)).toContain('"value":"10"');
+            await expect(service.getNumber('gps_stale_alert_minutes', 0)).resolves.toBe(10);
+            await expect(service.getNumber('sla_alert_min_on_time_pct', 0)).resolves.toBe(85);
+            await expect(service.getNumber('driver_incident_alert_per_day', 0)).resolves.toBe(4);
+        });
+
+        it('writes nothing when one value of the group is invalid', async () => {
+            const { service, repository, settings } = build();
+
+            await expect(service.updateMany(SettingDto, { ...thresholds, sla_alert_min_on_time_pct: '101' })).rejects.toThrow(InvalidSettingValueException);
+            await expect(service.updateMany(SettingDto, { ...thresholds, gps_stale_alert_minutes: '0' })).rejects.toThrow(InvalidSettingValueException);
+
+            expect(repository.update).not.toHaveBeenCalled();
+            expect(settings.get('gps_stale_alert_minutes')!.value).toBe('5');
+        });
+
+        it('does nothing, and keeps the version, when there is nothing to change', async () => {
+            const { service, repository } = build();
+
+            await expect(service.updateMany(SettingDto, {})).resolves.toEqual([]);
+
+            expect(repository.update).not.toHaveBeenCalled();
+            await expect(service.getVersion()).resolves.toBe(0);
+        });
+
+        it('rejects an unknown key and the internal version key', async () => {
+            const { service, repository } = build();
+
+            await expect(service.updateMany(SettingDto, { ...thresholds, no_such_key: '1' })).rejects.toThrow(SettingNotFoundException);
+            await expect(service.updateMany(SettingDto, { ...thresholds, [SETTINGS_VERSION_KEY]: '9' })).rejects.toThrow(InvalidSettingValueException);
+
+            expect(repository.update).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('findByKeys', () => {
+        it('returns the requested settings in the requested order', async () => {
+            const { service } = build();
+
+            const found = await service.findByKeys(SettingDto, ['driver_incident_alert_per_day', 'sla_alert_min_on_time_pct']);
+
+            expect(found.map(({ key, value }) => [key, value])).toEqual([['driver_incident_alert_per_day', '3'], ['sla_alert_min_on_time_pct', '90']]);
+        });
+
+        it('fails when a key is missing from the table', async () => {
+            const { service } = build();
+
+            await expect(service.findByKeys(SettingDto, ['no_such_key'])).rejects.toThrow(SettingNotFoundException);
+        });
     });
 
     it('returns 404 for unknown settings', async () => {
