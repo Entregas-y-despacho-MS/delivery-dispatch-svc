@@ -23,6 +23,7 @@ function buildService() {
         existsBy:         vi.fn().mockResolvedValue(true),
         update:           vi.fn(),
         find:             vi.fn().mockResolvedValue([]),
+        query:            vi.fn().mockResolvedValue([]),
         createQueryBuilder: vi.fn(() => makeQueryBuilder(1)),
     };
     const service = new DispatchesService(rawRepo as any);
@@ -148,7 +149,7 @@ function stopRow(overrides: Record<string, unknown> = {}) {
         paymentStatusLabel: 'Prepaid', packageContents: null, estimatedWeightKg: '12.50',
         scheduledWindowStart: new Date('2026-10-14T14:00:00Z'), scheduledWindowEnd: new Date('2026-10-14T16:00:00Z'),
         dispatchStatus: { id: 2, name: 'in_transit' }, serviceLevel: { id: 1, name: 'express' },
-        dispatchType: { id: 1, name: 'delivery' }, packages: [], routeBatch: { id: 5, status: 'confirmed', acceptedAt: null },
+        dispatchType: { id: 1, name: 'delivery' }, destinationWarehouse: null, packages: [], routeBatch: { id: 5, status: 'confirmed', acceptedAt: null },
         updatedAt: new Date('2026-10-14T10:00:00Z'),
         ...overrides,
     };
@@ -230,5 +231,57 @@ describe('DispatchesService.findDriverAssignments', () => {
 
         expect(result.lastModifiedAt).toEqual(new Date('2026-10-14T12:30:00Z'));
         expect(result.data.map((stop) => stop.id)).toEqual([1, 2, 3]);
+    });
+});
+
+describe('DispatchesService.findDriverAssignments — recogida en proveedor (ST-239.2)', () => {
+    const pickupType = { id: 3, name: 'supplier_pickup' };
+    const warehouse = { id: 4, name: 'Almacén Central', address: 'Av. Industrial 450' };
+
+    it('supplier_pickup publica sus ítems esperados (cantidad como número) y el almacén destino; la entrega queda en null', async () => {
+        const { service, rawRepo } = buildService();
+        rawRepo.find.mockResolvedValue([
+            stopRow({ id: 10, sequenceOrder: 1, dispatchType: pickupType, destinationWarehouse: warehouse }),
+            stopRow({ id: 11, sequenceOrder: 2 }),
+        ]);
+        rawRepo.query.mockResolvedValue([
+            { dispatch_id: 10, item_code: 'A-1', description: 'Cemento', expected_quantity: '12.50' },
+            { dispatch_id: 10, item_code: 'B-2', description: 'Arena', expected_quantity: '3.00' },
+        ]);
+
+        const { data } = await service.findDriverAssignments(9, '2026-10-14');
+
+        expect(rawRepo.query).toHaveBeenCalledTimes(1);
+        const [sql, params] = rawRepo.query.mock.calls[0];
+        expect(sql).toContain('dispatch_id = ANY($1)');
+        expect(sql).toContain('ORDER BY dispatch_id, dispatch_pickup_item_id');
+        expect(params).toEqual([[10]]);
+        expect(data[0].pickupItems).toEqual([
+            { itemCode: 'A-1', description: 'Cemento', expectedQuantity: 12.5 },
+            { itemCode: 'B-2', description: 'Arena', expectedQuantity: 3 },
+        ]);
+        expect(data[0].destinationWarehouse).toEqual(warehouse);
+        expect(data[1].pickupItems).toBeNull();
+        expect(data[1].destinationWarehouse).toBeNull();
+        expect(data.map((s) => s.id)).toEqual([10, 11]);
+    });
+
+    it('un supplier_pickup sin ítems recibe [] (no null)', async () => {
+        const { service, rawRepo } = buildService();
+        rawRepo.find.mockResolvedValue([stopRow({ id: 10, dispatchType: pickupType })]);
+
+        const { data } = await service.findDriverAssignments(9, '2026-10-14');
+
+        expect(data[0].pickupItems).toEqual([]);
+    });
+
+    it('no consulta ítems si ninguna parada es supplier_pickup', async () => {
+        const { service, rawRepo } = buildService();
+        rawRepo.find.mockResolvedValue([stopRow({ id: 1 }), stopRow({ id: 2, dispatchType: { id: 2, name: 'supplier_return' } })]);
+
+        const { data } = await service.findDriverAssignments(9, '2026-10-14');
+
+        expect(rawRepo.query).not.toHaveBeenCalled();
+        expect(data.every((s) => s.pickupItems === null)).toBe(true);
     });
 });

@@ -4,7 +4,7 @@ import { In, Repository } from 'typeorm';
 import { Dispatch } from '../entities/dispatch.entity.js';
 import { DispatchStatus } from '../../dispatch-statuses/entities/dispatch-status.entity.js';
 import { DispatchNotFoundException } from '../exceptions/index.js';
-import { AssignmentPackageDto, DriverAssignmentDto } from '../dto/driver-assignment.dto.js';
+import { AssignmentPackageDto, AssignmentPickupItemDto, DriverAssignmentDto } from '../dto/driver-assignment.dto.js';
 import { DriverAssignmentsResponseDto } from '../dto/driver-assignments-response.dto.js';
 import { DtoRepository } from '../../../../shared/orm/index.js';
 import { MutationOptions } from '../../../../shared/dto/options.dto.js';
@@ -54,8 +54,32 @@ export class DispatchesService {
             stop.packages = packageRows.map(({ id, ...pkg }) => ({ packageId: id, ...pkg }));
             return stop;
         });
+        await this.attachPickupItems(data);
         const lastModifiedAt = data.reduce<Date | null>((latest, stop) => (latest === null || stop.updatedAt > latest ? stop.updatedAt : latest), null);
         return { date: shiftDate, lastModifiedAt, data };
+    }
+
+    /** Sets `pickupItems` on every stop: the expected products for supplier pickups (one query), `null` for the rest. */
+    private async attachPickupItems(stops: DriverAssignmentDto[]): Promise<void> {
+        const pickupIds = stops.filter((stop) => stop.dispatchType.name === 'supplier_pickup').map((stop) => stop.id);
+        const itemsByDispatch = new Map<number, AssignmentPickupItemDto[]>();
+        if (pickupIds.length > 0) {
+            const rows: { dispatch_id: number; item_code: string; description: string; expected_quantity: string }[] = await this.rawRepo.query(
+                `SELECT dispatch_id, item_code, description, expected_quantity
+                   FROM dispatch_pickup_items
+                  WHERE dispatch_id = ANY($1)
+                  ORDER BY dispatch_id, dispatch_pickup_item_id`,
+                [pickupIds],
+            );
+            for (const row of rows) {
+                const items = itemsByDispatch.get(row.dispatch_id) ?? [];
+                items.push({ itemCode: row.item_code, description: row.description, expectedQuantity: Number(row.expected_quantity) });
+                itemsByDispatch.set(row.dispatch_id, items);
+            }
+        }
+        for (const stop of stops) {
+            stop.pickupItems = stop.dispatchType.name === 'supplier_pickup' ? (itemsByDispatch.get(stop.id) ?? []) : null;
+        }
     }
 
     async existsById(id: number, options?: MutationOptions): Promise<boolean> {

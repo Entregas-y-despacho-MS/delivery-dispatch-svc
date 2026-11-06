@@ -86,8 +86,34 @@ export class AssignmentServiceLevelDto {
     name!: string;
 }
 
+export class AssignmentWarehouseDto {
+    @DtoField()
+    @ApiProperty({ type: 'integer', example: 3, description: 'Warehouse ID' })
+    id!: number;
+
+    @DtoField()
+    @ApiProperty({ example: 'Almacén Central', description: 'Warehouse name' })
+    name!: string;
+
+    @DtoField()
+    @ApiProperty({ example: 'Av. Industrial 450, zona sur', description: 'Warehouse address' })
+    address!: string;
+}
+
+/** Product the supplier is expected to hand over at a supplier pickup. Filled by the service, not mapped from the entity. */
+export class AssignmentPickupItemDto {
+    @ApiProperty({ example: 'PRD-0042', description: 'Product code in Procurement' })
+    itemCode!: string;
+
+    @ApiProperty({ example: 'Cemento portland 50 kg', description: 'Product description received from Procurement' })
+    description!: string;
+
+    @ApiProperty({ type: 'number', format: 'double', example: 12.5, description: 'Quantity expected from the supplier' })
+    expectedQuantity!: number;
+}
+
 /** One stop of the driver's route for the day (RF-U02). */
-@ApiExtraModels(AssignmentServiceLevelDto, AssignmentDispatchTypeDto, AssignmentRouteBatchDto)
+@ApiExtraModels(AssignmentServiceLevelDto, AssignmentDispatchTypeDto, AssignmentRouteBatchDto, AssignmentWarehouseDto)
 export class DriverAssignmentDto {
     @DtoField()
     @ApiProperty({ type: 'integer', example: 42, description: 'Dispatch ID' })
@@ -175,6 +201,13 @@ export class DriverAssignmentDto {
     @DtoRelation(() => AssignmentPackageRowDto)
     @ApiProperty({ type: () => [AssignmentPackageDto], description: 'Packages (bultos) of the dispatch, ordered by `packageId`. Empty when the origin has not sent them' })
     packages!: AssignmentPackageDto[];
+
+    @DtoRelation(() => AssignmentWarehouseDto)
+    @ApiProperty({ allOf: [{ $ref: getSchemaPath(AssignmentWarehouseDto) }], nullable: true, description: 'Destination warehouse of a pickup. `null` when it does not apply' })
+    destinationWarehouse!: AssignmentWarehouseDto | null;
+
+    @ApiProperty({ type: () => [AssignmentPickupItemDto], nullable: true, description: 'Products expected from the supplier. Only for `supplier_pickup` dispatches, ordered by item ID; `null` for the other dispatch types; `[]` when a supplier pickup has no items' })
+    pickupItems!: AssignmentPickupItemDto[] | null;
 
     @DtoRelation(() => AssignmentRouteBatchDto)
     @ApiProperty({ type: () => AssignmentRouteBatchDto, description: 'Route batch the stop belongs to' })

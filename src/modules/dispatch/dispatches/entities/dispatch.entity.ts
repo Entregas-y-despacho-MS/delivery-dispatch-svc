@@ -178,6 +178,10 @@ export class Dispatch extends BaseCreatedUpdated {
     @JoinColumn({ name: 'origin_warehouse_id' })
     originWarehouse: Warehouse | null;
 
+    @ManyToOne(() => Warehouse)
+    @JoinColumn({ name: 'destination_warehouse_id' })
+    destinationWarehouse: Warehouse | null;
+
     @OneToMany(() => DispatchPackage, (dispatchPackage) => dispatchPackage.dispatch)
     packages: DispatchPackage[];
 }
