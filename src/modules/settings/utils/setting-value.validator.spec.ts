@@ -26,6 +26,7 @@ const operationalKeys = [
     'reschedule_window_days', 'tracking_token_retention_days', 'incomplete_order_alert_minutes',
     'final_review_escalation_time', 'warehouse_prep_end_time', 'warehouse_prep_lead_minutes',
     'reschedule_code_expiry_minutes',
+    'sla_alert_min_on_time_pct', 'gps_stale_alert_minutes', 'driver_incident_alert_per_day',
 ];
 
 describe('validateSettingValue', () => {
@@ -36,6 +37,9 @@ describe('validateSettingValue', () => {
         ['plan_generation_times', '08:30,13:30'], ['plan_working_days', '1,2,3,4,5'],
         ['plan_non_working_dates', ''], ['plan_non_working_dates', '2026-12-25,2027-01-01'],
         ['stop_service_minutes', '15'], ['planning_margin_pct', '20'], ['plan_min_orders_per_route', '3'],
+        ['sla_alert_min_on_time_pct', '0'], ['sla_alert_min_on_time_pct', '90'], ['sla_alert_min_on_time_pct', '100'],
+        ['gps_stale_alert_minutes', '1'], ['gps_stale_alert_minutes', '1440'],
+        ['driver_incident_alert_per_day', '1'], ['driver_incident_alert_per_day', '100'],
     ])('accepts %s = %j', (key, value) => {
         expect(validateSettingValue(key, value)).toBeNull();
     });
@@ -48,6 +52,9 @@ describe('validateSettingValue', () => {
         ['plan_working_days', '1,8'], ['plan_working_days', '1,1'], ['plan_working_days', ''],
         ['plan_non_working_dates', '2026-02-30'], ['plan_non_working_dates', '2026-12-25,'],
         ['stop_service_minutes', ''], ['planning_margin_pct', '101'], ['plan_min_orders_per_route', '0'], ['plan_min_orders_per_route', '1001'], ['plan_min_orders_per_route', 'three'],
+        ['sla_alert_min_on_time_pct', '-1'], ['sla_alert_min_on_time_pct', '101'], ['sla_alert_min_on_time_pct', '90.5'], ['sla_alert_min_on_time_pct', ''],
+        ['gps_stale_alert_minutes', '0'], ['gps_stale_alert_minutes', '1441'], ['gps_stale_alert_minutes', 'five'],
+        ['driver_incident_alert_per_day', '0'], ['driver_incident_alert_per_day', '101'], ['driver_incident_alert_per_day', ''],
     ])('rejects %s = %j', (key, value) => {
         expect(validateSettingValue(key, value)).toContain(key);
     });

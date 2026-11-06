@@ -63,7 +63,9 @@ reservado). Debe coincidir con `PORTAL_ROUTES` del portal web (`config/portal-ro
 | Catálogos | `GET /warehouses`, `GET /incident-reasons`, `GET /reschedule-reasons` | Sí (solo lectura) |
 | Catálogos | `POST` y `PUT` de `/incident-reasons` y `/reschedule-reasons` | **No**, solo Coordinador (desde ST-59.1) |
 | Catálogos | `/service-levels`, `/delivery-zones` | **No**, solo Coordinador |
-| Ajustes | `GET /settings` (Administrador y Coordinador), `PUT /settings/:key` | **No** (ver «Pendiente») |
+| Ajustes | `GET /settings` (Administrador y Coordinador), `PUT /settings/:key` | **No** |
+| Ajustes | `GET /settings/alert-thresholds` (desde ST-67.1) | Sí (también el Coordinador) |
+| Ajustes | `PUT /settings/alert-thresholds` (desde ST-67.1) | Sí, solo Supervisor (y root); el Coordinador recibe 403. Va en su propio endpoint: `/settings` no cambia |
 | Auditoría | `GET /audit/outbound-message-alerts` | **No**, solo Coordinador |
 | Usuarios | `/users`, `/roles`, `POST /auth/register` | **No**, solo Administrador (el listado de `/users` y `/roles` también lo lee el Coordinador) |
 | Repartidor | `my-assignments`, `my-history`, `drivers/me/metrics`, inicio y aceptación de lotes, estados, evidencias, OTP, incidencias, `supplier-pickup`, `arrived-at-warehouse`, `tracking/locations`, `push-tokens` | **No**, solo Repartidor |
@@ -80,7 +82,6 @@ Cualquier usuario autenticado, incluido el Supervisor, puede usar `POST /auth/lo
 | `ST-62.1` | `PATCH /vehicles/:id/status` | Supervisor y Coordinador |
 | `ST-63.1` | `POST /route-batches/:id/reassign` | Supervisor |
 | `ST-64.1` | `GET /vehicle-maintenances`, `PATCH /vehicle-maintenances/:id/status` | Supervisor y Coordinador |
-| `ST-67.1` | `GET /settings/alert-thresholds` (Supervisor y Coordinador), `PUT /settings/alert-thresholds` (solo Supervisor) | Los umbrales del Supervisor van en su propio endpoint; `/settings` no cambia |
 
 Quien agregue uno de estos endpoints añade su fila a la tabla de arriba y su caso a
 `test/supervisor-permissions.e2e-spec.ts`.

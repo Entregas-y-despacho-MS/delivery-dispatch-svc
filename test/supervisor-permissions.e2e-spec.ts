@@ -7,7 +7,7 @@
 //   - lo reservado responde 403 INSUFFICIENT_PERMISSIONS.
 //
 // Las escrituras permitidas se prueban con un id inexistente y un cuerpo vacío, así que no modifican
-// datos. Los endpoints que traerán ST-60.1, ST-61.1, ST-62.1, ST-63.1, ST-64.1 y ST-67.1 se agregan
+// datos. Los endpoints que traerán ST-60.1, ST-61.1, ST-62.1, ST-63.1, y ST-64.1 se agregan
 // a esta matriz cuando existan (ver «Pendiente» en el README del back).
 //
 // Levanta el AppModule real contra una base real. El Supervisor se crea por DataSource, inicia sesión
@@ -48,11 +48,15 @@ const ALLOWED_LISTS: Route[] = [
     { method: 'get', path: '/warehouses' },
     { method: 'get', path: '/incident-reasons' },
     { method: 'get', path: '/reschedule-reasons' },
+    // ST-67.1: umbrales de alerta (Supervisor y Coordinador leen).
+    { method: 'get', path: '/settings/alert-thresholds' },
 ];
 
 /** Lecturas por id y escrituras permitidas: el guard las deja pasar (ni 401 ni 403). */
 const ALLOWED_PASS: Route[] = [
     { method: 'get', path: '/dispatches/history/export' },
+    // ST-67.1: cuerpo vacío → 400 de validación, sin modificar los umbrales.
+    { method: 'put', path: '/settings/alert-thresholds', body: {} },
     { method: 'get', path: `/dispatches/${NO_ID}/detail` },
     { method: 'get', path: `/route-batches/${NO_ID}` },
     { method: 'get', path: `/vehicles/${NO_ID}` },

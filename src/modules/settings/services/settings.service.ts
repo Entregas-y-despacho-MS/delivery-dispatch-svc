@@ -80,7 +80,19 @@ export class SettingsService implements OnModuleInit, OnModuleDestroy {
     }
 
     async update<T extends object>(returnDto: new () => T, key: string, value: string): Promise<T> {
-        if (key === SETTINGS_VERSION_KEY) {
+        const [updated] = await this.updateMany(returnDto, { [key]: value });
+        return updated;
+    }
+
+    /**
+     * Changes several settings in one transaction: every value is validated before anything is written, and the
+     * settings version goes up once, so readers never see a half-applied group. Returns the settings in the order
+     * of `entries`.
+     */
+    async updateMany<T extends object>(returnDto: new () => T, entries: Record<string, string>): Promise<T[]> {
+        const keys = Object.keys(entries);
+        if (keys.length === 0) return [];
+        if (keys.includes(SETTINGS_VERSION_KEY)) {
             throw new InvalidSettingValueException(`${SETTINGS_VERSION_KEY} is managed by the service and cannot be changed.`);
         }
 
@@ -90,23 +102,25 @@ export class SettingsService implements OnModuleInit, OnModuleDestroy {
                 order: { key: 'ASC' },
                 lock:  { mode: 'pessimistic_write' },
             });
-            const current = settings.find((setting) => setting.key === key);
-            if (!current) throw new SettingNotFoundException();
-
-            const valueProblem = validateSettingValue(key, value);
-            if (valueProblem) throw new InvalidSettingValueException(valueProblem);
+            for (const key of keys) {
+                if (!settings.some((setting) => setting.key === key)) throw new SettingNotFoundException();
+            }
+            for (const key of keys) {
+                const valueProblem = validateSettingValue(key, entries[key]);
+                if (valueProblem) throw new InvalidSettingValueException(valueProblem);
+            }
 
             const values = Object.fromEntries(settings
                 .filter((setting) => setting.key !== SETTINGS_VERSION_KEY)
                 .map((setting) => [setting.key, setting.value]));
-            values[key] = value;
+            Object.assign(values, entries);
             const configurationProblem = validateSettingConfiguration(values);
             if (configurationProblem) throw new InvalidSettingValueException(configurationProblem);
 
             const versionSetting = settings.find((setting) => setting.key === SETTINGS_VERSION_KEY);
             if (versionSetting && !/^\d+$/.test(versionSetting.value)) throw new SettingsVersionException();
 
-            await repository.update(key, { value });
+            for (const key of keys) await repository.update(key, { value: entries[key] });
             const version = Number(versionSetting?.value ?? '0') + 1;
             if (!Number.isSafeInteger(version)) throw new SettingsVersionException();
             if (!versionSetting) {
@@ -125,8 +139,17 @@ export class SettingsService implements OnModuleInit, OnModuleDestroy {
         });
 
         await this.cacheSnapshot(result.settings, result.version);
-        const updated = result.settings.find((setting) => setting.key === key)!;
-        return this.toDto(returnDto, updated);
+        return keys.map((key) => this.toDto(returnDto, result.settings.find((setting) => setting.key === key)!));
+    }
+
+    async findByKeys<T extends object>(dto: new () => T, keys: string[]): Promise<T[]> {
+        const snapshot = await this.readSnapshot();
+        const settings = snapshot?.settings ?? await this.loadSettings();
+        return keys.map((key) => {
+            const setting = settings.find((candidate) => candidate.key === key);
+            if (!setting) throw new SettingNotFoundException();
+            return this.toDto(dto, setting);
+        });
     }
 
     private async readSetting(key: string): Promise<string | null> {

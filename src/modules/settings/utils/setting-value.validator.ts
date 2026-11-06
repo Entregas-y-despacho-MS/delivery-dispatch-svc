@@ -1,3 +1,5 @@
+import { ALERT_THRESHOLD_KEYS, ALERT_THRESHOLD_LIMITS } from '../settings.constants.js';
+
 type Rule =
     | { kind: 'int'; min: number; max: number; unit: string }
     | { kind: 'time' }
@@ -48,6 +50,9 @@ const RULES: Record<string, Rule> = {
     warehouse_prep_end_time:       { kind: 'time' },
     warehouse_prep_lead_minutes:   { kind: 'int', min: 1, max: 1440, unit: 'minutes' },
     reschedule_code_expiry_minutes: { kind: 'int', min: 1, max: 1440, unit: 'minutes' },
+    [ALERT_THRESHOLD_KEYS.slaAlertMinOnTimePct]:      { kind: 'int', ...ALERT_THRESHOLD_LIMITS.slaAlertMinOnTimePct, unit: 'percent' },
+    [ALERT_THRESHOLD_KEYS.gpsStaleAlertMinutes]:      { kind: 'int', ...ALERT_THRESHOLD_LIMITS.gpsStaleAlertMinutes, unit: 'minutes' },
+    [ALERT_THRESHOLD_KEYS.driverIncidentAlertPerDay]: { kind: 'int', ...ALERT_THRESHOLD_LIMITS.driverIncidentAlertPerDay, unit: 'incidents' },
 };
 
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
