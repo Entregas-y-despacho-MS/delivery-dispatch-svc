@@ -36,11 +36,11 @@ export class RouteBatchCorrectionResultDto {
     version!: number;
 
     @ApiProperty({
-        description: 'Status after the correction. A batch that was pending final review goes back to `provisional` when the new validation fails; the reasons are in `validation`.',
-        enum: ['provisional', 'pending_final_review'],
+        description: 'Status after the correction. A batch that was pending final review goes back to `provisional` when the new validation fails; a confirmed vehicle replacement keeps the batch confirmed.',
+        enum: ['provisional', 'pending_final_review', 'confirmed'],
         example: 'pending_final_review',
     })
-    status!: 'provisional' | 'pending_final_review';
+    status!: 'provisional' | 'pending_final_review' | 'confirmed';
 
     @ApiProperty({ description: 'Vehicle of the batch after the correction; null when it has none.', type: 'integer', nullable: true, example: 8 })
     vehicleId!: number | null;

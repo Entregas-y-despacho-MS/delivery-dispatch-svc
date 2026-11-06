@@ -28,6 +28,33 @@ interface AcceptedMetadata {
   failedDispatchIds: number[];
 }
 
+function epochMilliseconds(value: unknown): number | null {
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return Number.isFinite(time) ? time : null;
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null;
+    return Math.abs(value) < 100_000_000_000 ? value * 1000 : value;
+  }
+  if (typeof value !== 'string' || value.trim() === '') return null;
+
+  const text = value.trim();
+  if (/^-?\d+(?:\.\d+)?$/.test(text)) {
+    const epoch = Number(text);
+    if (!Number.isFinite(epoch)) return null;
+    return Math.abs(epoch) < 100_000_000_000 ? epoch * 1000 : epoch;
+  }
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function sameInstant(left: unknown, right: unknown): boolean {
+  const leftTime = epochMilliseconds(left);
+  const rightTime = epochMilliseconds(right);
+  return leftTime !== null && rightTime !== null && leftTime === rightTime;
+}
+
 // "Aceptar lote" (ST-210.1, RF-U24): the driver accepts a confirmed batch after checking the physical load.
 // Every package that failed the check becomes a `cotejo_failed` dispatch event (the stop does not leave); the
 // batch gets `accepted_at`, which "Iniciar Ruta del Día" (ST-51.5) then requires. It takes the batch lock first,
@@ -70,6 +97,14 @@ export class RouteBatchAcceptService {
           throw new RouteBatchAcceptConflictException(
             'ROUTE_ACCEPT_EVENT_ID_ALREADY_USED',
             'This eventId was already used to accept another route batch.',
+          );
+        if (
+          batch.accepted_at === null ||
+          !sameInstant(batch.accepted_at, prior.metadata.acceptedAt)
+        )
+          throw new RouteBatchAcceptConflictException(
+            'ROUTE_BATCH_ACCEPTANCE_REVOKED',
+            'The route vehicle changed after this acceptance. Pull the updated route and accept it again with a new eventId.',
           );
         return {
           routeBatchId,

@@ -31,7 +31,7 @@ const OSRM_UNAVAILABLE = errorBody(
  * Error dictionary: VALIDATION_FAILED 400 | INVALID_TOKEN 401 | INSUFFICIENT_PERMISSIONS 403 |
  * ROUTE_BATCH_NOT_FOUND 404 | VEHICLE_NOT_FOUND 404 | ROUTE_BATCH_NOT_CORRECTABLE 409 |
  * ROUTE_BATCH_VERSION_CONFLICT 409 | ROUTE_CAPACITY_EXCEEDED 409 | ROUTE_BATCH_VEHICLE_NOT_ACTIVE 409 |
- * ROUTE_BATCH_RESOURCE_CONFLICT 409 | ROUTE_BATCH_DRIVER_NOT_AVAILABLE 409 |
+ * ROUTE_BATCH_RESOURCE_CONFLICT 409 | ROUTE_BATCH_DRIVER_NOT_AVAILABLE 409 | ROUTE_BATCH_VEHICLE_CHANGE_REASON_REQUIRED 400 |
  * PLANNING_SETTINGS_MISSING 422 | OSRM_UNAVAILABLE 503. `ROUTE_CAPACITY_EXCEEDED` carries the capacity report in `details`.
  */
 @ApiTags('Route batches')
@@ -77,11 +77,16 @@ export class RouteBatchCorrectionController {
     @ApiOperation({
         summary: 'Assign or change the vehicle of a route batch after validating capacity',
         description:
-            'Assigns a vehicle to a `provisional` or `pending_final_review` batch only when it is active, nobody else uses it that day, and total package weight and volume fit its capacity and every per-package dimension limit is met (dispatches without package records use their estimated weight, marked as estimated in the returned report). Send the `version` you reviewed: a different current version answers 409. A real change raises the `version` by one and writes a `vehicle_changed` event (actor, previous and new vehicle). In `pending_final_review` the batch is then validated again with the rules of the D-1 cutoff: if it passes it stays in review (`cutoff_validated`); if it fails it goes back to `provisional` with the reasons (`cutoff_failed`), keeps the correction, and the next cutoff run or `POST /planning/cutoff` takes it again. The answer is 200 in both cases: read `status` and `validation`. Sending the vehicle the batch already has changes nothing. A `confirmed` or later batch answers 409. The 422 `PLANNING_SETTINGS_MISSING` (`details.missingKeys` and `details.invalidKeys`) and the 503 `OSRM_UNAVAILABLE` apply only to a batch pending final review, the only one that is validated again. Requires coordinator or supervisor role, or root.',
+            'Assigns a vehicle to a `provisional` or `pending_final_review` batch under the existing correction flow. It also permits a vehicle-only replacement for a `confirmed` batch before execution; this exception requires a nonblank `reason`, and preserves the driver, stops, order and confirmed status. In every state the target vehicle must be active, unused by another live batch that day, and able to carry the batch by weight, volume and per-package dimensions (dispatches without package records use their estimated weight). Send the `version` you reviewed: a different current version answers 409. A real change raises the version and records a `vehicle_changed` event with actor, reason, previous and new vehicle. Replacing a confirmed vehicle revokes any prior driver acceptance, updates dispatch timestamps/versions, and emits `route.vehicle_changed` after commit; the driver must pull and accept the updated route again. A batch in `in_execution` or later answers 409. In `pending_final_review` the batch is revalidated with D-1 cutoff rules and may return to `provisional`. Requires coordinator or supervisor role, or root.',
     })
     @ApiIdParam('Route batch')
     @ApiOkResponse({ type: RouteBatchCorrectionResultDto })
-    @ApiBadRequests({ validation: true, id: true, example: ['vehicleId must be an integer number.', 'version must not be less than 0.'] })
+    @ApiBadRequests({
+        validation: true,
+        id: true,
+        example: ['vehicleId must be an integer number.', 'version must not be less than 0.', 'reason must be a string with no more than 500 characters.'],
+        errors: [{ code: 'ROUTE_BATCH_VEHICLE_CHANGE_REASON_REQUIRED', message: 'A reason is required when replacing the vehicle of a confirmed route batch.' }],
+    })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
     @ApiNotFound(
@@ -89,7 +94,7 @@ export class RouteBatchCorrectionController {
         { code: 'VEHICLE_NOT_FOUND', message: 'Vehicle not found.' },
     )
     @ApiConflict(
-        { code: 'ROUTE_BATCH_NOT_CORRECTABLE', message: 'The driver or the vehicle can only be corrected while the route batch is provisional or pending final review (current status: confirmed).' },
+        { code: 'ROUTE_BATCH_NOT_CORRECTABLE', message: 'A vehicle can only be changed before the route batch enters in_execution (current status: in_execution). Driver corrections remain limited to provisional or pending final review.' },
         { code: 'ROUTE_BATCH_VERSION_CONFLICT', message: 'The route batch (or one of its orders) changed. Reload it before correcting.' },
         { code: 'ROUTE_CAPACITY_EXCEEDED', message: 'The route cannot be assigned to this vehicle because its cargo exceeds the vehicle capacity or package dimensions.' },
         { code: 'ROUTE_BATCH_VEHICLE_NOT_ACTIVE', message: 'Vehicle 8 is not active.' },
@@ -106,6 +111,6 @@ export class RouteBatchCorrectionController {
         @Body() dto: AssignRouteBatchVehicleDto,
         @CurrentUser('id') actorUserId: number,
     ): Promise<RouteBatchCorrectionResultDto> {
-        return await this.correction.changeVehicle(id, dto.vehicleId, dto.version, actorUserId);
+        return await this.correction.changeVehicle(id, dto.vehicleId, dto.version, actorUserId, dto.reason);
     }
 }

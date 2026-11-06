@@ -107,6 +107,20 @@ describe('DispatchEventsSocketListener', () => {
         expect(dataSource.query).not.toHaveBeenCalled();
     });
 
+    it('projects a confirmed vehicle replacement to coordinators, supervisors and the assigned driver without route.assigned', async () => {
+        const socket = { emitToRooms: vi.fn() };
+        const listener = new DispatchEventsSocketListener(socket as never, {} as never);
+        const event = { routeId: 3, driverId: 45, vehicleId: 5, vehiclePlate: 'ABC-123', zoneName: 'Centro', version: 6, acceptanceRevoked: true };
+
+        await listener.forwardRouteVehicleChanged(event);
+
+        expect(socket.emitToRooms).toHaveBeenCalledWith(
+            ['coordinators', 'supervisors', 'driver:45'],
+            'route.vehicle_changed',
+            { routeId: 3, driverId: 45, vehicleId: 5, vehiclePlate: 'ABC-123', version: 6, acceptanceRevoked: true },
+        );
+    });
+
     it('joins coordinators to every active zone and drivers only to zones on their active route today', async () => {
         const socket = { joinRoom: vi.fn() };
         const dataSource = { query: vi.fn()

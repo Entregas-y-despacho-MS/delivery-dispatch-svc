@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsInt, Max, Min } from 'class-validator';
+import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 import { INT4_MAX } from '../../../../shared/constants/int4.js';
 
 export class AssignRouteBatchVehicleDto {
@@ -24,4 +24,15 @@ export class AssignRouteBatchVehicleDto {
   @Min(0)
   @Max(INT4_MAX)
   version!: number;
+
+  @ApiProperty({
+    description: 'Reason for the vehicle change. Required when the batch is already confirmed; optional for provisional or pending-final-review batches for backwards compatibility.',
+    example: 'Vehicle reported a mechanical fault before dispatch.',
+    maxLength: 500,
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
 }

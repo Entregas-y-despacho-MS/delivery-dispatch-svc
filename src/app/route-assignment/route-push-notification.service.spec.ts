@@ -96,4 +96,24 @@ describe('RoutePushNotificationService', () => {
         await expect(service.notify(EVENT)).resolves.toBeUndefined();
         expect(provider.sent).toHaveLength(0);
     });
+
+    it('sends a vehicle change notice and asks the driver to accept again when needed', async () => {
+        const provider = new SimulatedPushAdapter();
+        const tokenService = {
+            findActiveByUserId: vi.fn().mockResolvedValue([{ token: 'driver-device' }]),
+            revokeByToken: vi.fn(),
+        };
+        const service = new RoutePushNotificationService(tokenService as any, provider, new PushReceiptMonitor(provider, tokenService as any));
+
+        await service.notifyVehicleChanged({
+            routeId: 18, driverId: 4, vehicleId: 7, vehiclePlate: 'ABC-123', zoneName: 'Centro', version: 6, acceptanceRevoked: true,
+        });
+
+        expect(provider.sent).toEqual([{
+            to: 'driver-device',
+            title: 'Vehículo de ruta actualizado',
+            body: 'El lote #18 ahora usa ABC-123. Revísalo y vuelve a aceptarlo antes de iniciar.',
+            data: { routeId: 18, vehicleId: 7, vehiclePlate: 'ABC-123', version: 6, acceptanceRevoked: true },
+        }]);
+    });
 });

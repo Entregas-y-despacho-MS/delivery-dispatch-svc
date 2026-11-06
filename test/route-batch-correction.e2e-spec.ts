@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
+import { v7 as uuidv7 } from 'uuid';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module.js';
 import { AppConfig } from '../src/config/services/app.config.js';
@@ -41,6 +42,7 @@ describe('Route batch correction (e2e, ST-51.6)', () => {
     let zoneId = 0;
     let warehouse = { id: 0, lat: 0, lon: 0 };
     let scheduledStatusId = 0;
+    let assignedStatusId = 0;
     let coordinatorId = 0;
     let coordinatorToken = '';
     let driverToken = '';
@@ -112,8 +114,21 @@ describe('Route batch correction (e2e, ST-51.6)', () => {
         return { batchId: route_batch_id as number, shiftDate, vehicleId: vehicleId as number | null, dispatchIds };
     };
 
+    const makeConfirmedBatch = async () => {
+        const batch = await makeBatch({ status: 'confirmed' });
+        await db.query(
+            `UPDATE route_batches SET driver_id = $2, proposed_driver_id = NULL WHERE route_batch_id = $1`,
+            [batch.batchId, driverA],
+        );
+        await db.query(
+            `UPDATE dispatches SET dispatch_status_id = $2 WHERE route_batch_id = $1`,
+            [batch.batchId, assignedStatusId],
+        );
+        return batch;
+    };
+
     const batchRow = async (id: number) => (await db.query(
-        `SELECT status, version, vehicle_id, driver_id, proposed_driver_id FROM route_batches WHERE route_batch_id = $1`, [id]))[0];
+        `SELECT status, version, vehicle_id, driver_id, proposed_driver_id, accepted_at FROM route_batches WHERE route_batch_id = $1`, [id]))[0];
     const eventsOf = async (id: number) => await db.query(
         `SELECT event_type, actor_user_id, actor_type, reason, metadata FROM route_batch_events
           WHERE route_batch_id = $1 ORDER BY route_batch_event_id`, [id]);
@@ -142,6 +157,7 @@ describe('Route batch correction (e2e, ST-51.6)', () => {
         const roles: Record<string, number> = {};
         for (const r of await db.query(`SELECT role_id AS id, name FROM roles`)) roles[r.name] = r.id;
         [{ dispatch_status_id: scheduledStatusId }] = await db.query(`SELECT dispatch_status_id FROM dispatch_statuses WHERE name = 'scheduled'`);
+        [{ dispatch_status_id: assignedStatusId }] = await db.query(`SELECT dispatch_status_id FROM dispatch_statuses WHERE name = 'assigned'`);
 
         const passwordHash = await hashPassword('E2eTest1234');
         const makeUser = async (key: string, role: string, active = true) => {
@@ -495,12 +511,68 @@ describe('Route batch correction (e2e, ST-51.6)', () => {
             expect(res.body.error).toBe('ROUTE_BATCH_VERSION_CONFLICT');
         });
 
-        it.each(['confirmed', 'in_execution'])('rejects a %s batch with 409 ROUTE_BATCH_NOT_CORRECTABLE', async (status) => {
+        it('replaces the vehicle of a confirmed batch, preserves its route, and requires a new driver acceptance', async () => {
+            const { batchId, vehicleId: previousVehicle, dispatchIds } = await makeConfirmedBatch();
+            const oldAcceptanceId = uuidv7();
+            const accepted = await request(app.getHttpServer()).post(api(`/route-batches/${batchId}/accept`))
+                .set({ Authorization: `Bearer ${driverToken}` }).send({ eventId: oldAcceptanceId });
+            expect(accepted.status).toBe(200);
+            const dispatchBefore = (await db.query(
+                `SELECT route_batch_id, sequence_order, version, updated_at, dispatch_status_id FROM dispatches WHERE dispatch_id = $1`,
+                [dispatchIds[0]],
+            ))[0];
+            const newer = await newVehicle(2000);
+
+            const res = await patch(batchId, 'vehicle', { vehicleId: newer, version: 4, reason: 'Avería detectada antes de salir' });
+
+            expect(res.status).toBe(200);
+            expect(res.body).toMatchObject({ routeBatchId: batchId, version: 5, status: 'confirmed', vehicleId: newer, changed: true, capacity: { assignable: true }, validation: null });
+            expect(await batchRow(batchId)).toMatchObject({ status: 'confirmed', version: 5, vehicle_id: newer, driver_id: driverA, proposed_driver_id: null, accepted_at: null });
+            const dispatchAfter = (await db.query(
+                `SELECT route_batch_id, sequence_order, version, updated_at, dispatch_status_id FROM dispatches WHERE dispatch_id = $1`,
+                [dispatchIds[0]],
+            ))[0];
+            expect(dispatchAfter).toMatchObject({
+                route_batch_id: batchId,
+                sequence_order: dispatchBefore.sequence_order,
+                version: dispatchBefore.version + 1,
+                dispatch_status_id: assignedStatusId,
+            });
+            expect(new Date(dispatchAfter.updated_at).getTime()).toBeGreaterThan(new Date(dispatchBefore.updated_at).getTime());
+            const events = await eventsOf(batchId);
+            expect(events.map((e: { event_type: string }) => e.event_type)).toEqual(['batch_accepted', 'vehicle_changed']);
+            expect(events[1]).toMatchObject({ actor_user_id: coordinatorId, actor_type: 'user', reason: 'Avería detectada antes de salir' });
+            expect(events[1].metadata).toMatchObject({ previous: previousVehicle, current: newer, previousVersion: 4, version: 5, acceptanceRevoked: true });
+
+            const staleRetry = await request(app.getHttpServer()).post(api(`/route-batches/${batchId}/accept`))
+                .set({ Authorization: `Bearer ${driverToken}` }).send({ eventId: oldAcceptanceId });
+            expect(staleRetry.status).toBe(409);
+            expect(staleRetry.body.error).toBe('ROUTE_BATCH_ACCEPTANCE_REVOKED');
+
+            const reaccepted = await request(app.getHttpServer()).post(api(`/route-batches/${batchId}/accept`))
+                .set({ Authorization: `Bearer ${driverToken}` }).send({ eventId: uuidv7() });
+            expect(reaccepted.status).toBe(200);
+            expect((await batchRow(batchId)).accepted_at).not.toBeNull();
+        });
+
+        it('requires a reason to replace a confirmed vehicle and makes no change', async () => {
+            const { batchId } = await makeConfirmedBatch();
+            const before = await batchRow(batchId);
+            const newer = await newVehicle(2000);
+
+            const res = await patch(batchId, 'vehicle', { vehicleId: newer, version: 4, reason: '   ' });
+
+            expect(res.status).toBe(400);
+            expect(res.body.error).toBe('ROUTE_BATCH_VEHICLE_CHANGE_REASON_REQUIRED');
+            await expectUntouched(batchId, before);
+        });
+
+        it.each(['in_execution', 'closed', 'cancelled'])('rejects a %s batch with 409 ROUTE_BATCH_NOT_CORRECTABLE', async (status) => {
             const { batchId } = await makeBatch({ status });
             const newer = await newVehicle(2000);
             const before = await batchRow(batchId);
 
-            const res = await patch(batchId, 'vehicle', { vehicleId: newer, version: 4 });
+            const res = await patch(batchId, 'vehicle', { vehicleId: newer, version: 4, reason: 'Cambio de flota' });
 
             expect(res.status).toBe(409);
             expect(res.body.error).toBe('ROUTE_BATCH_NOT_CORRECTABLE');

@@ -286,7 +286,7 @@ export class RouteBatchesController {
   @ApiOperation({
     summary: 'Accept a confirmed route batch and report cotejo failures',
     description:
-      'The assigned driver accepts the batch after checking the physical packages against the expected ones (RF-U24). It records `accepted_at` and a `batch_accepted` event in the batch log, which "Start the day route" (`POST /route-batches/:id/start`) then requires. `failures` lists the packages that are missing, damaged or do not fit, one failure per package, each with its own reason and photo (a stop with two failed packages sends two failures). Each failure writes a `cotejo_failed` dispatch event (package, reason, photo and driver) and the whole stop is marked as "does not leave", so the route start skips it until the coordinator resolves it by hand; `dispatch_incidents` is not used. Reporting the same package twice is a 400. Each failure needs a `photoId` uploaded with `POST /route-batches/:id/cotejo-photos` (one photo may back several packages). Only a `confirmed` batch of the authenticated driver can be accepted, once. `eventId` (UUID v7) is the idempotency key: a retry returns the original result without writing again. Requires driver role.',
+      'The assigned driver accepts the batch after checking the physical packages against the expected ones (RF-U24). It records `accepted_at` and a `batch_accepted` event in the batch log, which "Start the day route" (`POST /route-batches/:id/start`) then requires. `failures` lists the packages that are missing, damaged or do not fit, one failure per package, each with its own reason and photo (a stop with two failed packages sends two failures). Each failure writes a `cotejo_failed` dispatch event (package, reason, photo and driver) and the whole stop is marked as "does not leave", so the route start skips it until the coordinator resolves it by hand; `dispatch_incidents` is not used. Reporting the same package twice is a 400. Each failure needs a `photoId` uploaded with `POST /route-batches/:id/cotejo-photos` (one photo may back several packages). Only a `confirmed` batch of the authenticated driver can be accepted, once. `eventId` (UUID v7) is the idempotency key: a retry returns the original result while the acceptance is still current. If a confirmed batch vehicle was changed after acceptance, the old eventId answers 409 `ROUTE_BATCH_ACCEPTANCE_REVOKED`; pull the updated batch and accept it again with a new eventId. Requires driver role.',
   })
   @ApiIdParam('Route batch')
   @ApiOkResponse({ type: AcceptRouteBatchResponseDto })
@@ -308,6 +308,7 @@ export class RouteBatchesController {
   @ApiConflict(
     { code: 'ROUTE_BATCH_NOT_CONFIRMED', message: 'The driver can only accept a confirmed batch.' },
     { code: 'ROUTE_BATCH_ALREADY_ACCEPTED', message: 'The route batch was already accepted.' },
+    { code: 'ROUTE_BATCH_ACCEPTANCE_REVOKED', message: 'The route vehicle changed after this acceptance. Pull the updated route and accept it again with a new eventId.' },
     { code: 'ROUTE_ACCEPT_EVENT_ID_ALREADY_USED', message: 'This eventId was already used to accept another route batch.' },
   )
   async accept(

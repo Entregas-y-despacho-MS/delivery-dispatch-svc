@@ -19,4 +19,15 @@ describe('RouteAssignedPushListener', () => {
 
         expect(notifications.notify).toHaveBeenCalledWith(event);
     });
+
+    it('passes vehicle replacements to the dedicated notification path', async () => {
+        const notifications = { notify: vi.fn(), notifyVehicleChanged: vi.fn().mockResolvedValue(undefined) };
+        const listener = new RouteAssignedPushListener(notifications as any);
+        const event = { routeId: 18, driverId: 4, vehicleId: 7, vehiclePlate: 'ABC-123', zoneName: 'Centro', version: 6, acceptanceRevoked: true };
+
+        await listener.handleVehicleChanged(event);
+
+        expect(notifications.notifyVehicleChanged).toHaveBeenCalledWith(event);
+        expect(notifications.notify).not.toHaveBeenCalled();
+    });
 });

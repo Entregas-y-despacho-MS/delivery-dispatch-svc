@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, type EntityManager } from 'typeorm';
 import { RouteBatchApprovalConflictException } from '../../../modules/dispatch/route-batches/exceptions/route-batch-approval-conflict.exception.js';
@@ -7,13 +8,15 @@ import { RouteBatchNotFoundException } from '../../../modules/dispatch/route-bat
 import { RouteBatchResourcesService } from '../../../modules/dispatch/route-batches/services/route-batch-resources.service.js';
 import { RouteCapacityService } from '../../../modules/dispatch/route-batches/services/route-capacity.service.js';
 import type { RouteCapacityReport } from '../../../modules/dispatch/route-batches/domain/route-capacity.js';
+import { ROUTE_VEHICLE_CHANGED_EVENT, type RouteVehicleChangedEvent } from '../../../modules/dispatch/route-batches/events/route-vehicle-changed.event.js';
 import { isUniqueViolation } from '../../../shared/orm/unique-violation.js';
 import { RouteBatchStatusEnum } from '../../../shared/enums/index.js';
 import type { CutoffValidation } from '../../route-cutoff/domain/cutoff-validation.js';
 import { BatchRevalidationService, type PreparedRevalidation } from '../../route-cutoff/services/batch-revalidation.service.js';
 import type { RouteBatchCorrectionResultDto } from '../dto/route-batch-correction-result.dto.js';
+import { RouteBatchVehicleChangeReasonRequiredException } from '../exceptions/route-batch-vehicle-change-reason-required.exception.js';
 
-type Correction = { kind: 'vehicle'; vehicleId: number } | { kind: 'driver'; driverId: number };
+type Correction = { kind: 'vehicle'; vehicleId: number; reason?: string } | { kind: 'driver'; driverId: number };
 
 interface BatchRow {
     id: number;
@@ -22,6 +25,14 @@ interface BatchRow {
     shift_date: string;
     vehicle_id: number | null;
     proposed_driver_id: number | null;
+    driver_id: number | null;
+    accepted_at: Date | string | null;
+    zone_name: string | null;
+}
+
+interface CorrectionOutcome {
+    result: RouteBatchCorrectionResultDto;
+    vehicleChangedEvent?: RouteVehicleChangedEvent;
 }
 
 function isDeadlock(error: unknown): boolean {
@@ -32,8 +43,9 @@ function isDeadlock(error: unknown): boolean {
 const CORRECTABLE: ReadonlySet<string> = new Set([RouteBatchStatusEnum.PROVISIONAL, RouteBatchStatusEnum.PENDING_FINAL_REVIEW]);
 
 /**
- * Correction of the vehicle or the proposed driver of a route batch (ST-51.6). Allowed while the batch is
- * `provisional` or `pending_final_review`, the two states in which a coordinator still reviews it.
+ * Correction of the vehicle or the proposed driver of a route batch (ST-51.6). Driver changes are allowed while
+ * the batch is `provisional` or `pending_final_review`. A vehicle-only exception also allows `confirmed` before
+ * execution so fleet can recover a committed route from a vehicle fault without changing its driver or stops.
  *
  * The batch is locked, its `version` compared with the one the caller reviewed (D-09) and the new value checked
  * with the rules of the 2nd approval (ST-51.2) and the capacity rule (ST-50.1). In `pending_final_review` the
@@ -51,10 +63,11 @@ export class RouteBatchCorrectionService {
         private readonly capacity: RouteCapacityService,
         private readonly resources: RouteBatchResourcesService,
         private readonly revalidation: BatchRevalidationService,
+        private readonly events: EventEmitter2,
     ) {}
 
-    async changeVehicle(routeBatchId: number, vehicleId: number, expectedVersion: number, actorUserId: number): Promise<RouteBatchCorrectionResultDto> {
-        return await this.correct(routeBatchId, { kind: 'vehicle', vehicleId }, expectedVersion, actorUserId);
+    async changeVehicle(routeBatchId: number, vehicleId: number, expectedVersion: number, actorUserId: number, reason?: string): Promise<RouteBatchCorrectionResultDto> {
+        return await this.correct(routeBatchId, { kind: 'vehicle', vehicleId, reason: reason?.trim() || undefined }, expectedVersion, actorUserId);
     }
 
     async changeDriver(routeBatchId: number, driverId: number, expectedVersion: number, actorUserId: number): Promise<RouteBatchCorrectionResultDto> {
@@ -68,7 +81,8 @@ export class RouteBatchCorrectionService {
             [routeBatchId],
         );
         if (!seen) throw new RouteBatchNotFoundException();
-        this.assertCorrectable(seen.status);
+        if (correction.kind === 'vehicle') this.assertVehicleChangeable(seen.status);
+        else this.assertCorrectable(seen.status);
         // Sending what the batch already has changes nothing, so it must not need OSRM (or fail because it is down).
         const unchanged = (correction.kind === 'vehicle' ? seen.vehicle_id : seen.proposed_driver_id)
             === (correction.kind === 'vehicle' ? correction.vehicleId : correction.driverId);
@@ -77,9 +91,13 @@ export class RouteBatchCorrectionService {
             : null;
 
         try {
-            return await this.dataSource.transaction(
+            const outcome = await this.dataSource.transaction(
                 async (manager) => await this.apply(manager, routeBatchId, correction, expectedVersion, actorUserId, prepared),
             );
+            if (outcome.vehicleChangedEvent) {
+                this.events.emit(ROUTE_VEHICLE_CHANGED_EVENT, outcome.vehicleChangedEvent);
+            }
+            return outcome.result;
         } catch (error) {
             if (isDeadlock(error)) {
                 // Two corrections (or a correction and an approval) swapping the same driver or vehicle wait on each
@@ -100,15 +118,17 @@ export class RouteBatchCorrectionService {
         expectedVersion: number,
         actorUserId: number,
         prepared: PreparedRevalidation | null,
-    ): Promise<RouteBatchCorrectionResultDto> {
+    ): Promise<CorrectionOutcome> {
         const [batch]: BatchRow[] = await manager.query(
-            `SELECT route_batch_id AS id, version, status, shift_date::text AS shift_date, vehicle_id, proposed_driver_id
-               FROM route_batches WHERE route_batch_id = $1 FOR UPDATE`,
+            `SELECT b.route_batch_id AS id, b.version, b.status, b.shift_date::text AS shift_date,
+                    b.vehicle_id, b.proposed_driver_id, b.driver_id, b.accepted_at, z.name AS zone_name
+               FROM route_batches b LEFT JOIN delivery_zones z ON z.delivery_zone_id = b.delivery_zone_id
+              WHERE b.route_batch_id = $1 FOR UPDATE OF b`,
             [routeBatchId],
         );
         if (!batch) throw new RouteBatchNotFoundException();
-        // Status first: a confirmed batch is final, and "not correctable" tells the caller more than a stale version.
-        this.assertCorrectable(batch.status);
+        if (correction.kind === 'vehicle') this.assertVehicleChangeable(batch.status);
+        else this.assertCorrectable(batch.status);
         if (batch.version !== expectedVersion) {
             throw new RouteBatchApprovalConflictException('ROUTE_BATCH_VERSION_CONFLICT', `Route batch ${routeBatchId} changed; expected version ${expectedVersion}, current version ${batch.version}.`);
         }
@@ -116,7 +136,10 @@ export class RouteBatchCorrectionService {
         const current = correction.kind === 'vehicle' ? batch.vehicle_id : batch.proposed_driver_id;
         const target = correction.kind === 'vehicle' ? correction.vehicleId : correction.driverId;
         if (current === target) {
-            return this.result(batch, batch.version, batch.status, { changed: false, capacity: null, validation: null });
+            return { result: this.result(batch, batch.version, batch.status, { changed: false, capacity: null, validation: null }) };
+        }
+        if (correction.kind === 'vehicle' && batch.status === RouteBatchStatusEnum.CONFIRMED && !correction.reason) {
+            throw new RouteBatchVehicleChangeReasonRequiredException();
         }
         const next = {
             vehicleId: correction.kind === 'vehicle' ? correction.vehicleId : batch.vehicle_id,
@@ -154,26 +177,56 @@ export class RouteBatchCorrectionService {
         }
 
         const status = validation !== null && !validation.passed ? RouteBatchStatusEnum.PROVISIONAL : batch.status;
+        const acceptanceRevoked = correction.kind === 'vehicle'
+            && batch.status === RouteBatchStatusEnum.CONFIRMED
+            && batch.accepted_at !== null;
         // TypeORM answers an UPDATE ... RETURNING with `[rows, affectedCount]`, not with the rows.
         const [updated]: [{ version: number }[], number] = await manager.query(
             `UPDATE route_batches
-                SET vehicle_id = $3, proposed_driver_id = $4, status = $5, version = version + 1, updated_at = NOW()
+                SET vehicle_id = $3, proposed_driver_id = $4, status = $5,
+                    accepted_at = CASE WHEN $6::boolean THEN NULL ELSE accepted_at END,
+                    version = version + 1, updated_at = NOW()
               WHERE route_batch_id = $1 AND version = $2
               RETURNING version`,
-            [routeBatchId, batch.version, next.vehicleId, next.driverId, status],
+            [routeBatchId, batch.version, next.vehicleId, next.driverId, status, acceptanceRevoked],
         );
         if (updated.length === 0) {
             throw new RouteBatchApprovalConflictException('ROUTE_BATCH_VERSION_CONFLICT', `Route batch ${routeBatchId} changed during the correction. Reload it.`);
         }
         const version = updated[0].version;
 
-        await this.recordEvent(manager, routeBatchId, correction.kind === 'vehicle' ? 'vehicle_changed' : 'driver_changed', actorUserId, 'user', null, {
+        let vehicleChangedEvent: RouteVehicleChangedEvent | undefined;
+        if (correction.kind === 'vehicle' && batch.status === RouteBatchStatusEnum.CONFIRMED) {
+            const [vehicle]: { plate: string }[] = await manager.query(
+                `SELECT plate FROM vehicles WHERE vehicle_id = $1 AND deleted_at IS NULL`,
+                [correction.vehicleId],
+            );
+            // A driver's pull detects this as a route change through lastModifiedAt even if it had not accepted yet.
+            await manager.query(
+                `UPDATE dispatches SET updated_at = NOW(), version = version + 1
+                  WHERE route_batch_id = $1`,
+                [routeBatchId],
+            );
+            vehicleChangedEvent = {
+                routeId: routeBatchId,
+                driverId: batch.driver_id,
+                vehicleId: correction.vehicleId,
+                vehiclePlate: vehicle?.plate ?? String(correction.vehicleId),
+                zoneName: batch.zone_name,
+                version,
+                acceptanceRevoked,
+            };
+        }
+
+        await this.recordEvent(manager, routeBatchId, correction.kind === 'vehicle' ? 'vehicle_changed' : 'driver_changed', actorUserId, 'user', correction.kind === 'vehicle' ? correction.reason ?? null : null, {
             previous: current,
             current: target,
+            ...(correction.kind === 'vehicle' && correction.reason ? { reason: correction.reason } : {}),
             previousVersion: batch.version,
             version,
             previousStatus: batch.status,
             status,
+            ...(acceptanceRevoked ? { acceptanceRevoked: true } : {}),
         });
         if (validation !== null) {
             await this.recordEvent(
@@ -196,11 +249,14 @@ export class RouteBatchCorrectionService {
             );
         }
 
-        return this.result({ ...batch, vehicle_id: next.vehicleId, proposed_driver_id: next.driverId }, version, status, {
-            changed: true,
-            capacity,
-            validation,
-        });
+        return {
+            result: this.result({ ...batch, vehicle_id: next.vehicleId, proposed_driver_id: next.driverId }, version, status, {
+                changed: true,
+                capacity,
+                validation,
+            }),
+            ...(vehicleChangedEvent ? { vehicleChangedEvent } : {}),
+        };
     }
 
     private result(
@@ -229,6 +285,11 @@ export class RouteBatchCorrectionService {
 
     private assertCorrectable(status: string): void {
         if (!CORRECTABLE.has(status)) throw new RouteBatchNotCorrectableException(status);
+    }
+
+    private assertVehicleChangeable(status: string): void {
+        if (status === RouteBatchStatusEnum.CONFIRMED) return;
+        this.assertCorrectable(status);
     }
 
     private async recordEvent(
