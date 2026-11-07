@@ -6,8 +6,10 @@ import { todayInOperatingTimeZone } from '../../modules/dispatch/dispatches/util
 import { MANUAL_SOURCE_REF_PREFIX, PickupOrderService } from '../../modules/messaging/rma-pickup-intake/services/pickup-order.service.js';
 import { DISPATCH_STATUS_CHANGED_EVENT } from '../dispatch-status/dispatch-status-changed.event.js';
 import type { CreatePickupOrderDto } from './dto/create-pickup-order.dto.js';
+import type { FindPickupOrdersParamsDto } from './dto/find-pickup-orders-params.dto.js';
+import type { FindPickupOrdersResponseDto } from './dto/find-pickup-orders-response.dto.js';
 import type { PickupOrderDto } from './dto/pickup-order.dto.js';
-import { PickupDateInPastException, PickupOrderNotFoundException } from './exceptions/index.js';
+import { InvalidPickupDateRangeException, PickupDateInPastException, PickupOrderNotFoundException } from './exceptions/index.js';
 
 interface PickupOrderRow {
     id: number;
@@ -97,6 +99,36 @@ export class PickupOrdersService {
         });
         this.announceCreated(created.dispatchId, created.status, now);
         return await this.findOne(created.dispatchId);
+    }
+
+    /** Filtered, paginated list, newest first. Parameterized SQL: every value goes through a placeholder. */
+    async findAll(params: FindPickupOrdersParamsDto): Promise<FindPickupOrdersResponseDto> {
+        const { page, limit, status, from, to, origin } = params;
+        if (from && to && to < from) throw new InvalidPickupDateRangeException();
+
+        const args: unknown[] = [];
+        const bind = (value: unknown): string => {
+            args.push(value);
+            return `$${args.length}`;
+        };
+        const where: string[] = [];
+        if (status) where.push(`ds.name = ${bind(status)}`);
+        if (origin === 'manual') where.push(`d.source_order_ref LIKE '${MANUAL_SOURCE_REF_PREFIX}%'`);
+        if (origin === 'rma') where.push(`d.source_order_ref NOT LIKE '${MANUAL_SOURCE_REF_PREFIX}%'`);
+        if (from) where.push(`(d.preferred_pickup_date AT TIME ZONE 'America/La_Paz')::date >= ${bind(from)}::date`);
+        if (to) where.push(`(d.preferred_pickup_date AT TIME ZONE 'America/La_Paz')::date <= ${bind(to)}::date`);
+        const filters = where.map((clause) => ` AND ${clause}`).join('');
+
+        const [{ total }] = (await this.dataSource.query(
+            `SELECT COUNT(*)::int AS total FROM (${PICKUP_ORDER_SELECT}${filters}) AS filtered`,
+            [...args], // a copy: the page query below adds LIMIT and OFFSET to `args`
+        )) as { total: number }[];
+        const rows = (await this.dataSource.query(
+            `${PICKUP_ORDER_SELECT}${filters} ORDER BY d.dispatch_id DESC LIMIT ${bind(limit)} OFFSET ${bind((page - 1) * limit)}`,
+            args,
+        )) as PickupOrderRow[];
+
+        return { data: rows.map(toPickupOrderDto), meta: { page, limit, total, pages: Math.ceil(total / limit) } };
     }
 
     async findOne(id: number, manager: EntityManager = this.dataSource.manager): Promise<PickupOrderDto> {

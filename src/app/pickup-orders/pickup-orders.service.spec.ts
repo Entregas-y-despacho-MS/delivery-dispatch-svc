@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DISPATCH_STATUS_CHANGED_EVENT } from '../dispatch-status/dispatch-status-changed.event.js';
 import type { CreatePickupOrderDto } from './dto/create-pickup-order.dto.js';
-import { PickupDateInPastException, PickupOrderNotFoundException } from './exceptions/index.js';
+import { InvalidPickupDateRangeException, PickupDateInPastException, PickupOrderNotFoundException } from './exceptions/index.js';
 import { PickupOrdersService, toPickupOrderDto } from './pickup-orders.service.js';
 
 // 2026-11-06 22:00 in Bolivia is already 2026-11-07 02:00 UTC: "today" must be the Bolivia day.
@@ -69,6 +69,71 @@ describe('PickupOrdersService.create', () => {
         await expect(service.create(dto, 7, NOW)).rejects.toThrow('boom');
 
         expect(events.emit).not.toHaveBeenCalled();
+    });
+});
+
+describe('PickupOrdersService.findAll', () => {
+    function buildList(rows: unknown[] = [row], total = 1) {
+        const query = vi.fn().mockResolvedValueOnce([{ total }]).mockResolvedValueOnce(rows);
+        const dataSource = { manager: { query }, query };
+        const service = new PickupOrdersService(dataSource as never, {} as never, {} as never);
+        return { service, query };
+    }
+
+    it('without filters it lists every status and origin, newest first, with the pagination meta', async () => {
+        const { service, query } = buildList([row], 25);
+
+        const result = await service.findAll({ page: 2, limit: 10 });
+
+        expect(result).toMatchObject({ data: [{ id: 55, origin: 'manual' }], meta: { page: 2, limit: 10, total: 25, pages: 3 } });
+        const [countSql] = query.mock.calls[0];
+        const [listSql, listArgs] = query.mock.calls[1];
+        expect(String(countSql)).toContain('COUNT(*)');
+        expect(String(listSql)).toContain('ORDER BY d.dispatch_id DESC');
+        expect(String(listSql)).not.toContain('ds.name =');
+        expect(listArgs).toEqual([10, 10]);
+    });
+
+    it('binds status and Bolivia-day range as parameters, never into the SQL text', async () => {
+        const { service, query } = buildList();
+
+        await service.findAll({ page: 1, limit: 10, status: 'cancelled' as never, from: '2026-11-01', to: '2026-11-30' });
+
+        const [listSql, listArgs] = query.mock.calls[1];
+        expect(String(listSql)).toContain('ds.name = $1');
+        expect(String(listSql)).toContain("(d.preferred_pickup_date AT TIME ZONE 'America/La_Paz')::date >= $2::date");
+        expect(String(listSql)).toContain("(d.preferred_pickup_date AT TIME ZONE 'America/La_Paz')::date <= $3::date");
+        expect(String(listSql)).not.toContain('cancelled');
+        expect(listArgs).toEqual(['cancelled', '2026-11-01', '2026-11-30', 10, 0]);
+        // the count carries the same filters but not the page
+        expect(query.mock.calls[0][1]).toEqual(['cancelled', '2026-11-01', '2026-11-30']);
+    });
+
+    it.each([
+        ['manual', "LIKE 'MANUAL-%'", 'NOT LIKE'],
+        ['rma', "NOT LIKE 'MANUAL-%'", null],
+    ] as const)('origin %s filters by the reserved MANUAL- prefix', async (origin, expected, absent) => {
+        const { service, query } = buildList();
+
+        await service.findAll({ page: 1, limit: 10, origin });
+
+        const where = String(query.mock.calls[1][0]).split('WHERE')[1] as string;
+        expect(where).toContain(expected);
+        if (absent) expect(where).not.toContain(absent);
+    });
+
+    it('rejects a range whose end is before its start without querying', async () => {
+        const { service, query } = buildList();
+
+        await expect(service.findAll({ page: 1, limit: 10, from: '2026-11-10', to: '2026-11-09' })).rejects.toBeInstanceOf(InvalidPickupDateRangeException);
+
+        expect(query).not.toHaveBeenCalled();
+    });
+
+    it('an empty result has zero pages', async () => {
+        const { service } = buildList([], 0);
+
+        await expect(service.findAll({ page: 1, limit: 10 })).resolves.toEqual({ data: [], meta: { page: 1, limit: 10, total: 0, pages: 0 } });
     });
 });
 

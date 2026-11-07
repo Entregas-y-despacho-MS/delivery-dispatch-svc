@@ -1,13 +1,16 @@
-import { Body, Controller, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiCreatedResponse, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { CoordinatorOnly } from '../auth/decorators/index.js';
+import { CoordinatorOnly, Roles } from '../auth/decorators/index.js';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator.js';
+import { RoleEnum } from '../../shared/enums/index.js';
 import { ParseIdPipe } from '../../shared/pipes/index.js';
 import { ApiBadRequests, ApiConflict, ApiForbidden, ApiIdParam, ApiNotFound, ApiUnauthorized, ApiUnprocessableEntity } from '../../shared/utils/swagger/index.js';
 import { CancelDispatchResultDto } from '../dispatch-reschedule/dto/cancel-dispatch-result.dto.js';
 import { CancelDispatchDto } from '../dispatch-reschedule/dto/cancel-dispatch.dto.js';
 import { DispatchCancelService } from '../dispatch-reschedule/services/dispatch-cancel.service.js';
 import { CreatePickupOrderDto } from './dto/create-pickup-order.dto.js';
+import { FindPickupOrdersParamsDto } from './dto/find-pickup-orders-params.dto.js';
+import { FindPickupOrdersResponseDto } from './dto/find-pickup-orders-response.dto.js';
 import { PickupOrderDto } from './dto/pickup-order.dto.js';
 import { PickupOrdersService } from './pickup-orders.service.js';
 
@@ -15,7 +18,7 @@ import { PickupOrdersService } from './pickup-orders.service.js';
 export const PICKUP_ORDER_DISPATCH_TYPE = 'warehouse_return_pickup';
 
 /**
- * Error dictionary: VALIDATION_FAILED 400, PICKUP_DATE_IN_PAST 400, INVALID_TOKEN 401,
+ * Error dictionary: VALIDATION_FAILED 400, PICKUP_DATE_IN_PAST 400, INVALID_PICKUP_DATE_RANGE 400, INVALID_TOKEN 401,
  * INSUFFICIENT_PERMISSIONS 403, DISPATCH_NOT_FOUND 404, DISPATCH_CANCEL_NOT_ALLOWED 409,
  * DISPATCH_TYPE_NOT_SUPPORTED 409, DISPATCH_CHANGED_CONCURRENTLY 409, WAREHOUSE_NOT_AVAILABLE 422
  */
@@ -45,6 +48,24 @@ export class PickupOrdersController {
     @ApiUnprocessableEntity({ code: 'WAREHOUSE_NOT_AVAILABLE', message: 'Warehouse WH-XXX-99 does not exist or is not active.' })
     async create(@Body() dto: CreatePickupOrderDto, @CurrentUser('id') userId: number): Promise<PickupOrderDto> {
         return await this.pickupOrders.create(dto, userId);
+    }
+
+    @Get()
+    @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
+    @ApiOperation({
+        summary: 'List customer pickup orders (coordinator, supervisor)',
+        description: 'Lists the pickup orders (`warehouse_return_pickup` dispatches), newest first and paginated, both the ones that arrive from Almacén as RMA messages and the ones registered by hand. Each one carries the customer, the address, the reason for the return, the destination warehouse, the origin (`manual` or `rma`), the preferred day and the status. Filters: `status`, `from`/`to` (preferred pickup day, inclusive, Bolivia days: orders without a preferred day are left out when either is given) and `origin`. Cancelled orders are included unless `status` says otherwise. Read-only: requires coordinator or supervisor role, or root.',
+    })
+    @ApiOkResponse({ type: FindPickupOrdersResponseDto })
+    @ApiBadRequests({
+        validation: true,
+        errors: [{ code: 'INVALID_PICKUP_DATE_RANGE', message: "The 'to' date must not be before the 'from' date." }],
+        example: ["The 'origin' parameter must be one of: manual, rma.", "The 'from' parameter must be a valid date in YYYY-MM-DD format."],
+    })
+    @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+    @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
+    async findAll(@Query() params: FindPickupOrdersParamsDto): Promise<FindPickupOrdersResponseDto> {
+        return await this.pickupOrders.findAll(params);
     }
 
     @Patch(':id/cancel')
