@@ -27,6 +27,31 @@ describe('PickupOrderService', () => {
         expect(query).toHaveBeenCalledTimes(1);
     });
 
+    it('rejects an rmaId with the reserved MANUAL- prefix before touching the database', async () => {
+        const query = vi.fn();
+
+        const error = await service
+            .createFromRma({ ...data, rmaId: 'MANUAL-DSP-2026-00001' }, { manager: { query } as unknown as EntityManager })
+            .catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(RejectedMessageException);
+        expect((error as RejectedMessageException).reasonCode).toBe('reserved_rma_prefix');
+        expect(query).not.toHaveBeenCalled();
+    });
+
+    it('assigns the tracking code with next_tracking_code() when it inserts the dispatch', async () => {
+        const query = vi
+            .fn()
+            .mockResolvedValueOnce([{ warehouse_id: 9 }])
+            .mockResolvedValueOnce([{ dispatch_id: 44 }])
+            .mockResolvedValue([]);
+
+        await service.createFromRma(data, { manager: { query } as unknown as EntityManager });
+
+        const insertDispatch = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO dispatches'));
+        expect(String(insertDispatch?.[0])).toMatch(/tracking_code[\s\S]*next_tracking_code\(\)/);
+    });
+
     it('creates the dispatch in pickup_scheduled with its packages when the address has coordinates', async () => {
         const query = vi
             .fn()

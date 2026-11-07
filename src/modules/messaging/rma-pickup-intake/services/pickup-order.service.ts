@@ -3,6 +3,12 @@ import { RejectedMessageException } from '../../../../plugins/messaging/exceptio
 import type { TransactionOptions } from '../../../../plugins/messaging/inbound-message-transaction.port.js';
 import type { RmaPickupRequestedData } from '../domain/rma-pickup-message.types.js';
 
+/**
+ * Prefix of the `source_order_ref` of the pickups registered by hand (`MANUAL-<tracking code>`): it is how the origin
+ * (`manual` or `rma`) is told apart, so no RMA id may start with it (ST-81.2).
+ */
+export const MANUAL_SOURCE_REF_PREFIX = 'MANUAL-';
+
 interface WarehouseRow {
     warehouse_id: number;
 }
@@ -19,9 +25,19 @@ interface CreatedDispatch {
  */
 @Injectable()
 export class PickupOrderService {
-    /** Throws `RejectedMessageException('unknown_warehouse')` before writing anything. */
+    /**
+     * Throws `RejectedMessageException` before writing anything: `reserved_rma_prefix` when the `rmaId` starts with
+     * `MANUAL-` (reserved for the pickups the coordinator registers by hand, whose origin is derived from that prefix,
+     * ST-81.2) and `unknown_warehouse` when the warehouse does not exist.
+     */
     async createFromRma(data: RmaPickupRequestedData, options: TransactionOptions): Promise<CreatedDispatch> {
         const manager = this.manager(options);
+        if (data.rmaId.startsWith(MANUAL_SOURCE_REF_PREFIX)) {
+            throw new RejectedMessageException(
+                [{ path: '/data/rmaId', keyword: 'reservedPrefix', message: `rmaId must not start with ${MANUAL_SOURCE_REF_PREFIX}.` }],
+                'reserved_rma_prefix',
+            );
+        }
         const warehouseId = await this.warehouseIdByCode(data.warehouseId, options);
         if (warehouseId === null) {
             throw new RejectedMessageException(
@@ -36,11 +52,11 @@ export class PickupOrderService {
             `INSERT INTO dispatches (
                 dispatch_type_id, dispatch_status_id, source_order_ref, delivery_address, delivery_reference,
                 delivery_latitude, delivery_longitude, contact_name, contact_phone, contact_email,
-                return_reason, destination_warehouse_id, estimated_boxes, preferred_pickup_date
+                return_reason, destination_warehouse_id, estimated_boxes, preferred_pickup_date, tracking_code
              ) VALUES (
                 (SELECT dispatch_type_id FROM dispatch_types WHERE name = 'warehouse_return_pickup'),
                 (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $1),
-                $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+                $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, next_tracking_code()
              ) RETURNING dispatch_id`,
             [
                 status,

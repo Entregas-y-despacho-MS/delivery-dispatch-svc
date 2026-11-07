@@ -59,6 +59,7 @@ describe('fixtures del simulador', () => {
             'rma-duplicate',
             'rma-invalid',
             'rma-requested',
+            'rma-reserved-prefix',
             'rma-stale-version',
             'rma-unknown-warehouse',
             'rma-without-coordinates',

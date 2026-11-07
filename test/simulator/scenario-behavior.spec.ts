@@ -240,6 +240,16 @@ describe('escenarios del RMA de Almacén contra el consumidor real', () => {
         expect(statusChanged(harness)).toEqual([]);
     });
 
+    it('rma-reserved-prefix: dead-letter por rmaId con el prefijo MANUAL- y sin recojo', async () => {
+        const { harness, outcomes } = await play('rma-reserved-prefix');
+
+        expect(outcomesOf(outcomes)).toEqual(['rejected']);
+        expect(harness.bus.deadLettersOf('inventory.return.requested')).toHaveLength(1);
+        expect(harness.rejection.alerts.map((alert) => alert.reasonCode)).toEqual(['reserved_rma_prefix']);
+        expect(harness.rmaPickups.records).toEqual([]);
+        expect(statusChanged(harness)).toEqual([]);
+    });
+
     it('rma-invalid: dead-letter por esquema y sin recojo', async () => {
         const { harness, outcomes } = await play('rma-invalid');
 

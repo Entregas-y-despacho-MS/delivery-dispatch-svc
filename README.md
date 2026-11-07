@@ -295,6 +295,7 @@ su descripción y el resultado esperado. En cada corrida el simulador:
 | inventory | `rma-requested` | Devolución aprobada (RMA, `inventory.return.requested`) con coordenadas: se crea un recojo domiciliario `warehouse_return_pickup` en `pickup_scheduled` con destino `WH-LPZ-01` y la web recibe `dispatch.status_changed`. Ver «Demo de devoluciones (RMA)». |
 | inventory | `rma-without-coordinates` | RMA sin coordenadas: el recojo queda en `address_review`, no en `pickup_scheduled`. |
 | inventory | `rma-unknown-warehouse` | `warehouseId` inexistente: dead-letter de `inventory.return.requested` (`unknown_warehouse`), `integration.message_rejected` y sin recojo. |
+| inventory | `rma-reserved-prefix` | `rmaId` con el prefijo `MANUAL-` (reservado a los recojos que registra el coordinador): dead-letter de `inventory.return.requested` (`reserved_rma_prefix`), `integration.message_rejected` y sin recojo. |
 | inventory | `rma-invalid` | Falta `returnReason`: dead-letter por esquema (`schema_invalid`), alerta y sin recojo. |
 | inventory | `rma-duplicate` | El mismo `messageId` llega dos veces; la segunda se ignora (un recojo, un solo evento). |
 | inventory | `rma-stale-version` | Llega la versión 3 y después la 2 del mismo RMA; la 2 se ignora y el recojo conserva la dirección de la 3. |
@@ -356,7 +357,7 @@ preferida dos días después. Qué debe observarse:
    supervisores). *Esa página y el endpoint son `ST-81.1` y `ST-81.2`, aún «Por hacer» en el Sprint 3:
    mientras no estén, el recojo se comprueba con la consulta anterior y el evento por socket.*
 3. **Otros resultados:** con `rma-without-coordinates` el recojo queda en `address_review`; con
-   `rma-unknown-warehouse` y `rma-invalid` no se crea nada, el mensaje va a
+   `rma-unknown-warehouse`, `rma-reserved-prefix` y `rma-invalid` no se crea nada, el mensaje va a
    `inventory.return.requested.dead-letter` (`npm run simulate:listen -- --dead-letters`) y aparece la
    alerta `integration.message_rejected`; con `rma-duplicate` y `rma-stale-version` hay un solo recojo.
 
