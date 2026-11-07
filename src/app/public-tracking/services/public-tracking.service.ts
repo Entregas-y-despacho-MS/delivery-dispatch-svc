@@ -2,12 +2,13 @@ import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { SettingsService } from '../../../modules/settings/services/settings.service.js';
+import { DriverMetricsService } from '../../driver-metrics/services/driver-metrics.service.js';
 import { PROMISE_RESPONSE_WINDOW_KEY } from '../../promise-firming/services/promise-firming.service.js';
 import { evaluateSelfService, type SelfServiceState } from '../domain/self-service.js';
 import { isWellFormedTrackingToken } from '../domain/tracking-token.js';
 import { DispatchStatusEnum } from '../../../shared/enums/dispatch-status.enum.js';
-import { DriverDto, LocationDto, PublicTrackingDto } from '../dto/public-tracking.dto.js';
-import { RescheduleNotAvailableException, TrackingLinkNotFoundException } from '../exceptions/index.js';
+import { DriverDto, LocationDto, PublicTrackingDto, RatingDto } from '../dto/public-tracking.dto.js';
+import { RatingAlreadySubmittedException, RatingNotAllowedException, RescheduleNotAvailableException, TrackingLinkNotFoundException } from '../exceptions/index.js';
 import { TrackingEtaService } from './tracking-eta.service.js';
 
 export const MAX_RESCHEDULE_ATTEMPTS_KEY = 'max_reschedule_attempts';
@@ -41,6 +42,30 @@ interface LiveRow {
     last_location_at: Date | null;
 }
 
+interface RatingRow {
+    score: number;
+    created_at: Date;
+}
+
+interface RatingDispatchRow {
+    dispatch_id: number;
+    status: string;
+    driver_id: number | null;
+}
+
+interface PgError {
+    code?: string;
+    constraint?: string;
+}
+
+function isDispatchRatingUniqueViolation(error: unknown): boolean {
+    if (typeof error !== 'object' || error === null) return false;
+    const driverError = 'driverError' in error ? error.driverError : error;
+    if (typeof driverError !== 'object' || driverError === null) return false;
+    const { code, constraint } = driverError as PgError;
+    return code === '23505' && constraint === 'dispatch_ratings_dispatch_id_key';
+}
+
 /** The states in which the route is under way and the customer may see who is coming. */
 const LIVE_STATUSES: DispatchStatusEnum[] = [DispatchStatusEnum.OUT_FOR_DELIVERY, DispatchStatusEnum.IN_TRANSIT];
 
@@ -66,6 +91,7 @@ export class PublicTrackingService {
         @InjectDataSource() private readonly dataSource: DataSource,
         private readonly settings: SettingsService,
         private readonly etaService: TrackingEtaService,
+        private readonly driverMetrics: DriverMetricsService,
     ) {}
 
     async view(token: string, now: Date = new Date()): Promise<PublicTrackingDto> {
@@ -75,6 +101,9 @@ export class PublicTrackingService {
             { dispatchId: row.dispatch_id, status: row.status, routeBatchId: row.route_batch_id, windowEnd: row.scheduled_window_end },
             now,
         );
+        const rating = row.status === DispatchStatusEnum.DELIVERED
+            ? await this.findRating(row.dispatch_id)
+            : null;
         return {
             trackingCode: row.tracking_code,
             status: row.status,
@@ -85,6 +114,8 @@ export class PublicTrackingService {
             eta,
             driver: live.driver,
             location: live.location,
+            rating,
+            canRate: row.status === DispatchStatusEnum.DELIVERED && rating === null,
             selfService: {
                 open: selfService.open,
                 closedReason: selfService.closedReason,
@@ -95,6 +126,58 @@ export class PublicTrackingService {
                 canRequestChange: selfService.canRequestChange,
             },
         };
+    }
+
+    /** Stores one rating for a delivered dispatch and refreshes the assigned driver's cached metrics. */
+    async rate(token: string, score: number, now: Date = new Date()): Promise<RatingDto> {
+        const context = await this.resolve(token, now);
+        let rating: RatingDto | null = null;
+        let driverId: number | null = null;
+
+        await this.dataSource.transaction(async (manager) => {
+            const rows: RatingDispatchRow[] = await manager.query(
+                `SELECT d.dispatch_id, ds.name AS status, rb.driver_id
+                   FROM dispatches d
+                   JOIN dispatch_statuses ds ON ds.dispatch_status_id = d.dispatch_status_id
+                   LEFT JOIN route_batches rb ON rb.route_batch_id = d.route_batch_id
+                  WHERE d.dispatch_id = $1
+                    AND d.tracking_token = $2
+                    AND (d.tracking_token_expires_at IS NULL OR d.tracking_token_expires_at > $3)
+                  FOR UPDATE OF d`,
+                [context.dispatchId, token, now],
+            );
+            const current = rows[0];
+            if (!current) throw new TrackingLinkNotFoundException();
+            if (current.status !== DispatchStatusEnum.DELIVERED) throw new RatingNotAllowedException();
+
+            try {
+                const inserted: RatingRow[] = await manager.query(
+                    `INSERT INTO dispatch_ratings (dispatch_id, score)
+                     VALUES ($1, $2)
+                     RETURNING score, created_at`,
+                    [current.dispatch_id, score],
+                );
+                rating = { score: inserted[0].score, createdAt: inserted[0].created_at };
+                driverId = current.driver_id === null ? null : Number(current.driver_id);
+            } catch (error) {
+                if (isDispatchRatingUniqueViolation(error)) throw new RatingAlreadySubmittedException();
+                throw error;
+            }
+        });
+
+        // This runs only after the INSERT transaction commits. A failed/duplicate rating never clears metrics.
+        if (driverId !== null) await this.driverMetrics.invalidate(driverId);
+        if (rating === null) throw new Error('The rating transaction completed without returning the inserted rating.');
+        return rating;
+    }
+
+    private async findRating(dispatchId: number): Promise<RatingDto | null> {
+        const rows: RatingRow[] = await this.dataSource.query(
+            `SELECT score, created_at FROM dispatch_ratings WHERE dispatch_id = $1`,
+            [dispatchId],
+        );
+        const row = rows[0];
+        return row ? { score: Number(row.score), createdAt: row.created_at } : null;
     }
 
     /**
