@@ -111,6 +111,82 @@ async function seedSupervisorUser(): Promise<void> {
     console.log(`  ${YELLOW}⚠  Development account — do not seed it in production with the default password.${RESET}`);
 }
 
+/**
+ * Inserts a development Coordinator user if it does not already exist, so the Coordinator's
+ * planning and dispatch views can be tried right after a fresh deploy without creating the
+ * account by hand. Idempotent — safe to run multiple times. Development-only default password.
+ */
+async function seedCoordinatorUser(): Promise<void> {
+    const username = process.env.SEED_COORDINATOR_USERNAME  ?? 'coordinator';
+    const fullName  = process.env.SEED_COORDINATOR_FULL_NAME ?? 'Coordinador de Despacho';
+    const email     = process.env.SEED_COORDINATOR_EMAIL     ?? 'coordinator@app.com';
+    const password  = process.env.SEED_COORDINATOR_PASSWORD  ?? 'Coordinator1234!';
+
+    const userRepo = AppDataSource.getRepository(User);
+    const roleRepo = AppDataSource.getRepository(Role);
+
+    const existing = await userRepo.findOne({ where: { username } });
+    if (existing) {
+        console.log(`  ${YELLOW}⚠  Coordinator user already exists${RESET} (${username}) — skipping.`);
+        return;
+    }
+
+    const coordinatorRole = await roleRepo.findOneBy({ name: 'coordinator' });
+    if (!coordinatorRole) throw new Error('Coordinator role not found — seedRoles() must run before seedCoordinatorUser().');
+
+    const user = userRepo.create({
+        username,
+        fullName,
+        email,
+        passwordHash:      await hashPassword(password),
+        passwordChangedAt: new Date(),
+        roleId:            coordinatorRole.id,
+        requiresPwdChange: false,
+    });
+    await userRepo.save(user);
+
+    console.log(`  ${GREEN}✔  Coordinator user created${RESET} → ${BOLD}${username}${RESET}`);
+    console.log(`  ${YELLOW}⚠  Development account — do not seed it in production with the default password.${RESET}`);
+}
+
+/**
+ * Inserts a development Driver user if it does not already exist, so the mobile app's delivery
+ * flows can be tried right after a fresh deploy without creating the account by hand. Idempotent
+ * — safe to run multiple times. Development-only default password.
+ */
+async function seedDriverUser(): Promise<void> {
+    const username = process.env.SEED_DRIVER_USERNAME  ?? 'driver';
+    const fullName  = process.env.SEED_DRIVER_FULL_NAME ?? 'Repartidor Demo';
+    const email     = process.env.SEED_DRIVER_EMAIL     ?? 'driver@app.com';
+    const password  = process.env.SEED_DRIVER_PASSWORD  ?? 'Driver1234!';
+
+    const userRepo = AppDataSource.getRepository(User);
+    const roleRepo = AppDataSource.getRepository(Role);
+
+    const existing = await userRepo.findOne({ where: { username } });
+    if (existing) {
+        console.log(`  ${YELLOW}⚠  Driver user already exists${RESET} (${username}) — skipping.`);
+        return;
+    }
+
+    const driverRole = await roleRepo.findOneBy({ name: 'driver' });
+    if (!driverRole) throw new Error('Driver role not found — seedRoles() must run before seedDriverUser().');
+
+    const user = userRepo.create({
+        username,
+        fullName,
+        email,
+        passwordHash:      await hashPassword(password),
+        passwordChangedAt: new Date(),
+        roleId:            driverRole.id,
+        requiresPwdChange: false,
+    });
+    await userRepo.save(user);
+
+    console.log(`  ${GREEN}✔  Driver user created${RESET} → ${BOLD}${username}${RESET}`);
+    console.log(`  ${YELLOW}⚠  Development account — do not seed it in production with the default password.${RESET}`);
+}
+
 async function seed(): Promise<void> {
     console.log(`\n${CYAN}${BOLD}▶  Running seed...${RESET}\n`);
 
@@ -121,6 +197,8 @@ async function seed(): Promise<void> {
         await seedRoles();
         await seedRootUser();
         await seedSupervisorUser();
+        await seedCoordinatorUser();
+        await seedDriverUser();
         // Add more seeders here in dependency order.
 
         console.log(`\n${GREEN}${BOLD}✔  Seed completed.${RESET}\n`);
