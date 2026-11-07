@@ -1,21 +1,32 @@
-import { Body, Controller, Post } from '@nestjs/common';
-import { ApiBearerAuth, ApiCreatedResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Param, Patch, Post } from '@nestjs/common';
+import { ApiBearerAuth, ApiCreatedResponse, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CoordinatorOnly } from '../auth/decorators/index.js';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator.js';
-import { ApiBadRequests, ApiForbidden, ApiUnauthorized, ApiUnprocessableEntity } from '../../shared/utils/swagger/index.js';
+import { ParseIdPipe } from '../../shared/pipes/index.js';
+import { ApiBadRequests, ApiConflict, ApiForbidden, ApiIdParam, ApiNotFound, ApiUnauthorized, ApiUnprocessableEntity } from '../../shared/utils/swagger/index.js';
+import { CancelDispatchResultDto } from '../dispatch-reschedule/dto/cancel-dispatch-result.dto.js';
+import { CancelDispatchDto } from '../dispatch-reschedule/dto/cancel-dispatch.dto.js';
+import { DispatchCancelService } from '../dispatch-reschedule/services/dispatch-cancel.service.js';
 import { CreatePickupOrderDto } from './dto/create-pickup-order.dto.js';
 import { PickupOrderDto } from './dto/pickup-order.dto.js';
 import { PickupOrdersService } from './pickup-orders.service.js';
 
+/** The dispatch type of a customer pickup order: the cancellation endpoint of this controller only serves it. */
+export const PICKUP_ORDER_DISPATCH_TYPE = 'warehouse_return_pickup';
+
 /**
  * Error dictionary: VALIDATION_FAILED 400, PICKUP_DATE_IN_PAST 400, INVALID_TOKEN 401,
- * INSUFFICIENT_PERMISSIONS 403, WAREHOUSE_NOT_AVAILABLE 422
+ * INSUFFICIENT_PERMISSIONS 403, DISPATCH_NOT_FOUND 404, DISPATCH_CANCEL_NOT_ALLOWED 409,
+ * DISPATCH_TYPE_NOT_SUPPORTED 409, DISPATCH_CHANGED_CONCURRENTLY 409, WAREHOUSE_NOT_AVAILABLE 422
  */
 @ApiTags('Pickup orders')
 @ApiBearerAuth('access-token')
 @Controller('pickup-orders')
 export class PickupOrdersController {
-    constructor(private readonly pickupOrders: PickupOrdersService) {}
+    constructor(
+        private readonly pickupOrders: PickupOrdersService,
+        private readonly cancellations: DispatchCancelService,
+    ) {}
 
     @Post()
     @CoordinatorOnly()
@@ -34,5 +45,30 @@ export class PickupOrdersController {
     @ApiUnprocessableEntity({ code: 'WAREHOUSE_NOT_AVAILABLE', message: 'Warehouse WH-XXX-99 does not exist or is not active.' })
     async create(@Body() dto: CreatePickupOrderDto, @CurrentUser('id') userId: number): Promise<PickupOrderDto> {
         return await this.pickupOrders.create(dto, userId);
+    }
+
+    @Patch(':id/cancel')
+    @CoordinatorOnly()
+    @ApiOperation({
+        summary: 'Cancel a customer pickup order before the route starts (coordinator)',
+        description: 'Cancels a pickup order in `pickup_scheduled`, `address_review` (an RMA without coordinates, which has no other way out) or `in_planning`. Any other status answers 409. It is the same cancellation as `POST /dispatches/:id/cancel`, applied to the pickup type: `reason` (the causal) is required and is kept in the audit event; the order gets `closed_at` and `cancelled`; from `in_planning` it leaves its route batch (its `version` and the batch\'s go up, D-09, the sequence gap is closed while the batch is provisional, an emptied batch is cancelled and the capacity is free again). Unlike a delivery, the cancellation of a pickup order is **not** published to the ERP. A dispatch that is not a pickup order answers 409 `DISPATCH_TYPE_NOT_SUPPORTED` (cancel a delivery with `POST /dispatches/:id/cancel`). Requires coordinator role, or root.',
+    })
+    @ApiIdParam('Pickup order')
+    @ApiOkResponse({ type: CancelDispatchResultDto })
+    @ApiBadRequests({ validation: true, id: true, example: ['reason must not be empty.', 'reason must not be longer than 500 characters.'] })
+    @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+    @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
+    @ApiNotFound({ code: 'DISPATCH_NOT_FOUND', message: 'Dispatch not found.' })
+    @ApiConflict(
+        { code: 'DISPATCH_CANCEL_NOT_ALLOWED', message: 'A dispatch can only be cancelled by the coordinator before the route starts: pickup_scheduled, address_review or in_planning (current status: assigned).' },
+        { code: 'DISPATCH_TYPE_NOT_SUPPORTED', message: 'Only warehouse_return_pickup dispatches can be handled from here (type: delivery).' },
+        { code: 'DISPATCH_CHANGED_CONCURRENTLY', message: 'The dispatch changed while the request was being processed (it moved to another route). Review its current state and try again.' },
+    )
+    async cancel(
+        @Param('id', ParseIdPipe) id: number,
+        @Body() dto: CancelDispatchDto,
+        @CurrentUser('id') userId: number,
+    ): Promise<CancelDispatchResultDto> {
+        return await this.cancellations.cancel(id, dto, userId, { type: PICKUP_ORDER_DISPATCH_TYPE });
     }
 }

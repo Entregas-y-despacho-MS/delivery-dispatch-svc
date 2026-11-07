@@ -7,13 +7,13 @@ export class CancelDispatchResultDto {
     @ApiProperty({ type: String, example: 'cancelled', description: 'Status of the dispatch after the cancellation; always `cancelled`' })
     status!: string;
 
-    @ApiProperty({ type: String, example: 'assigned', description: 'Status the dispatch had before the cancellation: `pending`, `address_review`, `in_planning`, `scheduled` or `assigned`' })
+    @ApiProperty({ type: String, example: 'assigned', description: 'Status the dispatch had before the cancellation. A delivery: `pending`, `address_review`, `in_planning`, `scheduled` or `assigned`. A pickup order: `pickup_scheduled`, `address_review` or `in_planning`' })
     previousStatus!: string;
 
     @ApiProperty({ type: String, format: 'date-time', example: '2026-10-19T15:00:00.000Z', description: 'Moment the dispatch was closed (the cancellation); it is the date the history filters by' })
     closedAt!: string;
 
-    @ApiProperty({ type: String, example: 'COORD-CANCELLED', description: 'Code of the reason published to the ERP with the cancellation' })
+    @ApiProperty({ type: String, example: 'COORD-CANCELLED', description: 'Code of the reason of the cancellation (`COORD-CANCELLED`). It is published to the ERP for a delivery; the cancellation of a pickup order is not published' })
     reasonCode!: string;
 
     @ApiProperty({
