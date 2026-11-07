@@ -48,6 +48,14 @@ describe('CreatePickupOrderDto', () => {
         expect(await invalidProperties({ ...valid, contactPhone })).toEqual(['contactPhone']);
     });
 
+    it('the phone is 6 to 30 characters in all, the leading + included', async () => {
+        expect(await invalidProperties({ ...valid, contactPhone: '712345' })).toEqual([]);
+        expect(await invalidProperties({ ...valid, contactPhone: '+' + '7'.repeat(29) })).toEqual([]);
+        expect(await invalidProperties({ ...valid, contactPhone: '71234' })).toEqual(['contactPhone']);
+        expect(await invalidProperties({ ...valid, contactPhone: '+' + '7'.repeat(30) })).toEqual(['contactPhone']);
+        expect(await invalidProperties({ ...valid, contactPhone: '7'.repeat(31) })).toEqual(['contactPhone']);
+    });
+
     it.each([91, -91, 'north', null])('rejects latitude %j', async (latitude) => {
         expect(await invalidProperties({ ...valid, latitude })).toEqual(['latitude']);
     });

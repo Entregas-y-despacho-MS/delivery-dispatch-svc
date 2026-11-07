@@ -10,7 +10,8 @@ const trimOrNull = ({ value }: { value: unknown }) => {
     return text === '' ? null : text;
 };
 
-const PHONE = /^\+?[0-9][0-9 ()-]{5,29}$/;
+/** 6 to 30 characters in all, the leading `+` included: it starts with a digit (after the optional `+`) and goes on with digits, spaces, parentheses and hyphens. */
+const PHONE = /^(?=.{6,30}$)\+?[0-9][0-9 ()-]*$/;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** `POST /pickup-orders` (ST-81.2, RF-A39): a customer pickup the coordinator registers by hand. */
@@ -29,7 +30,7 @@ export class CreatePickupOrderDto {
     @MaxLength(150, { message: 'contactName must not be longer than 150 characters.' })
     contactName!: string;
 
-    @ApiProperty({ type: String, maxLength: 30, example: '+59171234567', description: 'Phone of the customer: digits, optionally with a leading `+`, spaces, parentheses and hyphens (6 to 30 characters)' })
+    @ApiProperty({ type: String, maxLength: 30, example: '+59171234567', description: 'Phone of the customer: digits, optionally with a leading `+`, spaces, parentheses and hyphens; 6 to 30 characters in all, the `+` included' })
     @Transform(trim)
     @IsString({ message: 'contactPhone must be a string.' })
     @Matches(PHONE, { message: 'contactPhone must be a phone number of 6 to 30 characters: digits, optionally with +, spaces, parentheses and hyphens.' })
@@ -56,7 +57,7 @@ export class CreatePickupOrderDto {
     @MaxLength(300, { message: 'reference must not be longer than 300 characters.' })
     reference?: string | null;
 
-    @ApiProperty({ type: 'number', format: 'double', minimum: -90, maximum: 90, example: -16.5421, description: 'Latitude of the pickup point marked on the map, decimal degrees (WGS84). Required: the order starts in `pickup_scheduled`, ready to be planned' })
+    @ApiProperty({ type: 'number', format: 'double', minimum: -90, maximum: 90, example: -16.5421, description: 'Latitude of the pickup point marked on the map, decimal degrees (WGS84). Required: the order starts in `pickup_scheduled`, waiting to be taken into a route batch' })
     @IsLatitude({ message: 'latitude must be a latitude between -90 and 90.' })
     latitude!: number;
 
@@ -66,7 +67,7 @@ export class CreatePickupOrderDto {
 
     @ApiProperty({
         type: String, format: 'date', example: '2026-11-10',
-        description: 'Day the customer prefers the pickup on, `YYYY-MM-DD` (Bolivia, America/La_Paz). It cannot be before today. The time slot is not chosen here: the planner assigns it when it builds the route batch',
+        description: 'Day the customer prefers the pickup on, `YYYY-MM-DD` (Bolivia, America/La_Paz). It cannot be before today. The time slot is not chosen here: it is assigned when the order enters a route batch',
     })
     @Matches(ISO_DAY, { message: 'preferredPickupDate must be a date in YYYY-MM-DD format.' })
     @IsDateString({ strict: true }, { message: 'preferredPickupDate must be a valid date in YYYY-MM-DD format.' })
@@ -79,7 +80,7 @@ export class CreatePickupOrderDto {
     @MaxLength(500, { message: 'packageContents must not be longer than 500 characters.' })
     packageContents!: string;
 
-    @ApiPropertyOptional({ type: 'integer', minimum: 1, maximum: 1000, nullable: true, example: 1, description: 'Estimated number of boxes, which counts toward the capacity of the route batch; `null` or omitted means not estimated' })
+    @ApiPropertyOptional({ type: 'integer', minimum: 1, maximum: 1000, nullable: true, example: 1, description: 'Estimated number of boxes, meant to count toward the capacity of the route batch once customer pickups are planned; `null` or omitted means not estimated' })
     @IsOptional()
     @IsInt({ message: 'estimatedBoxes must be a whole number.' })
     @Min(1, { message: 'estimatedBoxes must be at least 1.' })

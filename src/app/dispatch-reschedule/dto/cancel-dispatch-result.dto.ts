@@ -18,13 +18,13 @@ export class CancelDispatchResultDto {
 
     @ApiProperty({
         type: 'integer', nullable: true, example: 17,
-        description: 'Id of the route batch the dispatch belongs to (only a cancelled `assigned` dispatch stays linked, so the history shows its driver and vehicle); `null` when it had none or when it left the batch (`in_planning`, `scheduled`)',
+        description: 'Id of the route batch the dispatch belongs to (only a cancelled `assigned` dispatch stays linked, so the history shows its driver and vehicle); `null` when it had none or when it left the batch (`in_planning`, `scheduled`). Always `null` for a pickup order, which is not cancellable once assigned',
     })
     routeBatchId!: number | null;
 
     @ApiProperty({
         type: Boolean, example: false,
-        description: 'Whether the cancellation closed the route batch because no dispatch of it was left in `assigned`, `out_for_delivery` or `in_transit`; also `true` when a batch in execution closes because the dispatch left it (`in_planning`, `scheduled`)',
+        description: 'Whether the cancellation closed the route batch because no dispatch of it was left in `assigned`, `out_for_delivery` or `in_transit`; also `true` when a batch in execution closes because the dispatch left it (`in_planning`, `scheduled`). `false` when the dispatch leaves a provisional batch and that batch, left empty, is cancelled instead of closed',
     })
     routeBatchClosed!: boolean;
 }

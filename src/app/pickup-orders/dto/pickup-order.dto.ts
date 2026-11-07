@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiExtraModels, ApiProperty, getSchemaPath } from '@nestjs/swagger';
 
 export class PickupOrderWarehouseDto {
     @ApiProperty({ type: 'integer', example: 3, description: 'Id of the destination warehouse' })
@@ -12,6 +12,7 @@ export class PickupOrderWarehouseDto {
 }
 
 /** A customer pickup order (`dispatch_type = warehouse_return_pickup`), as the Recojos page reads it. */
+@ApiExtraModels(PickupOrderWarehouseDto)
 export class PickupOrderDto {
     @ApiProperty({ type: 'integer', example: 42, description: 'Id of the dispatch' })
     id!: number;
@@ -43,10 +44,10 @@ export class PickupOrderDto {
     @ApiProperty({ type: String, nullable: true, example: 'Condominio Las Palmas, segunda garita', description: 'Extra directions to find the address; `null` if none' })
     reference!: string | null;
 
-    @ApiProperty({ type: 'number', format: 'double', nullable: true, example: -16.5421, description: 'Latitude of the pickup point; `null` for an RMA without coordinates (`address_review`)' })
+    @ApiProperty({ type: 'number', format: 'double', minimum: -90, maximum: 90, nullable: true, example: -16.5421, description: 'Latitude of the pickup point; `null` for an RMA without coordinates (`address_review`)' })
     latitude!: number | null;
 
-    @ApiProperty({ type: 'number', format: 'double', nullable: true, example: -68.0802, description: 'Longitude of the pickup point; `null` for an RMA without coordinates (`address_review`)' })
+    @ApiProperty({ type: 'number', format: 'double', minimum: -180, maximum: 180, nullable: true, example: -68.0802, description: 'Longitude of the pickup point; `null` for an RMA without coordinates (`address_review`)' })
     longitude!: number | null;
 
     @ApiProperty({ type: String, nullable: true, example: 'Product with a power failure, within warranty', description: 'Why the goods are returned; `null` if none was given' })
@@ -61,7 +62,7 @@ export class PickupOrderDto {
     @ApiProperty({ type: String, format: 'date', nullable: true, example: '2026-11-10', description: 'Day the pickup is preferred on (Bolivia, `YYYY-MM-DD`); `null` if there is none' })
     preferredPickupDate!: string | null;
 
-    @ApiProperty({ type: PickupOrderWarehouseDto, nullable: true, description: 'Warehouse that receives the goods; `null` if none is set' })
+    @ApiProperty({ allOf: [{ $ref: getSchemaPath(PickupOrderWarehouseDto) }], nullable: true, description: 'Warehouse that receives the goods; `null` if none is set' })
     destinationWarehouse!: PickupOrderWarehouseDto | null;
 
     @ApiProperty({ type: String, format: 'date-time', example: '2026-11-06T15:00:00.000Z', description: 'When the order was created' })

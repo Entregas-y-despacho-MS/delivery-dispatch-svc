@@ -6,8 +6,8 @@ import { RoleEnum } from '../../shared/enums/index.js';
 import { ParseIdPipe } from '../../shared/pipes/index.js';
 import { ApiBadRequests, ApiConflict, ApiForbidden, ApiIdParam, ApiNotFound, ApiUnauthorized, ApiUnprocessableEntity } from '../../shared/utils/swagger/index.js';
 import { CancelDispatchResultDto } from '../dispatch-reschedule/dto/cancel-dispatch-result.dto.js';
-import { CancelDispatchDto } from '../dispatch-reschedule/dto/cancel-dispatch.dto.js';
 import { DispatchCancelService } from '../dispatch-reschedule/services/dispatch-cancel.service.js';
+import { CancelPickupOrderDto } from './dto/cancel-pickup-order.dto.js';
 import { CreatePickupOrderDto } from './dto/create-pickup-order.dto.js';
 import { FindPickupOrdersParamsDto } from './dto/find-pickup-orders-params.dto.js';
 import { FindPickupOrdersResponseDto } from './dto/find-pickup-orders-response.dto.js';
@@ -19,7 +19,8 @@ export const PICKUP_ORDER_DISPATCH_TYPE = 'warehouse_return_pickup';
 
 /**
  * Error dictionary: VALIDATION_FAILED 400, PICKUP_DATE_IN_PAST 400, INVALID_PICKUP_DATE_RANGE 400, INVALID_TOKEN 401,
- * INSUFFICIENT_PERMISSIONS 403, DISPATCH_NOT_FOUND 404, DISPATCH_CANCEL_NOT_ALLOWED 409,
+ * INSUFFICIENT_PERMISSIONS 403, DISPATCH_NOT_FOUND 404, PICKUP_ORDER_NOT_FOUND 404 (internal: the order vanished between
+ * the commit and the read of the response), DISPATCH_CANCEL_NOT_ALLOWED 409,
  * DISPATCH_TYPE_NOT_SUPPORTED 409, DISPATCH_CHANGED_CONCURRENTLY 409, WAREHOUSE_NOT_AVAILABLE 422
  */
 @ApiTags('Pickup orders')
@@ -35,7 +36,7 @@ export class PickupOrdersController {
     @CoordinatorOnly()
     @ApiOperation({
         summary: 'Register a customer pickup order by hand (coordinator)',
-        description: 'Registers a pickup of goods at the customer’s address for a return or warranty that did not arrive as an RMA message (RF-A39). The order is created as a `warehouse_return_pickup` dispatch in `pickup_scheduled`, ready to be planned, with a transfer code and the reference `MANUAL-<transfer code>` (its origin is `manual`). The coordinator gives the contact, the address with the point marked on the map, the preferred day (not before today, Bolivia time), the goods, the reason for the return as free text and the destination warehouse by code; the time slot is assigned later by the planner. `rmaId` is optional and is only kept as a reference in the audit event. Requires coordinator role, or root.',
+        description: 'Registers a pickup of goods at the customer’s address for a return or warranty that did not arrive as an RMA message (RF-A39). The order is created as a `warehouse_return_pickup` dispatch in `pickup_scheduled`, waiting to be taken into a route batch (the batch generator does not include customer pickups yet), with a transfer code and the reference `MANUAL-<transfer code>` (its origin is `manual`). The coordinator gives the contact, the address with the point marked on the map, the preferred day (not before today, Bolivia time), the goods, the reason for the return as free text and the destination warehouse by code; the time slot is assigned later, when the order enters a route batch. `rmaId` is optional and is only kept as a reference in the audit event. Requires coordinator role, or root.',
     })
     @ApiCreatedResponse({ type: PickupOrderDto, description: 'The pickup order that was created.' })
     @ApiBadRequests({
@@ -87,7 +88,7 @@ export class PickupOrdersController {
     )
     async cancel(
         @Param('id', ParseIdPipe) id: number,
-        @Body() dto: CancelDispatchDto,
+        @Body() dto: CancelPickupOrderDto,
         @CurrentUser('id') userId: number,
     ): Promise<CancelDispatchResultDto> {
         return await this.cancellations.cancel(id, dto, userId, { type: PICKUP_ORDER_DISPATCH_TYPE });
