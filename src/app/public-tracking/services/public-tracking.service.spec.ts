@@ -37,8 +37,12 @@ function liveRow(overrides: Record<string, unknown> = {}) {
     };
 }
 
-function setup(rows: unknown[], settings: Record<string, string> = {}, live: unknown[] = []) {
-    const query = vi.fn(async (sql: string) => (sql.includes('driver_name') ? live : rows));
+function setup(rows: unknown[], settings: Record<string, string> = {}, live: unknown[] = [], ratings: unknown[] = []) {
+    const query = vi.fn(async (sql: string) => {
+        if (sql.includes('driver_name')) return live;
+        if (sql.includes('FROM dispatch_ratings')) return ratings;
+        return rows;
+    });
     const values: Record<string, string> = {
         max_reschedule_attempts: '2',
         promise_response_window_minutes: '720',
@@ -52,7 +56,8 @@ function setup(rows: unknown[], settings: Record<string, string> = {}, live: unk
         return values[key] !== undefined && Number.isFinite(parsed) ? parsed : fallback;
     });
     const estimate = vi.fn(async (): Promise<unknown> => null);
-    const service = new PublicTrackingService({ query } as any, { getString, getNumber } as any, { estimate } as any);
+    const invalidate = vi.fn(async () => undefined);
+    const service = new PublicTrackingService({ query } as any, { getString, getNumber } as any, { estimate } as any, { invalidate } as any);
     return { service, query, estimate };
 }
 
@@ -72,6 +77,8 @@ describe('PublicTrackingService', () => {
             eta: null,
             driver: null,
             location: null,
+            rating: null,
+            canRate: false,
             selfService: {
                 open: true,
                 closedReason: null,
@@ -228,5 +235,34 @@ describe('PublicTrackingService', () => {
 
         expect(selfService.rescheduleAttemptsLeft).toBe(2);
         expect(selfService.windowClosesAt).toEqual(new Date(NOTIFIED.getTime() + 720 * 60_000));
+    });
+
+    describe('rating state (ST-42.1)', () => {
+        it('allows rating only after delivery when no score exists', async () => {
+            const { service, query } = setup([row({ status: 'delivered' })]);
+
+            const view = await service.view(TOKEN, NOW);
+
+            expect(view).toMatchObject({ rating: null, canRate: true });
+            expect(query.mock.calls.some(([sql]) => String(sql).includes('FROM dispatch_ratings'))).toBe(true);
+        });
+
+        it('returns the submitted rating and prevents rating a second time', async () => {
+            const createdAt = new Date('2026-10-17T15:00:00Z');
+            const { service } = setup([row({ status: 'delivered' })], {}, [], [{ score: 4, created_at: createdAt }]);
+
+            const view = await service.view(TOKEN, NOW);
+
+            expect(view).toMatchObject({ rating: { score: 4, createdAt }, canRate: false });
+        });
+
+        it('does not query ratings or allow rating before delivery', async () => {
+            const { service, query } = setup([row({ status: 'out_for_delivery' })]);
+
+            const view = await service.view(TOKEN, NOW);
+
+            expect(view).toMatchObject({ rating: null, canRate: false });
+            expect(query.mock.calls.some(([sql]) => String(sql).includes('FROM dispatch_ratings'))).toBe(false);
+        });
     });
 });
