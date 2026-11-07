@@ -1,6 +1,6 @@
 import type { MessageValidationError } from './envelope/message-validator.js';
 
-export type InboundRejectionReasonCode = 'schema_invalid' | 'unknown_warehouse' | 'invalid_pickup_window';
+export type InboundRejectionReasonCode = 'schema_invalid' | 'unknown_warehouse' | 'invalid_pickup_window' | 'reserved_rma_prefix';
 
 /** Only correlation identifiers and validation details may leave the dead-letter topic. */
 export interface InboundRejectionNotice {

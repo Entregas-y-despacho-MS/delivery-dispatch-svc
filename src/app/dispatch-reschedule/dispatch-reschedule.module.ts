@@ -18,6 +18,6 @@ import { DispatchReschedulingService } from './services/dispatch-rescheduling.se
     imports: [DispatchEventsModule, DispatchStatusPublicationModule, RouteBatchClosingModule],
     controllers: [DispatchRescheduleController],
     providers: [BatchExitService, DeliveryAttemptsService, DispatchCancelService, DispatchLockService, DispatchReschedulingService, DispatchReturnService],
-    exports: [BatchExitService, DeliveryAttemptsService, DispatchLockService],
+    exports: [BatchExitService, DeliveryAttemptsService, DispatchCancelService, DispatchLockService],
 })
 export class DispatchRescheduleModule {}

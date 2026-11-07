@@ -30,7 +30,7 @@ describe('DispatchCancelService', () => {
     it.each(['pending', 'address_review'])('%s sin lote: publica, cancela y no toca ningún lote', async (status) => {
         const { service, publication, batchExit, closing, events } = build({ status });
 
-        const result = await service.cancel(5, dto, 7, NOW);
+        const result = await service.cancel(5, dto, 7, {}, NOW);
 
         expect(result).toMatchObject({ status: 'cancelled', previousStatus: status, routeBatchId: null, routeBatchClosed: false });
         expect(publication.publish).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: 'cancelled', previousStatus: status, reasonCode: COORDINATOR_CANCELLED_REASON_CODE }));
@@ -45,7 +45,7 @@ describe('DispatchCancelService', () => {
         batchExit.leave.mockImplementation(async () => { order.push('leave'); return { batchId: 9, batchStatusBefore: 'provisional', batchStatusAfter: 'provisional', batchVersion: 4, dispatchVersion: 3, cancelled: false, closed: false }; });
         publication.publish.mockImplementation(async () => { order.push('publish'); return 1; });
 
-        const result = await service.cancel(5, dto, 7, NOW);
+        const result = await service.cancel(5, dto, 7, {}, NOW);
 
         expect(order).toEqual(['leave', 'publish']);
         expect(batchExit.leave).toHaveBeenCalledWith(expect.anything(), batch, 5, expect.objectContaining({ actorUserId: 7, reason: dto.reason }));
@@ -61,7 +61,7 @@ describe('DispatchCancelService', () => {
         const { service, batchExit } = build({ status: 'in_planning', batch: { ...batch, status: 'in_execution' } });
         batchExit.leave.mockResolvedValue({ batchId: 9, batchStatusBefore: 'in_execution', batchStatusAfter: 'closed', batchVersion: 4, dispatchVersion: 3, cancelled: false, closed: true, shiftedDispatchIds: [] });
 
-        const result = await service.cancel(5, dto, 7, NOW);
+        const result = await service.cancel(5, dto, 7, {}, NOW);
 
         expect(result).toMatchObject({ routeBatchId: null, routeBatchClosed: true });
     });
@@ -70,7 +70,7 @@ describe('DispatchCancelService', () => {
         const { service, batchExit, closing } = build({ status: 'assigned', batch: { ...batch, status: 'in_execution' } });
         closing.closeIfComplete.mockResolvedValue(true);
 
-        const result = await service.cancel(5, dto, 7, NOW);
+        const result = await service.cancel(5, dto, 7, {}, NOW);
 
         expect(batchExit.leave).not.toHaveBeenCalled();
         expect(result).toMatchObject({ routeBatchId: 9, routeBatchClosed: true });
@@ -79,7 +79,7 @@ describe('DispatchCancelService', () => {
     it.each(['out_for_delivery', 'in_transit', 'delivered', 'incident', 'not_delivered', 'rescheduled', 'returned', 'cancelled'])('%s → DISPATCH_CANCEL_NOT_ALLOWED sin escribir nada', async (status) => {
         const { service, publication, manager } = build({ status });
 
-        await expect(service.cancel(5, dto, 7, NOW)).rejects.toBeInstanceOf(DispatchCancelNotAllowedException);
+        await expect(service.cancel(5, dto, 7, {}, NOW)).rejects.toBeInstanceOf(DispatchCancelNotAllowedException);
 
         expect(publication.publish).not.toHaveBeenCalled();
         expect(manager.query).not.toHaveBeenCalled();
@@ -88,6 +88,61 @@ describe('DispatchCancelService', () => {
     it('un despacho que no es de entrega → DISPATCH_TYPE_NOT_SUPPORTED', async () => {
         const { service } = build({ status: 'assigned', type: 'supplier_pickup' });
 
-        await expect(service.cancel(5, dto, 7, NOW)).rejects.toBeInstanceOf(DispatchTypeNotSupportedException);
+        await expect(service.cancel(5, dto, 7, {}, NOW)).rejects.toBeInstanceOf(DispatchTypeNotSupportedException);
+    });
+
+    it('un recojo de cliente en el endpoint de entregas → DISPATCH_TYPE_NOT_SUPPORTED sin escribir nada', async () => {
+        const { service, publication, manager } = build({ status: 'pickup_scheduled', type: 'warehouse_return_pickup' });
+
+        await expect(service.cancel(5, dto, 7, {}, NOW)).rejects.toBeInstanceOf(DispatchTypeNotSupportedException);
+
+        expect(publication.publish).not.toHaveBeenCalled();
+        expect(manager.query).not.toHaveBeenCalled();
+    });
+
+    describe('recojo de cliente (warehouse_return_pickup)', () => {
+        const pickup = { type: 'warehouse_return_pickup' };
+
+        it.each(['pickup_scheduled', 'address_review'])('%s sin lote: se cancela sin publicar al ERP y sin tocar ningún lote', async (status) => {
+            const { service, publication, batchExit, closing, events, dispatchEvents } = build({ status, type: pickup.type });
+
+            const result = await service.cancel(5, dto, 7, pickup, NOW);
+
+            expect(result).toMatchObject({ status: 'cancelled', previousStatus: status, routeBatchId: null, routeBatchClosed: false });
+            expect(publication.publish).not.toHaveBeenCalled();
+            expect(batchExit.leave).not.toHaveBeenCalled();
+            expect(closing.closeIfComplete).not.toHaveBeenCalled();
+            expect(events.emit).toHaveBeenCalledWith(DISPATCH_STATUS_CHANGED_EVENT, expect.objectContaining({ status: 'cancelled', version: 4 }));
+            const metadata = dispatchEvents.create.mock.calls[0][0].metadata as Record<string, unknown>;
+            expect(metadata).not.toHaveProperty('outboundRecordVersion');
+        });
+
+        it('in_planning en un lote: sale del lote (sube la versión, D-09) y no publica', async () => {
+            const { service, publication, batchExit, closing } = build({ status: 'in_planning', type: pickup.type, batch });
+
+            const result = await service.cancel(5, dto, 7, pickup, NOW);
+
+            expect(batchExit.leave).toHaveBeenCalledWith(expect.anything(), batch, 5, expect.objectContaining({ actorUserId: 7, reason: dto.reason }));
+            expect(result).toMatchObject({ previousStatus: 'in_planning', routeBatchId: null });
+            expect(publication.publish).not.toHaveBeenCalled();
+            expect(closing.closeIfComplete).not.toHaveBeenCalled();
+        });
+
+        it.each(['pending', 'scheduled', 'assigned', 'in_transit', 'picked_up_in_transit', 'delivered', 'cancelled'])('%s → DISPATCH_CANCEL_NOT_ALLOWED sin escribir nada', async (status) => {
+            const { service, publication, manager } = build({ status, type: pickup.type });
+
+            const error = await service.cancel(5, dto, 7, pickup, NOW).catch((e: unknown) => e);
+
+            expect(error).toBeInstanceOf(DispatchCancelNotAllowedException);
+            expect((error as DispatchCancelNotAllowedException).message).toContain('pickup_scheduled, address_review or in_planning');
+            expect(publication.publish).not.toHaveBeenCalled();
+            expect(manager.query).not.toHaveBeenCalled();
+        });
+
+        it('una entrega en el endpoint de recojos → DISPATCH_TYPE_NOT_SUPPORTED', async () => {
+            const { service } = build({ status: 'pending', type: 'delivery' });
+
+            await expect(service.cancel(5, dto, 7, pickup, NOW)).rejects.toBeInstanceOf(DispatchTypeNotSupportedException);
+        });
     });
 });

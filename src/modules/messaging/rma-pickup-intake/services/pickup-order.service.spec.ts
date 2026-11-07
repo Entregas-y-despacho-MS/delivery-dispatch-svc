@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { EntityManager } from 'typeorm';
 import { RejectedMessageException } from '../../../../plugins/messaging/exceptions/rejected-message.exception.js';
+import type { ManualPickupInput } from '../domain/manual-pickup.types.js';
 import type { RmaPickupRequestedData } from '../domain/rma-pickup-message.types.js';
+import { WarehouseNotAvailableException } from '../exceptions/index.js';
 import { PickupOrderService } from './pickup-order.service.js';
 
 const data: RmaPickupRequestedData = {
@@ -27,6 +29,31 @@ describe('PickupOrderService', () => {
         expect(query).toHaveBeenCalledTimes(1);
     });
 
+    it('rejects an rmaId with the reserved MANUAL- prefix before touching the database', async () => {
+        const query = vi.fn();
+
+        const error = await service
+            .createFromRma({ ...data, rmaId: 'MANUAL-DSP-2026-00001' }, { manager: { query } as unknown as EntityManager })
+            .catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(RejectedMessageException);
+        expect((error as RejectedMessageException).reasonCode).toBe('reserved_rma_prefix');
+        expect(query).not.toHaveBeenCalled();
+    });
+
+    it('assigns the tracking code with next_tracking_code() when it inserts the dispatch', async () => {
+        const query = vi
+            .fn()
+            .mockResolvedValueOnce([{ warehouse_id: 9 }])
+            .mockResolvedValueOnce([{ dispatch_id: 44 }])
+            .mockResolvedValue([]);
+
+        await service.createFromRma(data, { manager: { query } as unknown as EntityManager });
+
+        const insertDispatch = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO dispatches'));
+        expect(String(insertDispatch?.[0])).toMatch(/tracking_code[\s\S]*next_tracking_code\(\)/);
+    });
+
     it('creates the dispatch in pickup_scheduled with its packages when the address has coordinates', async () => {
         const query = vi
             .fn()
@@ -46,6 +73,68 @@ describe('PickupOrderService', () => {
         const insertEvent = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO dispatch_events'));
         expect(String(insertEvent?.[0])).toContain('created_from_rma');
         expect(JSON.parse(insertEvent?.[1][1] as string)).toMatchObject({ rmaId: 'RMA-1', recordVersion: 1 });
+    });
+
+    describe('createManual', () => {
+        const input: ManualPickupInput = {
+            warehouseCode: 'WH-LPZ-01',
+            contactName: 'Cliente Uno',
+            contactPhone: '77712345',
+            address: 'Av. Siempre Viva 123',
+            latitude: -16.5,
+            longitude: -68.1,
+            preferredPickupDate: '2026-11-10',
+            packageContents: '1 notebook',
+            returnReason: 'Producto defectuoso',
+            rmaId: 'RMA-9',
+        };
+
+        it('rejects a warehouse that is not available before writing anything', async () => {
+            const query = vi.fn().mockResolvedValueOnce([]); // warehouse lookup: not found
+
+            await expect(service.createManual(input, 7, { manager: { query } as unknown as EntityManager })).rejects.toBeInstanceOf(WarehouseNotAvailableException);
+
+            expect(query).toHaveBeenCalledTimes(1);
+            expect(String(query.mock.calls[0][0])).toContain('active = TRUE AND deleted_at IS NULL');
+        });
+
+        it('creates a pickup_scheduled dispatch whose reference is MANUAL-<tracking code> and records who created it', async () => {
+            const query = vi
+                .fn()
+                .mockResolvedValueOnce([{ warehouse_id: 9 }]) // warehouse lookup
+                .mockResolvedValueOnce([{ code: 'DSP-2026-00042' }]) // next_tracking_code()
+                .mockResolvedValueOnce([{ dispatch_id: 55 }]) // dispatch insert
+                .mockResolvedValue([]);
+
+            const result = await service.createManual(input, 7, { manager: { query } as unknown as EntityManager });
+
+            expect(result).toEqual({ dispatchId: 55, status: 'pickup_scheduled', trackingCode: 'DSP-2026-00042', sourceOrderRef: 'MANUAL-DSP-2026-00042' });
+            const insertDispatch = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO dispatches'));
+            expect(String(insertDispatch?.[0])).toContain("name = 'pickup_scheduled'");
+            expect(String(insertDispatch?.[0])).toContain("AT TIME ZONE 'America/La_Paz'");
+            expect(insertDispatch?.[1]).toEqual([
+                'MANUAL-DSP-2026-00042', 'DSP-2026-00042', 'Av. Siempre Viva 123', null, -16.5, -68.1, 'Cliente Uno', '77712345', null,
+                'Producto defectuoso', '1 notebook', 9, null, '2026-11-10',
+            ]);
+            const insertEvent = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO dispatch_events'));
+            expect(String(insertEvent?.[0])).toContain('created_manually');
+            expect(insertEvent?.[1][0]).toBe(55);
+            expect(insertEvent?.[1][1]).toBe(7);
+            expect(JSON.parse(insertEvent?.[1][2] as string)).toMatchObject({ source: 'manual', rmaId: 'RMA-9', warehouseCode: 'WH-LPZ-01' });
+        });
+
+        it('never uses the RMA as the order reference, so the RMA message that arrives later does not collide', async () => {
+            const query = vi.fn().mockResolvedValueOnce([{ warehouse_id: 9 }]).mockResolvedValueOnce([{ code: 'DSP-2026-00043' }]).mockResolvedValueOnce([{ dispatch_id: 56 }]).mockResolvedValue([]);
+
+            await service.createManual(input, 7, { manager: { query } as unknown as EntityManager });
+
+            const insertDispatch = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO dispatches'));
+            expect(insertDispatch?.[1]).not.toContain('RMA-9');
+        });
+
+        it('requires the transaction manager', async () => {
+            await expect(service.createManual(input, 7, {})).rejects.toThrow('inbound transaction manager');
+        });
     });
 
     it('creates the dispatch in address_review when the pickup address has no coordinates', async () => {

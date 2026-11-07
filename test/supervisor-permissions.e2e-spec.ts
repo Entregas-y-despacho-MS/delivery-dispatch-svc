@@ -51,6 +51,8 @@ const ALLOWED_LISTS: Route[] = [
     { method: 'get', path: '/reschedule-reasons' },
     // ST-67.1: umbrales de alerta (Supervisor y Coordinador leen).
     { method: 'get', path: '/settings/alert-thresholds' },
+    // ST-81.2: la lista de órdenes de recojo es de lectura para el Supervisor.
+    { method: 'get', path: '/pickup-orders' },
 ];
 
 /** Lecturas por id y escrituras permitidas: el guard las deja pasar (ni 401 ni 403). */
@@ -90,6 +92,9 @@ const COORDINATOR_ONLY: Route[] = [
     { method: 'post', path: `/dispatches/${NO_ID}/reschedule`, body: {} },
     { method: 'post', path: `/dispatches/${NO_ID}/return`, body: {} },
     { method: 'post', path: `/dispatches/${NO_ID}/cancel`, body: {} },
+    // ST-81.2: crear y anular una orden de recojo es solo del Coordinador.
+    { method: 'post', path: '/pickup-orders', body: {} },
+    { method: 'patch', path: `/pickup-orders/${NO_ID}/cancel`, body: {} },
     { method: 'post', path: `/dispatches/change-requests/${NO_ID}/tracking-link`, body: {} },
     { method: 'post', path: '/planning/generate', body: {} },
     { method: 'post', path: '/planning/cutoff', body: {} },

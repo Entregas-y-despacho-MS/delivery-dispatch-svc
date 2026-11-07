@@ -1,6 +1,6 @@
 import type { RmaPickupRequestedData } from '../../src/modules/messaging/rma-pickup-intake/domain/rma-pickup-message.types.js';
 import { RmaSyncStatePort, type RmaSyncState } from '../../src/modules/messaging/rma-pickup-intake/ports/rma-sync-state.port.js';
-import { PickupOrderService } from '../../src/modules/messaging/rma-pickup-intake/services/pickup-order.service.js';
+import { MANUAL_SOURCE_REF_PREFIX, PickupOrderService } from '../../src/modules/messaging/rma-pickup-intake/services/pickup-order.service.js';
 import { RejectedMessageException } from '../../src/plugins/messaging/exceptions/rejected-message.exception.js';
 import type { MemoryTransactionParticipant } from '../../src/plugins/messaging/memory/memory-inbound-message-transaction.adapter.js';
 
@@ -46,7 +46,10 @@ export interface MemoryPickupRecord {
     recordVersion: number;
 }
 
-/** Same decisions as `PickupOrderService.createFromRma`: unknown warehouse rejects, no coordinates → `address_review`. */
+/**
+ * Same decisions as `PickupOrderService.createFromRma`: a reserved `MANUAL-` rmaId or an unknown warehouse reject,
+ * no coordinates → `address_review`.
+ */
 export class MemoryPickupOrderService extends PickupOrderService implements MemoryTransactionParticipant<MemoryPickupRecord[]> {
     records: MemoryPickupRecord[] = [];
 
@@ -57,6 +60,12 @@ export class MemoryPickupOrderService extends PickupOrderService implements Memo
     async createFromRma(
         data: RmaPickupRequestedData,
     ): Promise<{ dispatchId: number; status: 'pickup_scheduled' | 'address_review' }> {
+        if (data.rmaId.startsWith(MANUAL_SOURCE_REF_PREFIX)) {
+            throw new RejectedMessageException(
+                [{ path: '/data/rmaId', keyword: 'reservedPrefix', message: `rmaId must not start with ${MANUAL_SOURCE_REF_PREFIX}.` }],
+                'reserved_rma_prefix',
+            );
+        }
         if (!this.knownWarehouses.has(data.warehouseId)) {
             throw new RejectedMessageException(
                 [{ path: '/data/warehouseId', keyword: 'unknownWarehouse', message: `Unknown warehouse ${data.warehouseId}.` }],

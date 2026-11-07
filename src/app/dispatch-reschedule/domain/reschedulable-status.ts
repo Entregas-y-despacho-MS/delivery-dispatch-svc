@@ -26,10 +26,31 @@ const CANCELLABLE: readonly string[] = [
     DispatchStatusEnum.ASSIGNED,
 ];
 
+/**
+ * States from which the coordinator can cancel a customer pickup (`warehouse_return_pickup`, ST-81.2): before it is
+ * planned (`pickup_scheduled`), while its address still needs review (`address_review`, an RMA without coordinates has
+ * no other way out) and while it is in a batch being planned (`in_planning`). Once assigned the route owns it.
+ */
+const PICKUP_CANCELLABLE: readonly string[] = [
+    DispatchStatusEnum.PICKUP_SCHEDULED,
+    DispatchStatusEnum.ADDRESS_REVIEW,
+    DispatchStatusEnum.IN_PLANNING,
+];
+
+/** Cancellable states by dispatch type: the cancellation endpoint of each type only accepts its own list. */
+const CANCELLABLE_BY_TYPE: Readonly<Record<string, readonly string[]>> = {
+    delivery:                CANCELLABLE,
+    warehouse_return_pickup: PICKUP_CANCELLABLE,
+};
+
 /** Cancellable states in which the dispatch is still part of a batch that is not on the street: it leaves the batch. */
 const LEAVES_BATCH_WHEN_CANCELLED: readonly string[] = [DispatchStatusEnum.IN_PLANNING, DispatchStatusEnum.SCHEDULED];
 
-export const isCancellableByCoordinator = (status: string): boolean => CANCELLABLE.includes(status);
+/** `type` defaults to `delivery` (the original cancellation of ES-241). */
+export const isCancellableByCoordinator = (status: string, type: string = 'delivery'): boolean =>
+    (CANCELLABLE_BY_TYPE[type] ?? []).includes(status);
+/** The cancellable states of a type, for the message of the 409. */
+export const cancellableStatusesOf = (type: string): readonly string[] => CANCELLABLE_BY_TYPE[type] ?? [];
 export const leavesBatchWhenCancelled = (status: string): boolean => LEAVES_BATCH_WHEN_CANCELLED.includes(status);
 export const isReschedulableStatus = (status: string): boolean => RESCHEDULABLE.includes(status);
 export const isReturnableStatus = (status: string): boolean => RETURNABLE.includes(status);

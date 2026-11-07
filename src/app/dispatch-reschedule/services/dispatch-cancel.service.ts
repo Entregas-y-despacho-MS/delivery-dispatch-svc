@@ -9,13 +9,25 @@ import { DISPATCH_STATUS_CHANGED_EVENT, type DispatchStatusChangedEvent } from '
 import { RouteBatchClosingService } from '../../route-batch-closing/services/route-batch-closing.service.js';
 import { CancelDispatchResultDto } from '../dto/cancel-dispatch-result.dto.js';
 import type { CancelDispatchDto } from '../dto/cancel-dispatch.dto.js';
-import { isCancellableByCoordinator, leavesBatchWhenCancelled } from '../domain/reschedulable-status.js';
+import { cancellableStatusesOf, isCancellableByCoordinator, leavesBatchWhenCancelled } from '../domain/reschedulable-status.js';
 import { DispatchCancelNotAllowedException, DispatchTypeNotSupportedException } from '../exceptions/index.js';
 import { BatchExitService, type BatchExitResult } from './batch-exit.service.js';
 import { DispatchLockService } from './dispatch-lock.service.js';
 
 /** Reason published to the ERP when the coordinator cancels (the cancellations that come from Marketplace carry `ORDER-CANCELLED`). */
 export const COORDINATOR_CANCELLED_REASON_CODE = 'COORD-CANCELLED';
+
+export interface CancelDispatchOptions {
+    /** Dispatch type of the calling endpoint; defaults to `delivery`. */
+    type?: string;
+}
+
+/**
+ * Types whose cancellation is announced to the ERP. A pickup (`warehouse_return_pickup`) is not (ST-81.2, D3): the
+ * payload would carry the RMA as `salesOrderId` to Marketplace, which receives every status without a filter, and a
+ * manual pickup has no RMA at all. Telling Almacén about a cancelled RMA is a pending item (`PENDIENTES.md`).
+ */
+const PUBLISHES_CANCELLATION_TYPES: readonly string[] = ['delivery'];
 
 interface Applied {
     result: CancelDispatchResultDto;
@@ -50,16 +62,29 @@ export class DispatchCancelService {
         private readonly events: EventEmitter2,
     ) {}
 
-    async cancel(dispatchId: number, dto: CancelDispatchDto, userId: number, now: Date = new Date()): Promise<CancelDispatchResultDto> {
-        const applied = await this.dataSource.transaction(async (manager) => await this.apply(manager, dispatchId, dto, userId, now));
+    /**
+     * `options.type` is the dispatch type the calling endpoint serves (default `delivery`): a dispatch of another type
+     * answers 409 `DISPATCH_TYPE_NOT_SUPPORTED`, so each endpoint only cancels its own kind.
+     */
+    async cancel(
+        dispatchId: number,
+        dto: CancelDispatchDto,
+        userId: number,
+        options: CancelDispatchOptions = {},
+        now: Date = new Date(),
+    ): Promise<CancelDispatchResultDto> {
+        const type = options.type ?? 'delivery';
+        const applied = await this.dataSource.transaction(async (manager) => await this.apply(manager, dispatchId, dto, userId, type, now));
         this.events.emit(DISPATCH_STATUS_CHANGED_EVENT, applied.event);
         return applied.result;
     }
 
-    private async apply(manager: EntityManager, dispatchId: number, dto: CancelDispatchDto, userId: number, now: Date): Promise<Applied> {
+    private async apply(manager: EntityManager, dispatchId: number, dto: CancelDispatchDto, userId: number, type: string, now: Date): Promise<Applied> {
         const { dispatch, batch } = await this.locks.lock(manager, dispatchId);
-        if (dispatch.type !== 'delivery') throw new DispatchTypeNotSupportedException(dispatch.type);
-        if (!isCancellableByCoordinator(dispatch.status)) throw new DispatchCancelNotAllowedException(dispatch.status);
+        if (dispatch.type !== type) throw new DispatchTypeNotSupportedException(dispatch.type, type);
+        if (!isCancellableByCoordinator(dispatch.status, type)) {
+            throw new DispatchCancelNotAllowedException(dispatch.status, cancellableStatusesOf(type));
+        }
 
         let exit: BatchExitResult | null = null;
         if (batch && leavesBatchWhenCancelled(dispatch.status)) {
@@ -70,13 +95,15 @@ export class DispatchCancelService {
             });
         }
 
-        const outboundRecordVersion = await this.publication.publish(manager, {
-            dispatchId,
-            status: DispatchStatusEnum.CANCELLED,
-            previousStatus: dispatch.status,
-            occurredAt: now,
-            reasonCode: COORDINATOR_CANCELLED_REASON_CODE,
-        });
+        const outboundRecordVersion = PUBLISHES_CANCELLATION_TYPES.includes(type)
+            ? await this.publication.publish(manager, {
+                dispatchId,
+                status: DispatchStatusEnum.CANCELLED,
+                previousStatus: dispatch.status,
+                occurredAt: now,
+                reasonCode: COORDINATOR_CANCELLED_REASON_CODE,
+            })
+            : null;
 
         const [updatedRows]: [{ version: number; updated_at: Date }[], number] = await manager.query(
             `UPDATE dispatches
