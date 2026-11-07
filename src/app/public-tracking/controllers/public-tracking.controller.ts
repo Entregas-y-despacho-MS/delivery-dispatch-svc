@@ -8,6 +8,8 @@ import { AvailableSlotsDto } from '../dto/available-slots.dto.js';
 import { ChangeRequestDto } from '../dto/change-request.dto.js';
 import { RescheduleDto } from '../dto/reschedule.dto.js';
 import { PublicTrackingDto } from '../dto/public-tracking.dto.js';
+import { RateDeliveryDto } from '../dto/rate-delivery.dto.js';
+import { RatingDto } from '../dto/public-tracking.dto.js';
 import { VerificationCodeSentDto, VerificationProofDto, VerifyCodeDto } from '../dto/verification.dto.js';
 import { CustomerRescheduleService } from '../services/customer-reschedule.service.js';
 import { CustomerResponseService } from '../services/customer-response.service.js';
@@ -65,6 +67,26 @@ export class PublicTrackingController {
     @ApiResponse(TOO_MANY_REQUESTS)
     async view(@Param('token') token: string): Promise<PublicTrackingDto> {
         return await this.service.view(token);
+    }
+
+    @Post(':token/rating')
+    @HttpCode(200)
+    @Header('Cache-Control', 'no-store')
+    @ApiOperation({
+        summary: 'Rate a completed delivery from its tracking link',
+        description: 'Public, no login. Accepts one integer score from 1 to 5 only after the delivery is `delivered`. The database unique constraint is the final guard against duplicate submissions; a second rating answers 409 `RATING_ALREADY_SUBMITTED`. Other delivery states answer 409 `RATING_NOT_ALLOWED`. The same token validation and per-IP request limit as the public tracking page apply.',
+    })
+    @ApiParam(TOKEN_PARAM)
+    @ApiOkResponse({ type: RatingDto })
+    @ApiBadRequests({ validation: true, example: ['score must not be greater than 5.'] })
+    @ApiNotFound({ code: 'TRACKING_LINK_NOT_FOUND', message: 'Tracking link not found.' })
+    @ApiConflict(
+        { code: 'RATING_NOT_ALLOWED', message: 'This delivery cannot be rated yet.' },
+        { code: 'RATING_ALREADY_SUBMITTED', message: 'This delivery has already been rated.' },
+    )
+    @ApiResponse(TOO_MANY_REQUESTS)
+    async rate(@Param('token') token: string, @Body() dto: RateDeliveryDto): Promise<RatingDto> {
+        return await this.service.rate(token, dto.score);
     }
 
     @Post(':token/verification-code')

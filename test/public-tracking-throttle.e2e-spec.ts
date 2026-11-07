@@ -3,8 +3,9 @@
 // The limit is read when the controller class is defined, so this file sets a small one BEFORE the app is
 // imported; vitest gives each file its own module registry, so the other suites keep the default. Every request
 // of supertest comes from the same IP, which is exactly the case the limit is for.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { DiskHealthIndicator } from '@nestjs/terminus';
 import request from 'supertest';
 import { DataSource } from 'typeorm';
 import { HttpExceptionFilter } from '../src/shared/filters/index.js';
@@ -67,6 +68,13 @@ describe('Public tracking IP block (e2e, ST-224.1)', () => {
     it('limits only the public page: the rest of the API keeps answering from the same IP', async () => {
         expect((await view(UNKNOWN)).status).toBe(429);
 
-        expect((await http().get(`/${prefix}/health`)).status).toBe(200);
+        // This suite verifies throttling, not host disk capacity; database and memory health checks stay active.
+        const diskCheck = vi.spyOn(app.get(DiskHealthIndicator), 'checkStorage')
+            .mockResolvedValue({ disk: { status: 'up' } });
+        try {
+            expect((await http().get(`/${prefix}/health`)).status).toBe(200);
+        } finally {
+            diskCheck.mockRestore();
+        }
     });
 });

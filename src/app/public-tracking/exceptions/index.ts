@@ -9,3 +9,5 @@ export * from './confirmation-not-available.exception.js';
 export * from './change-request-not-available.exception.js';
 export * from './verification-required.exception.js';
 export * from './slot-no-longer-available.exception.js';
+export * from './rating-not-allowed.exception.js';
+export * from './rating-already-submitted.exception.js';
