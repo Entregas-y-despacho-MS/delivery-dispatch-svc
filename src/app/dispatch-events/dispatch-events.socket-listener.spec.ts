@@ -83,31 +83,63 @@ describe('DispatchEventsSocketListener', () => {
             expect(socket.emitToRoom).not.toHaveBeenCalled();
         });
 
-        it('throttles to one broadcast per driver every 2s, independently per driver', async () => {
+        it('emits the first point of a window immediately, independently per driver', async () => {
             const socket = { emitToRoom: vi.fn() };
             const dataSource = { query: vi.fn()
                 .mockResolvedValueOnce([{ route_batch_id: 93, driver_id: 45, vehicle_id: 5 }])
-                .mockResolvedValueOnce([{ route_batch_id: 93, driver_id: 45, vehicle_id: 5 }])
-                .mockResolvedValueOnce([{ route_batch_id: 94, driver_id: 46, vehicle_id: 6 }])
-                .mockResolvedValueOnce([{ route_batch_id: 93, driver_id: 45, vehicle_id: 5 }]) };
+                .mockResolvedValueOnce([{ route_batch_id: 94, driver_id: 46, vehicle_id: 6 }]) };
             const listener = new DispatchEventsSocketListener(socket as never, dataSource as never);
 
-            const now = vi.spyOn(Date, 'now');
-            now.mockReturnValue(1_000_000);
             await listener.forwardLocationUpdated(event);
-            now.mockReturnValue(1_001_000); // +1s — still inside the 2s window for driver 45
-            await listener.forwardLocationUpdated(event);
-            expect(socket.emitToRoom).toHaveBeenCalledTimes(1);
+            await listener.forwardLocationUpdated({ ...event, dispatchId: 8 }); // a different driver's own point
 
-            // A different driver's own point is never held back by driver 45's throttle.
-            await listener.forwardLocationUpdated({ ...event, dispatchId: 8 });
             expect(socket.emitToRoom).toHaveBeenCalledTimes(2);
+            listener.onModuleDestroy();
+        });
 
-            now.mockReturnValue(1_002_100); // +2.1s from driver 45's last broadcast — window elapsed
-            await listener.forwardLocationUpdated(event);
-            expect(socket.emitToRoom).toHaveBeenCalledTimes(3);
+        it('queues every point that arrives inside the window and flushes only the latest one when it elapses (never the first or a middle one)', async () => {
+            vi.useFakeTimers();
+            try {
+                const socket = { emitToRoom: vi.fn() };
+                const dataSource = { query: vi.fn(async () => [{ route_batch_id: 93, driver_id: 45, vehicle_id: 5 }]) };
+                const listener = new DispatchEventsSocketListener(socket as never, dataSource as never);
 
-            now.mockRestore();
+                await listener.forwardLocationUpdated({ ...event, latitude: -17.700 }); // t=0 — emits immediately
+                expect(socket.emitToRoom).toHaveBeenCalledTimes(1);
+
+                vi.advanceTimersByTime(500);
+                await listener.forwardLocationUpdated({ ...event, latitude: -17.701 }); // t=0.5s — queued, not the one that should flush
+                vi.advanceTimersByTime(500);
+                await listener.forwardLocationUpdated({ ...event, latitude: -17.702 }); // t=1s — replaces the queued one
+                expect(socket.emitToRoom).toHaveBeenCalledTimes(1); // still only the first point so far
+
+                await vi.advanceTimersByTimeAsync(1000); // t=2s — the window since t=0 elapses, the pending timer fires
+                expect(socket.emitToRoom).toHaveBeenCalledTimes(2);
+                expect(socket.emitToRoom).toHaveBeenLastCalledWith('dispatch-board', 'dispatch.location.updated', expect.objectContaining({ latitude: -17.702 }));
+
+                listener.onModuleDestroy();
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it('onModuleDestroy clears a pending flush so it never fires after teardown', async () => {
+            vi.useFakeTimers();
+            try {
+                const socket = { emitToRoom: vi.fn() };
+                const dataSource = { query: vi.fn(async () => [{ route_batch_id: 93, driver_id: 45, vehicle_id: 5 }]) };
+                const listener = new DispatchEventsSocketListener(socket as never, dataSource as never);
+
+                await listener.forwardLocationUpdated(event);
+                await listener.forwardLocationUpdated(event); // queued
+
+                listener.onModuleDestroy();
+                await vi.advanceTimersByTimeAsync(2000);
+
+                expect(socket.emitToRoom).toHaveBeenCalledTimes(1); // the queued one never fired
+            } finally {
+                vi.useRealTimers();
+            }
         });
     });
 

@@ -148,6 +148,21 @@ describe('GET /fleet/live-positions (e2e, ST-60.1)', () => {
         });
     });
 
+    it("prefers the batch's most recent position over the current stop's own older one", async () => {
+        const vehicle = await createVehicle(`F6${run.slice(-6)}`);
+        const batchId = await createBatch('in_execution', driver2Id, vehicle, zoneId);
+        // An earlier stop holds the newest point (e.g. the driver is now back at an earlier stop after an incident).
+        await insertDispatch('delivered', batchId, 1, { lat: -17.90, lng: -63.20, at: '2040-01-02T11:00:00Z' });
+        const current = await insertDispatch('in_transit', batchId, 2, { lat: -17.80, lng: -63.19, at: '2040-01-02T08:00:00Z' });
+
+        const res = await livePositions();
+        const row = res.body.find((r: { routeBatchId: number }) => r.routeBatchId === batchId);
+        expect(row).toMatchObject({
+            currentStop: { dispatchId: current, status: 'in_transit' },
+            lastLatitude: -17.90, lastLongitude: -63.20, lastLocationAt: '2040-01-02T11:00:00.000Z',
+        });
+    });
+
     it('skips an already-resolved incident stop and reports the next real open one as the current stop', async () => {
         const vehicle = await createVehicle(`F5${run.slice(-6)}`);
         const batchId = await createBatch('in_execution', driverId, vehicle, zoneId);

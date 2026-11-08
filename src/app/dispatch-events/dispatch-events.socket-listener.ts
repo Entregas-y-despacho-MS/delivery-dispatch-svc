@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
@@ -15,13 +15,21 @@ import { DISPATCH_LOCATION_UPDATED_EVENT, type DispatchLocationUpdatedEvent } fr
 const ROLE_ROOMS = ['coordinators', 'supervisors'];
 const LOCATION_EMIT_THROTTLE_MS = 2000;
 
+type EnrichedLocationPayload = DispatchLocationUpdatedEvent & { driverId: number; vehicleId: number | null; routeBatchId: number | null };
+
 @Injectable()
-export class DispatchEventsSocketListener {
-    // Per-driver last emission time for 'dispatch.location.updated' (ST-60.1) — a background GPS
-    // report can arrive every few seconds; the live fleet map only needs one redraw per driver
-    // every LOCATION_EMIT_THROTTLE_MS, not one socket message per point. In-memory and per-instance
-    // is enough here: it only throttles a redraw rate, so a missed window after a restart is harmless.
+export class DispatchEventsSocketListener implements OnModuleDestroy {
+    // Per-driver throttle state for 'dispatch.location.updated' (ST-60.1) — a background GPS report,
+    // or a batch synced after regaining signal, can apply several points for the same driver within
+    // one window; the live fleet map only needs one redraw per driver every LOCATION_EMIT_THROTTLE_MS,
+    // but that redraw must always be the LATEST known point, never the first one of the burst (a
+    // leading-edge-only throttle would strand the board on a stale position until the next report).
+    // Trailing-edge: the first point of a window emits immediately; every point that arrives before
+    // the window elapses replaces the pending one, which flushes when the window is up. In-memory and
+    // per-instance is enough here — it only throttles a redraw rate, a missed window after a restart
+    // is harmless.
     private readonly lastLocationEmitAt = new Map<number, number>();
+    private readonly pendingLocation = new Map<number, { payload: EnrichedLocationPayload; timer: NodeJS.Timeout }>();
 
     constructor(
         private readonly socket: SocketService,
@@ -91,17 +99,45 @@ export class DispatchEventsSocketListener {
         );
         if (!target || target.driver_id === null) return;
 
-        const now = Date.now();
-        const lastEmit = this.lastLocationEmitAt.get(target.driver_id);
-        if (lastEmit !== undefined && now - lastEmit < LOCATION_EMIT_THROTTLE_MS) return;
-        this.lastLocationEmitAt.set(target.driver_id, now);
-
-        this.socket.emitToRoom('dispatch-board', DISPATCH_LOCATION_UPDATED_EVENT, {
+        const driverId = target.driver_id as number;
+        const payload: EnrichedLocationPayload = {
             ...event,
-            driverId:     target.driver_id,
+            driverId,
             vehicleId:    target.vehicle_id,
             routeBatchId: target.route_batch_id,
-        });
+        };
+
+        const lastEmit = this.lastLocationEmitAt.get(driverId);
+        const elapsed = lastEmit === undefined ? Infinity : Date.now() - lastEmit;
+        if (elapsed >= LOCATION_EMIT_THROTTLE_MS) {
+            this.emitLocation(driverId, payload);
+            return;
+        }
+
+        // Already something pending for this driver inside the window: this newer point replaces it —
+        // the timer already running will flush it, no new timer needed.
+        const pending = this.pendingLocation.get(driverId);
+        if (pending) {
+            pending.payload = payload;
+            return;
+        }
+        const timer = setTimeout(() => {
+            const flushed = this.pendingLocation.get(driverId);
+            this.pendingLocation.delete(driverId);
+            if (flushed) this.emitLocation(driverId, flushed.payload);
+        }, LOCATION_EMIT_THROTTLE_MS - elapsed);
+        this.pendingLocation.set(driverId, { payload, timer });
+    }
+
+    private emitLocation(driverId: number, payload: EnrichedLocationPayload): void {
+        this.lastLocationEmitAt.set(driverId, Date.now());
+        this.socket.emitToRoom('dispatch-board', DISPATCH_LOCATION_UPDATED_EVENT, payload);
+    }
+
+    /** Pending trailing-edge timers must not outlive the instance (test teardown, hot reload, shutdown). */
+    onModuleDestroy(): void {
+        for (const { timer } of this.pendingLocation.values()) clearTimeout(timer);
+        this.pendingLocation.clear();
     }
 
     private async forwardDispatchEvent(

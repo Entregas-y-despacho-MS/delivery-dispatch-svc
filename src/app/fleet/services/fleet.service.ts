@@ -27,10 +27,12 @@ export class FleetService {
 
     /**
      * The "current stop" prefers the one already `in_transit`; if none is (between stops, or the
-     * driver hasn't started the next leg yet), it falls back to the next open one by visit order.
-     * The position itself prefers that same stop's last point, but falls back to the most recent
-     * point of any stop in the batch — the vehicle's real position does not reset to unknown just
-     * because the driver moved on to a stop that has not received a GPS point yet.
+     * driver hasn't started the next leg yet), it falls back to the next open one by visit order
+     * (`dispatch_id` breaks a tie on `sequence_order`, so the result is deterministic). The position
+     * is always the most recent GPS point of any stop in the batch (`lastpos`), never the current
+     * stop's own point specifically — a stop that went back to an earlier status (e.g. `assigned`
+     * again after an incident) can hold an older point than one already worked, and "last known
+     * position of the vehicle" must still be the newest one, not that stop's.
      */
     async findLivePositions(): Promise<FleetLivePositionDto[]> {
         const rows: LivePositionRow[] = await this.dataSource.query(
@@ -45,21 +47,20 @@ export class FleetService {
                  cur.dispatch_id AS current_dispatch_id,
                  cur.tracking_code AS current_tracking_code,
                  cur.status_name AS current_status,
-                 COALESCE(cur.last_latitude, lastpos.last_latitude) AS last_latitude,
-                 COALESCE(cur.last_longitude, lastpos.last_longitude) AS last_longitude,
-                 COALESCE(cur.last_location_at, lastpos.last_location_at) AS last_location_at
+                 lastpos.last_latitude AS last_latitude,
+                 lastpos.last_longitude AS last_longitude,
+                 lastpos.last_location_at AS last_location_at
                FROM route_batches rb
                JOIN users u ON u.user_id = rb.driver_id
                JOIN vehicles v ON v.vehicle_id = rb.vehicle_id
                LEFT JOIN delivery_zones dz ON dz.delivery_zone_id = rb.delivery_zone_id
                LEFT JOIN LATERAL (
-                   SELECT d.dispatch_id, d.tracking_code, ds.name AS status_name,
-                          d.last_latitude, d.last_longitude, d.last_location_at
+                   SELECT d.dispatch_id, d.tracking_code, ds.name AS status_name
                      FROM dispatches d
                      JOIN dispatch_statuses ds ON ds.dispatch_status_id = d.dispatch_status_id
                     WHERE d.route_batch_id = rb.route_batch_id
                       AND ds.name = ANY($1::text[])
-                    ORDER BY (ds.name = 'in_transit') DESC, d.sequence_order ASC NULLS LAST
+                    ORDER BY (ds.name = 'in_transit') DESC, d.sequence_order ASC NULLS LAST, d.dispatch_id ASC
                     LIMIT 1
                ) cur ON true
                LEFT JOIN LATERAL (
