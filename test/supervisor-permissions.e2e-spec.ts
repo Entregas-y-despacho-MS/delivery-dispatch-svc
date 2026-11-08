@@ -144,6 +144,7 @@ const DRIVER_ONLY: Route[] = [
     { method: 'post', path: `/dispatches/${NO_ID}/incidents`, body: {} },
     { method: 'post', path: `/dispatches/${NO_ID}/supplier-pickup`, body: {} },
     { method: 'post', path: `/dispatches/${NO_ID}/arrived-at-warehouse`, body: {} },
+    { method: 'post', path: `/dispatches/${NO_ID}/return-pickup`, body: {} },
     { method: 'post', path: '/tracking/locations', body: {} },
     { method: 'put', path: '/push-tokens/some-device', body: {} },
     { method: 'delete', path: '/push-tokens/some-device' },
