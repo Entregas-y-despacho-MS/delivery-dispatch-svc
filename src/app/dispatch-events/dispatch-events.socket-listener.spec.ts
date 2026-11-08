@@ -58,14 +58,57 @@ describe('DispatchEventsSocketListener', () => {
         ]);
     });
 
-    it('routes GPS updates only to the live board room', () => {
-        const socket = { emitToRoom: vi.fn() };
-        const listener = new DispatchEventsSocketListener(socket as never, {} as never);
+    describe('forwardLocationUpdated (ST-60.1)', () => {
         const event = { dispatchId: 7, latitude: -17.7, longitude: -63.1, recordedAt: '2026-10-19T12:00:00.000Z' };
 
-        listener.forwardLocationUpdated(event);
+        it('enriches the point with routeBatchId/driverId/vehicleId and routes it only to the live board room', async () => {
+            const socket = { emitToRoom: vi.fn() };
+            const dataSource = { query: vi.fn(async () => [{ route_batch_id: 93, driver_id: 45, vehicle_id: 5 }]) };
+            const listener = new DispatchEventsSocketListener(socket as never, dataSource as never);
 
-        expect(socket.emitToRoom).toHaveBeenCalledWith('dispatch-board', 'dispatch.location.updated', event);
+            await listener.forwardLocationUpdated(event);
+
+            expect(socket.emitToRoom).toHaveBeenCalledWith('dispatch-board', 'dispatch.location.updated', {
+                ...event, driverId: 45, vehicleId: 5, routeBatchId: 93,
+            });
+        });
+
+        it('does not forward when the dispatch has no assigned driver (should not happen, but no room to target)', async () => {
+            const socket = { emitToRoom: vi.fn() };
+            const dataSource = { query: vi.fn(async () => [{ route_batch_id: null, driver_id: null, vehicle_id: null }]) };
+            const listener = new DispatchEventsSocketListener(socket as never, dataSource as never);
+
+            await listener.forwardLocationUpdated(event);
+
+            expect(socket.emitToRoom).not.toHaveBeenCalled();
+        });
+
+        it('throttles to one broadcast per driver every 2s, independently per driver', async () => {
+            const socket = { emitToRoom: vi.fn() };
+            const dataSource = { query: vi.fn()
+                .mockResolvedValueOnce([{ route_batch_id: 93, driver_id: 45, vehicle_id: 5 }])
+                .mockResolvedValueOnce([{ route_batch_id: 93, driver_id: 45, vehicle_id: 5 }])
+                .mockResolvedValueOnce([{ route_batch_id: 94, driver_id: 46, vehicle_id: 6 }])
+                .mockResolvedValueOnce([{ route_batch_id: 93, driver_id: 45, vehicle_id: 5 }]) };
+            const listener = new DispatchEventsSocketListener(socket as never, dataSource as never);
+
+            const now = vi.spyOn(Date, 'now');
+            now.mockReturnValue(1_000_000);
+            await listener.forwardLocationUpdated(event);
+            now.mockReturnValue(1_001_000); // +1s — still inside the 2s window for driver 45
+            await listener.forwardLocationUpdated(event);
+            expect(socket.emitToRoom).toHaveBeenCalledTimes(1);
+
+            // A different driver's own point is never held back by driver 45's throttle.
+            await listener.forwardLocationUpdated({ ...event, dispatchId: 8 });
+            expect(socket.emitToRoom).toHaveBeenCalledTimes(2);
+
+            now.mockReturnValue(1_002_100); // +2.1s from driver 45's last broadcast — window elapsed
+            await listener.forwardLocationUpdated(event);
+            expect(socket.emitToRoom).toHaveBeenCalledTimes(3);
+
+            now.mockRestore();
+        });
     });
 
     it('sends integration alerts only to coordinator and supervisor rooms', () => {

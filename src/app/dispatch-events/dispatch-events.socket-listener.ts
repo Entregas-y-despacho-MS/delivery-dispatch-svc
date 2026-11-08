@@ -10,11 +10,19 @@ import { DISPATCH_STATUS_CHANGED_EVENT } from '../dispatch-status/dispatch-statu
 import { ROUTE_ASSIGNED_EVENT, type RouteAssignedEvent } from '../../modules/dispatch/route-batches/events/route-assigned.event.js';
 import { ROUTE_VEHICLE_CHANGED_EVENT, type RouteVehicleChangedEvent } from '../../modules/dispatch/route-batches/events/route-vehicle-changed.event.js';
 import { DELIVERY_ZONE_CREATED_EVENT, type DeliveryZoneCreatedEvent } from '../../modules/catalog/delivery-zones/events/delivery-zone-created.event.js';
+import { DISPATCH_LOCATION_UPDATED_EVENT, type DispatchLocationUpdatedEvent } from '../tracking/events/dispatch-location-updated.event.js';
 
 const ROLE_ROOMS = ['coordinators', 'supervisors'];
+const LOCATION_EMIT_THROTTLE_MS = 2000;
 
 @Injectable()
 export class DispatchEventsSocketListener {
+    // Per-driver last emission time for 'dispatch.location.updated' (ST-60.1) — a background GPS
+    // report can arrive every few seconds; the live fleet map only needs one redraw per driver
+    // every LOCATION_EMIT_THROTTLE_MS, not one socket message per point. In-memory and per-instance
+    // is enough here: it only throttles a redraw rate, so a missed window after a restart is harmless.
+    private readonly lastLocationEmitAt = new Map<number, number>();
+
     constructor(
         private readonly socket: SocketService,
         @InjectDataSource() private readonly dataSource: DataSource,
@@ -67,9 +75,33 @@ export class DispatchEventsSocketListener {
     async forwardChangeRequiresAttention(event: { dispatchId?: number }): Promise<void> {
         await this.forwardDispatchEvent('dispatch.change_requires_attention', event, 'coordinators');
     }
-    @OnEvent('dispatch.location.updated', { async: true })
-    forwardLocationUpdated(event: unknown): void {
-        this.socket.emitToRoom('dispatch-board', 'dispatch.location.updated', event);
+    /**
+     * Enriches the point with driverId/vehicleId/routeBatchId (additive, ST-60.1 — GET /fleet/live-positions
+     * returns the same three ids so the live map can match a marker to this broadcast) and throttles
+     * the broadcast to one per driver per LOCATION_EMIT_THROTTLE_MS. The point itself is still written
+     * on every report (TrackingService.updateLocation) — only this board redraw is rate-limited.
+     */
+    @OnEvent(DISPATCH_LOCATION_UPDATED_EVENT, { async: true })
+    async forwardLocationUpdated(event: DispatchLocationUpdatedEvent): Promise<void> {
+        const [target] = await this.dataSource.query(
+            `SELECT rb.route_batch_id, rb.driver_id, rb.vehicle_id
+               FROM dispatches d LEFT JOIN route_batches rb ON rb.route_batch_id = d.route_batch_id
+              WHERE d.dispatch_id = $1`,
+            [event.dispatchId],
+        );
+        if (!target || target.driver_id === null) return;
+
+        const now = Date.now();
+        const lastEmit = this.lastLocationEmitAt.get(target.driver_id);
+        if (lastEmit !== undefined && now - lastEmit < LOCATION_EMIT_THROTTLE_MS) return;
+        this.lastLocationEmitAt.set(target.driver_id, now);
+
+        this.socket.emitToRoom('dispatch-board', DISPATCH_LOCATION_UPDATED_EVENT, {
+            ...event,
+            driverId:     target.driver_id,
+            vehicleId:    target.vehicle_id,
+            routeBatchId: target.route_batch_id,
+        });
     }
 
     private async forwardDispatchEvent(

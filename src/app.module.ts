@@ -19,6 +19,7 @@ import { VehicleIncidentTypesModule } from './modules/fleet/vehicle-incident-typ
 import { VehicleMaintenancesModule } from './modules/fleet/vehicle-maintenances/vehicle-maintenances.module.js';
 import { AuthModule } from './app/auth/auth.module.js';
 import { TrackingModule } from './app/tracking/tracking.module.js';
+import { FleetModule } from './app/fleet/fleet.module.js';
 import { MailerModule } from './plugins/mailer/mailer.module.js';
 import { SocketModule } from './plugins/socket/socket.module.js';
 import { PdfModule } from './plugins/pdf/pdf.module.js';
@@ -103,6 +104,7 @@ import { SlaReportModule } from './app/sla-report/sla-report.module.js';
     VehicleMaintenancesModule,
     AuthModule,
     TrackingModule,
+    FleetModule,
     DispatchEventsAppModule,
     DispatchIncidentsAppModule,
     SupplierPickupModule,
