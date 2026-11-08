@@ -104,6 +104,9 @@ describe('PlanWriterService.writeNewBatch', () => {
         expect(update[1][5]).toEqual(['in_planning', 'pickup_scheduled', 'in_planning']);
         // Only the two deliveries changed status; the pickup is not in this audit trail.
         expect(saved.DispatchEvent.map((e: { dispatchId: number }) => e.dispatchId)).toEqual([101, 103]);
+        // 103's real position in the batch is 3rd (after the pickup at 2nd): filtering the pickup out of the
+        // audit trail must not shift it down to 2nd just because it is now 2nd in the filtered list.
+        expect(saved.DispatchEvent[1]).toMatchObject({ dispatchId: 103, metadata: expect.objectContaining({ sequenceOrder: 3 }) });
         expect(events.emit).toHaveBeenCalledTimes(2);
         expect(events.emit).not.toHaveBeenCalledWith('dispatch.status_changed', expect.objectContaining({ dispatchId: 102 }));
     });

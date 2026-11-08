@@ -8,7 +8,7 @@ import type { TravelSeconds } from '../../planning/domain/route-simulation.js';
 
 /** A stop of a provisional batch as the cutoff reads it. */
 export interface CutoffStop {
-    /** Capacity data (weight and packages) and zone; `status` is `in_planning` or `scheduled`. */
+    /** Capacity data (weight and packages) and zone; `status` is `in_planning`, `scheduled` or `pickup_scheduled`. */
     dispatch: PlanDispatch;
     /** Position in the batch when it was read (1-based). */
     sequence: number;
@@ -59,7 +59,9 @@ export type CutoffEligibility =
     /** Promised, but the customer can still answer (or no valid notice yet): stays out. */
     | 'window_open'
     /** Never approved (`in_planning`): has no promise, goes back to `pending`. */
-    | 'no_promise';
+    | 'no_promise'
+    /** A customer pickup (`pickup_scheduled`): never carries a promise, so it always enters. */
+    | 'pickup';
 
 export type CutoffMovementKind = 'merged' | 'split' | 'moved';
 

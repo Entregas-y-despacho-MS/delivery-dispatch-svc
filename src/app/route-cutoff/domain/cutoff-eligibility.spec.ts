@@ -29,6 +29,10 @@ describe('classifyStop', () => {
     it('treats an order that was never approved as without promise', () => {
         expect(classifyStop(stop(1, { status: 'in_planning' }), CUTOFF_NOW, WINDOW)).toBe('no_promise');
     });
+
+    it('always lets a customer pickup in, even with no notice and a window still open', () => {
+        expect(classifyStop(stop(1, { status: 'pickup_scheduled', notifiedAt: NOTIFIED_TODAY }), CUTOFF_NOW, WINDOW)).toBe('pickup');
+    });
 });
 
 describe('partitionStops', () => {
@@ -41,5 +45,15 @@ describe('partitionStops', () => {
         expect(result.eligible.map((s) => s.dispatch.dispatchId)).toEqual([1, 2]);
         expect(result.open.map((s) => s.dispatch.dispatchId)).toEqual([3]);
         expect(result.withoutPromise.map((s) => s.dispatch.dispatchId)).toEqual([4]);
+    });
+
+    it('keeps a customer pickup with the eligible stops, never releasing it like an unapproved order', () => {
+        const result = partitionStops(
+            [stop(1, { status: 'pickup_scheduled' }), stop(2, { status: 'in_planning' })],
+            CUTOFF_NOW,
+            WINDOW,
+        );
+        expect(result.eligible.map((s) => s.dispatch.dispatchId)).toEqual([1]);
+        expect(result.withoutPromise.map((s) => s.dispatch.dispatchId)).toEqual([2]);
     });
 });

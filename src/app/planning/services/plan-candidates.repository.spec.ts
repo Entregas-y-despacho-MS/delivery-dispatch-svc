@@ -169,6 +169,7 @@ describe('PlanCandidatesRepository.findOpenBatches', () => {
         const { repository } = build([
             stopRow(),
             stopRow({ dispatch_id: 102, sequence_order: 2, status: 'in_planning', promise_notified_at: null, scheduled_window_start: null, scheduled_window_end: null }),
+            stopRow({ dispatch_id: 103, sequence_order: 3, status: 'pickup_scheduled', promise_notified_at: null, scheduled_window_start: null, scheduled_window_end: null }),
         ]);
 
         const [batch] = await repository.findOpenBatches('2026-10-12');
@@ -177,6 +178,8 @@ describe('PlanCandidatesRepository.findOpenBatches', () => {
         expect(batch.stops.map((s) => [s.dispatch.dispatchId, s.sequence, s.notified, s.dispatch.status])).toEqual([
             [101, 1, true, 'scheduled'],
             [102, 2, false, 'in_planning'],
+            // A customer pickup's real status must survive, not collapse into 'in_planning' like an unapproved delivery.
+            [103, 3, false, 'pickup_scheduled'],
         ]);
         expect(batch.stops[0].window).toEqual({
             start: new Date('2026-10-14T13:00:00.000Z'), end: new Date('2026-10-14T15:00:00.000Z'),

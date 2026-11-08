@@ -159,7 +159,7 @@ export class CutoffBatchesRepository {
                 longitude: Number(row.delivery_longitude),
                 priority: row.priority,
                 orderConfirmedAt: row.confirmed_at,
-                status: row.status === 'scheduled' ? 'scheduled' : 'in_planning',
+                status: row.status === 'scheduled' || row.status === 'pickup_scheduled' ? row.status : 'in_planning',
                 fixedDate: null,
                 agreedWindow: null,
                 estimatedWeightKg: row.estimated_weight_kg === null ? null : Number(row.estimated_weight_kg),

@@ -310,10 +310,13 @@ export class PlanWriterService {
         sequences?: Map<number, number>,
     ): Promise<void> {
         const typeByDispatch = new Map(locked.map((row) => [row.dispatch_id, row.type]));
-        ids = ids.filter((dispatchId) => typeByDispatch.get(dispatchId) !== 'warehouse_return_pickup');
+        // Captured from the full, unfiltered list: a pickup's own position still counts towards a
+        // delivery's sequenceOrder below, even though the pickup itself gets no audit row for it.
+        const sequenceOf = sequences ?? new Map(ids.map((dispatchId, index) => [dispatchId, index + 1]));
+        const deliveryIds = ids.filter((dispatchId) => typeByDispatch.get(dispatchId) !== 'warehouse_return_pickup');
         const statusByDispatch = new Map(locked.map((row) => [row.dispatch_id, row.status]));
         const dispatchEvents = manager.getRepository(DispatchEvent);
-        await dispatchEvents.save(ids.map((dispatchId, index) => dispatchEvents.create({
+        await dispatchEvents.save(deliveryIds.map((dispatchId) => dispatchEvents.create({
             dispatchId,
             eventType: 'status_changed',
             detail: 'Planned into a provisional batch.',
@@ -324,13 +327,13 @@ export class PlanWriterService {
                 from: statusByDispatch.get(dispatchId),
                 to: DispatchStatusEnum.IN_PLANNING,
                 routeBatchId,
-                sequenceOrder: sequences?.get(dispatchId) ?? index + 1,
+                sequenceOrder: sequenceOf.get(dispatchId)!,
                 trigger: context.trigger,
                 occurrence: context.occurrence,
             },
         })));
         const lockedById = new Map(locked.map((row) => [row.dispatch_id, row]));
-        for (const dispatchId of ids) {
+        for (const dispatchId of deliveryIds) {
             const previous = lockedById.get(dispatchId);
             if (!previous) continue;
             statusEvents.push({
