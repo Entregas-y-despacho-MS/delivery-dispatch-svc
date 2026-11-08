@@ -1,7 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 
 export class SupplierPickupResponseDto {
-    @ApiProperty({ example: 42, description: 'Dispatch identifier.' })
+    @ApiProperty({ type: 'integer', example: 42, description: 'Dispatch identifier.' })
     dispatchId!: number;
 
     @ApiProperty({ example: 'picked_up_in_transit', description: 'Dispatch status after the collection was registered.' })
@@ -15,7 +15,7 @@ export class SupplierPickupResponseDto {
 }
 
 export class ReturnPickupResponseDto {
-    @ApiProperty({ example: 42, description: 'Dispatch identifier.' })
+    @ApiProperty({ type: 'integer', example: 42, description: 'Dispatch identifier.' })
     dispatchId!: number;
 
     @ApiProperty({ example: 'picked_up_in_transit', description: 'Dispatch status after the pickup was registered.' })

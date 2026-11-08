@@ -45,19 +45,19 @@ export class RegisterReturnPickupDto {
     @Matches(/Z$/, { message: 'occurredAt must be expressed in UTC and end with Z.' })
     occurredAt!: string;
 
-    @ApiProperty({ minimum: -90, maximum: 90, example: -16.5001, description: 'Latitude captured when the pickup was confirmed.' })
+    @ApiProperty({ type: 'number', format: 'double', minimum: -90, maximum: 90, example: -16.5001, description: 'Latitude captured when the pickup was confirmed.' })
     @IsNumber({ allowNaN: false, allowInfinity: false })
     @Min(-90)
     @Max(90)
     lat!: number;
 
-    @ApiProperty({ minimum: -180, maximum: 180, example: -68.1193, description: 'Longitude captured when the pickup was confirmed.' })
+    @ApiProperty({ type: 'number', format: 'double', minimum: -180, maximum: 180, example: -68.1193, description: 'Longitude captured when the pickup was confirmed.' })
     @IsNumber({ allowNaN: false, allowInfinity: false })
     @Min(-180)
     @Max(180)
     lng!: number;
 
-    @ApiProperty({ minimum: 0, example: 8.4, description: 'GPS horizontal accuracy in meters.' })
+    @ApiProperty({ type: 'number', format: 'double', minimum: 0, example: 8.4, description: 'GPS horizontal accuracy in meters.' })
     @IsNumber({ allowNaN: false, allowInfinity: false })
     @Min(0)
     accuracy!: number;
