@@ -58,14 +58,89 @@ describe('DispatchEventsSocketListener', () => {
         ]);
     });
 
-    it('routes GPS updates only to the live board room', () => {
-        const socket = { emitToRoom: vi.fn() };
-        const listener = new DispatchEventsSocketListener(socket as never, {} as never);
+    describe('forwardLocationUpdated (ST-60.1)', () => {
         const event = { dispatchId: 7, latitude: -17.7, longitude: -63.1, recordedAt: '2026-10-19T12:00:00.000Z' };
 
-        listener.forwardLocationUpdated(event);
+        it('enriches the point with routeBatchId/driverId/vehicleId and routes it only to the live board room', async () => {
+            const socket = { emitToRoom: vi.fn() };
+            const dataSource = { query: vi.fn(async () => [{ route_batch_id: 93, driver_id: 45, vehicle_id: 5 }]) };
+            const listener = new DispatchEventsSocketListener(socket as never, dataSource as never);
 
-        expect(socket.emitToRoom).toHaveBeenCalledWith('dispatch-board', 'dispatch.location.updated', event);
+            await listener.forwardLocationUpdated(event);
+
+            expect(socket.emitToRoom).toHaveBeenCalledWith('dispatch-board', 'dispatch.location.updated', {
+                ...event, driverId: 45, vehicleId: 5, routeBatchId: 93,
+            });
+        });
+
+        it('does not forward when the dispatch has no assigned driver (should not happen, but no room to target)', async () => {
+            const socket = { emitToRoom: vi.fn() };
+            const dataSource = { query: vi.fn(async () => [{ route_batch_id: null, driver_id: null, vehicle_id: null }]) };
+            const listener = new DispatchEventsSocketListener(socket as never, dataSource as never);
+
+            await listener.forwardLocationUpdated(event);
+
+            expect(socket.emitToRoom).not.toHaveBeenCalled();
+        });
+
+        it('emits the first point of a window immediately, independently per driver', async () => {
+            const socket = { emitToRoom: vi.fn() };
+            const dataSource = { query: vi.fn()
+                .mockResolvedValueOnce([{ route_batch_id: 93, driver_id: 45, vehicle_id: 5 }])
+                .mockResolvedValueOnce([{ route_batch_id: 94, driver_id: 46, vehicle_id: 6 }]) };
+            const listener = new DispatchEventsSocketListener(socket as never, dataSource as never);
+
+            await listener.forwardLocationUpdated(event);
+            await listener.forwardLocationUpdated({ ...event, dispatchId: 8 }); // a different driver's own point
+
+            expect(socket.emitToRoom).toHaveBeenCalledTimes(2);
+            listener.onModuleDestroy();
+        });
+
+        it('queues every point that arrives inside the window and flushes only the latest one when it elapses (never the first or a middle one)', async () => {
+            vi.useFakeTimers();
+            try {
+                const socket = { emitToRoom: vi.fn() };
+                const dataSource = { query: vi.fn(async () => [{ route_batch_id: 93, driver_id: 45, vehicle_id: 5 }]) };
+                const listener = new DispatchEventsSocketListener(socket as never, dataSource as never);
+
+                await listener.forwardLocationUpdated({ ...event, latitude: -17.700 }); // t=0 — emits immediately
+                expect(socket.emitToRoom).toHaveBeenCalledTimes(1);
+
+                vi.advanceTimersByTime(500);
+                await listener.forwardLocationUpdated({ ...event, latitude: -17.701 }); // t=0.5s — queued, not the one that should flush
+                vi.advanceTimersByTime(500);
+                await listener.forwardLocationUpdated({ ...event, latitude: -17.702 }); // t=1s — replaces the queued one
+                expect(socket.emitToRoom).toHaveBeenCalledTimes(1); // still only the first point so far
+
+                await vi.advanceTimersByTimeAsync(1000); // t=2s — the window since t=0 elapses, the pending timer fires
+                expect(socket.emitToRoom).toHaveBeenCalledTimes(2);
+                expect(socket.emitToRoom).toHaveBeenLastCalledWith('dispatch-board', 'dispatch.location.updated', expect.objectContaining({ latitude: -17.702 }));
+
+                listener.onModuleDestroy();
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it('onModuleDestroy clears a pending flush so it never fires after teardown', async () => {
+            vi.useFakeTimers();
+            try {
+                const socket = { emitToRoom: vi.fn() };
+                const dataSource = { query: vi.fn(async () => [{ route_batch_id: 93, driver_id: 45, vehicle_id: 5 }]) };
+                const listener = new DispatchEventsSocketListener(socket as never, dataSource as never);
+
+                await listener.forwardLocationUpdated(event);
+                await listener.forwardLocationUpdated(event); // queued
+
+                listener.onModuleDestroy();
+                await vi.advanceTimersByTimeAsync(2000);
+
+                expect(socket.emitToRoom).toHaveBeenCalledTimes(1); // the queued one never fired
+            } finally {
+                vi.useRealTimers();
+            }
+        });
     });
 
     it('sends integration alerts only to coordinator and supervisor rooms', () => {

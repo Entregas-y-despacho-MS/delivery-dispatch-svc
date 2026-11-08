@@ -8,6 +8,7 @@ import { RoleEnum } from '../../../shared/enums/index.js';
 import { dispatchRoleRooms } from '../../../shared/utils/dispatch-role-rooms.util.js';
 import { LocationPointDto } from '../dto/location-point.dto.js';
 import { LocationReportOutcome, LocationReportResultDto, LocationsReportResultDto } from '../dto/location-report-result.dto.js';
+import { DISPATCH_LOCATION_UPDATED_EVENT } from '../events/dispatch-location-updated.event.js';
 
 // Everyone who watches the live dispatch board (RF-A06/A13) — auto-joined on connect, see
 // handleSocketConnected() below. The plugin itself never sees this name or this role list.
@@ -74,7 +75,7 @@ export class TrackingService {
         });
         if (!applied) return { dispatchId: point.dispatchId, outcome: LocationReportOutcome.STALE };
 
-        this.events.emit('dispatch.location.updated', {
+        this.events.emit(DISPATCH_LOCATION_UPDATED_EVENT, {
             dispatchId: point.dispatchId,
             latitude:   point.latitude,
             longitude:  point.longitude,

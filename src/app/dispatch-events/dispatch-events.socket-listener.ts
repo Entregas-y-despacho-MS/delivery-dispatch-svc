@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
@@ -10,11 +10,27 @@ import { DISPATCH_STATUS_CHANGED_EVENT } from '../dispatch-status/dispatch-statu
 import { ROUTE_ASSIGNED_EVENT, type RouteAssignedEvent } from '../../modules/dispatch/route-batches/events/route-assigned.event.js';
 import { ROUTE_VEHICLE_CHANGED_EVENT, type RouteVehicleChangedEvent } from '../../modules/dispatch/route-batches/events/route-vehicle-changed.event.js';
 import { DELIVERY_ZONE_CREATED_EVENT, type DeliveryZoneCreatedEvent } from '../../modules/catalog/delivery-zones/events/delivery-zone-created.event.js';
+import { DISPATCH_LOCATION_UPDATED_EVENT, type DispatchLocationUpdatedEvent } from '../tracking/events/dispatch-location-updated.event.js';
 
 const ROLE_ROOMS = ['coordinators', 'supervisors'];
+const LOCATION_EMIT_THROTTLE_MS = 2000;
+
+type EnrichedLocationPayload = DispatchLocationUpdatedEvent & { driverId: number; vehicleId: number | null; routeBatchId: number | null };
 
 @Injectable()
-export class DispatchEventsSocketListener {
+export class DispatchEventsSocketListener implements OnModuleDestroy {
+    // Per-driver throttle state for 'dispatch.location.updated' (ST-60.1) — a background GPS report,
+    // or a batch synced after regaining signal, can apply several points for the same driver within
+    // one window; the live fleet map only needs one redraw per driver every LOCATION_EMIT_THROTTLE_MS,
+    // but that redraw must always be the LATEST known point, never the first one of the burst (a
+    // leading-edge-only throttle would strand the board on a stale position until the next report).
+    // Trailing-edge: the first point of a window emits immediately; every point that arrives before
+    // the window elapses replaces the pending one, which flushes when the window is up. In-memory and
+    // per-instance is enough here — it only throttles a redraw rate, a missed window after a restart
+    // is harmless.
+    private readonly lastLocationEmitAt = new Map<number, number>();
+    private readonly pendingLocation = new Map<number, { payload: EnrichedLocationPayload; timer: NodeJS.Timeout }>();
+
     constructor(
         private readonly socket: SocketService,
         @InjectDataSource() private readonly dataSource: DataSource,
@@ -67,9 +83,61 @@ export class DispatchEventsSocketListener {
     async forwardChangeRequiresAttention(event: { dispatchId?: number }): Promise<void> {
         await this.forwardDispatchEvent('dispatch.change_requires_attention', event, 'coordinators');
     }
-    @OnEvent('dispatch.location.updated', { async: true })
-    forwardLocationUpdated(event: unknown): void {
-        this.socket.emitToRoom('dispatch-board', 'dispatch.location.updated', event);
+    /**
+     * Enriches the point with driverId/vehicleId/routeBatchId (additive, ST-60.1 — GET /fleet/live-positions
+     * returns the same three ids so the live map can match a marker to this broadcast) and throttles
+     * the broadcast to one per driver per LOCATION_EMIT_THROTTLE_MS. The point itself is still written
+     * on every report (TrackingService.updateLocation) — only this board redraw is rate-limited.
+     */
+    @OnEvent(DISPATCH_LOCATION_UPDATED_EVENT, { async: true })
+    async forwardLocationUpdated(event: DispatchLocationUpdatedEvent): Promise<void> {
+        const [target] = await this.dataSource.query(
+            `SELECT rb.route_batch_id, rb.driver_id, rb.vehicle_id
+               FROM dispatches d LEFT JOIN route_batches rb ON rb.route_batch_id = d.route_batch_id
+              WHERE d.dispatch_id = $1`,
+            [event.dispatchId],
+        );
+        if (!target || target.driver_id === null) return;
+
+        const driverId = target.driver_id as number;
+        const payload: EnrichedLocationPayload = {
+            ...event,
+            driverId,
+            vehicleId:    target.vehicle_id,
+            routeBatchId: target.route_batch_id,
+        };
+
+        const lastEmit = this.lastLocationEmitAt.get(driverId);
+        const elapsed = lastEmit === undefined ? Infinity : Date.now() - lastEmit;
+        if (elapsed >= LOCATION_EMIT_THROTTLE_MS) {
+            this.emitLocation(driverId, payload);
+            return;
+        }
+
+        // Already something pending for this driver inside the window: this newer point replaces it —
+        // the timer already running will flush it, no new timer needed.
+        const pending = this.pendingLocation.get(driverId);
+        if (pending) {
+            pending.payload = payload;
+            return;
+        }
+        const timer = setTimeout(() => {
+            const flushed = this.pendingLocation.get(driverId);
+            this.pendingLocation.delete(driverId);
+            if (flushed) this.emitLocation(driverId, flushed.payload);
+        }, LOCATION_EMIT_THROTTLE_MS - elapsed);
+        this.pendingLocation.set(driverId, { payload, timer });
+    }
+
+    private emitLocation(driverId: number, payload: EnrichedLocationPayload): void {
+        this.lastLocationEmitAt.set(driverId, Date.now());
+        this.socket.emitToRoom('dispatch-board', DISPATCH_LOCATION_UPDATED_EVENT, payload);
+    }
+
+    /** Pending trailing-edge timers must not outlive the instance (test teardown, hot reload, shutdown). */
+    onModuleDestroy(): void {
+        for (const { timer } of this.pendingLocation.values()) clearTimeout(timer);
+        this.pendingLocation.clear();
     }
 
     private async forwardDispatchEvent(
