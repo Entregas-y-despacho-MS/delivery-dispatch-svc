@@ -6,11 +6,12 @@ import { DispatchStatusPublicationModule } from '../../modules/dispatch/dispatch
 import { OutboundMessagesModule } from '../../modules/messaging/outbound-messages/outbound-messages.module.js';
 import { SupplierPickupController } from './supplier-pickup.controller.js';
 import { SupplierPickupService } from './supplier-pickup.service.js';
+import { ReturnPickupService } from './return-pickup.service.js';
 
-/** ST-239.2 (8.6, ERP-06): recogida en proveedor y llegada al almacén destino. */
+/** ST-239.2 (8.6, ERP-06): recogida en proveedor y llegada al almacén destino. ST-80.2: retiro de un recojo de cliente. */
 @Module({
     imports:     [DispatchEventsModule, DeliveryEvidencesModule, DispatchIncidentsModule, DispatchStatusPublicationModule, OutboundMessagesModule],
     controllers: [SupplierPickupController],
-    providers:   [SupplierPickupService],
+    providers:   [SupplierPickupService, ReturnPickupService],
 })
 export class SupplierPickupModule {}
