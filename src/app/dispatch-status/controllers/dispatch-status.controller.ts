@@ -30,6 +30,7 @@ export class DispatchStatusController {
     @ApiNotFound({ code: 'DISPATCH_NOT_FOUND', message: 'Dispatch not found.' })
     @ApiConflict(
         { code: 'DISPATCH_STATUS_TRANSITION_NOT_ALLOWED', message: 'The dispatch cannot move from assigned to delivered.' },
+        { code: 'DELIVERED_NOT_ALLOWED_FOR_PICKUP', message: 'A return pickup cannot be marked as delivered; register the collection instead.' },
         { code: 'DISPATCH_STATUS_EVENT_OUT_OF_ORDER', message: 'This event is older than the last recorded status change.' },
         { code: 'DISPATCH_STATUS_TERMINAL', message: 'The dispatch is already delivered and cannot change status.' },
         { code: 'ANOTHER_DISPATCH_IN_TRANSIT', message: 'Another dispatch on this route is already in transit.' },

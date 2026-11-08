@@ -19,6 +19,7 @@ const dto = (status: UpdateDispatchStatusDto['status']): UpdateDispatchStatusDto
 
 function setup(options: {
     current?: string;
+    dispatchType?: string;
     driverId?: number;
     batchStatus?: string;
     identity?: { route_batch_id: number | null }[];
@@ -36,7 +37,7 @@ function setup(options: {
     const state = {
         identity: options.identity ?? [{ route_batch_id: 55 }],
         batch: options.batch ?? [{ id: 55, driver_id: options.driverId ?? 7, status: options.batchStatus ?? 'in_execution' }],
-        dispatch: [{ id: 12, route_batch_id: 55, status: options.current ?? DispatchStatusEnum.OUT_FOR_DELIVERY, evidence_policy: 'hand_delivery_standard', version: 4, updated_at: saved }],
+        dispatch: [{ id: 12, route_batch_id: 55, status: options.current ?? DispatchStatusEnum.OUT_FOR_DELIVERY, dispatch_type: options.dispatchType ?? 'delivery', evidence_policy: 'hand_delivery_standard', version: 4, updated_at: saved }],
         latest: options.latest ?? [], active: options.active ?? [], target: options.target ?? [{ dispatch_status_id: 3 }], updated: options.updated ?? [{ updated_at: saved }],
         remaining: options.remaining ?? [{ dispatch_id: 12 }], closed: options.closed ?? [{ closed_at: saved }],
     };
@@ -186,6 +187,16 @@ describe('DispatchStatusService.update', () => {
         await expect(ctx.service.update(12, dto(DispatchStatusEnum.DELIVERED), 7)).rejects.toBeInstanceOf(DispatchStatusConflictException);
         expect(ctx.dispatchEvents.create).not.toHaveBeenCalled();
         expect(ctx.events.emit).not.toHaveBeenCalled();
+    });
+
+    it('blocks delivered on a customer pickup (409) but lets it start its stop', async () => {
+        const blocked = setup({ current: DispatchStatusEnum.IN_TRANSIT, dispatchType: 'warehouse_return_pickup' });
+        await expect(blocked.service.update(12, dto(DispatchStatusEnum.DELIVERED), 7)).rejects.toMatchObject({ response: { error: 'DELIVERED_NOT_ALLOWED_FOR_PICKUP' } });
+        expect(blocked.dispatchEvents.create).not.toHaveBeenCalled();
+        expect(blocked.events.emit).not.toHaveBeenCalled();
+
+        const started = setup({ current: DispatchStatusEnum.OUT_FOR_DELIVERY, dispatchType: 'warehouse_return_pickup' });
+        await expect(started.service.update(12, dto(DispatchStatusEnum.IN_TRANSIT), 7)).resolves.toMatchObject({ status: DispatchStatusEnum.IN_TRANSIT });
     });
 
     it('requires policy evidence before delivered', async () => {

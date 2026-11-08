@@ -70,7 +70,7 @@ reservado). Debe coincidir con `PORTAL_ROUTES` del portal web (`config/portal-ro
 | Ajustes | `PUT /settings/alert-thresholds` (desde ST-67.1) | Sí, solo Supervisor (y root); el Coordinador recibe 403. Va en su propio endpoint: `/settings` no cambia |
 | Auditoría | `GET /audit/outbound-message-alerts` | **No**, solo Coordinador |
 | Usuarios | `/users`, `/roles`, `POST /auth/register` | **No**, solo Administrador (el listado de `/users` y `/roles` también lo lee el Coordinador) |
-| Repartidor | `my-assignments`, `my-history`, `drivers/me/metrics`, inicio y aceptación de lotes, estados, evidencias, OTP, incidencias, `supplier-pickup`, `arrived-at-warehouse`, `tracking/locations`, `push-tokens` | **No**, solo Repartidor |
+| Repartidor | `my-assignments`, `my-history`, `drivers/me/metrics`, inicio y aceptación de lotes, estados, evidencias, OTP, incidencias, `supplier-pickup`, `return-pickup`, `arrived-at-warehouse`, `tracking/locations`, `push-tokens` | **No**, solo Repartidor |
 
 Cualquier usuario autenticado, incluido el Supervisor, puede usar `POST /auth/logout`,
 `PATCH /auth/change-password` y `/auth/2fa/*` sobre su propia cuenta.

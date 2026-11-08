@@ -22,6 +22,7 @@ interface DispatchRow {
     id: number;
     route_batch_id: number | null;
     status: string;
+    dispatch_type: string;
     evidence_policy: string;
     version: number;
     updated_at: Date;
@@ -93,10 +94,11 @@ export class DispatchStatusService {
             [identity.route_batch_id],
         );
         const [dispatch]: DispatchRow[] = await manager.query(
-            `SELECT d.dispatch_id AS id, d.route_batch_id, ds.name AS status,
+            `SELECT d.dispatch_id AS id, d.route_batch_id, ds.name AS status, t.name AS dispatch_type,
                     d.evidence_policy, d.version, d.updated_at
                FROM dispatches d
                JOIN dispatch_statuses ds ON ds.dispatch_status_id = d.dispatch_status_id
+               JOIN dispatch_types t ON t.dispatch_type_id = d.dispatch_type_id
               WHERE d.dispatch_id = $1
               FOR UPDATE OF d`,
             [dispatchId],
@@ -133,6 +135,10 @@ export class DispatchStatusService {
             throw new DispatchStatusConflictException('DISPATCH_STATUS_TERMINAL', `The dispatch is already ${dispatch.status} and cannot change status.`);
         }
         assertDriverDispatchTransition(dispatch.status, dto.status);
+        // A customer pickup is collected (`return-pickup`), never delivered (ST-80.2).
+        if (dto.status === DispatchStatusEnum.DELIVERED && dispatch.dispatch_type === 'warehouse_return_pickup') {
+            throw new DispatchStatusConflictException('DELIVERED_NOT_ALLOWED_FOR_PICKUP', 'A return pickup cannot be marked as delivered; register the collection instead.');
+        }
 
         const latestEvents: LatestEventRow[] = await manager.query(
             `SELECT created_at

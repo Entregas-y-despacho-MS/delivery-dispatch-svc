@@ -163,6 +163,31 @@ describe('SupplierPickupService', () => {
         })).rejects.toBeInstanceOf(SupplierPickupConflictException);
     });
 
+    it('registers the arrival of a customer return pickup and publishes it without changing the status (ST-80.2)', async () => {
+        mockOwnership(baseDispatch({ dispatch_type: 'warehouse_return_pickup', status: 'picked_up_in_transit' }));
+        const arrivedAt = new Date('2026-11-07T16:00:00.000Z');
+        manager.query.mockImplementation(async (sql: string) => {
+            if (sql.includes('SELECT route_batch_id FROM dispatches')) return [{ route_batch_id: ROUTE_BATCH_ID }];
+            if (sql.includes('SELECT route_batch_id, driver_id FROM route_batches')) return [{ route_batch_id: ROUTE_BATCH_ID, driver_id: DRIVER_ID }];
+            if (sql.includes('JOIN dispatch_types')) return [baseDispatch({ dispatch_type: 'warehouse_return_pickup', status: 'picked_up_in_transit' })];
+            if (sql.includes('arrived_at_warehouse_at = $1')) return [{ arrived_at_warehouse_at: arrivedAt }];
+            return [];
+        });
+
+        const result = await service.registerArrival(DISPATCH_ID, DRIVER_ID, { eventId: uuidv7(), occurredAt: arrivedAt.toISOString(), ...gps });
+
+        expect(result).toEqual({ dispatchId: DISPATCH_ID, arrivedAtWarehouseAt: arrivedAt });
+        expect(statusPublication.publishTransferUpdate).toHaveBeenCalledWith(manager, expect.objectContaining({ status: 'picked_up_in_transit', previousStatus: 'picked_up_in_transit' }));
+        expect(manager.query.mock.calls.some(([sql]) => String(sql).includes('SET dispatch_status_id'))).toBe(false);
+    });
+
+    it('still rejects the arrival of a delivery', async () => {
+        mockOwnership(baseDispatch({ dispatch_type: 'delivery', status: 'picked_up_in_transit' }));
+
+        await expect(service.registerArrival(DISPATCH_ID, DRIVER_ID, { eventId: uuidv7(), occurredAt: new Date().toISOString(), ...gps }))
+            .rejects.toMatchObject({ response: { error: 'DISPATCH_NOT_SUPPLIER_PICKUP' } });
+    });
+
     it('registers the arrival only after the pickup was collected', async () => {
         mockOwnership(baseDispatch({ status: 'in_transit' }));
 

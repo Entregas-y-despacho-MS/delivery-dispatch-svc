@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
@@ -7,7 +7,7 @@ import { OutboxService } from '../../modules/messaging/outbound-messages/service
 import { DispatchEventsService } from '../../modules/dispatch/dispatch-events/services/dispatch-events.service.js';
 import { DeliveryEvidencesService } from '../../modules/dispatch/delivery-evidences/services/delivery-evidences.service.js';
 import { DispatchIncidentsService } from '../../modules/dispatch/dispatch-incidents/services/dispatch-incidents.service.js';
-import { DispatchNotFoundException } from '../../modules/dispatch/dispatches/exceptions/dispatch-not-found.exception.js';
+import { loadOwnedDispatch } from './owned-dispatch.js';
 import { IncidentReasonNotFoundException } from '../../modules/catalog/incident-reasons/exceptions/incident-reason-not-found.exception.js';
 import { DispatchStatusPublicationService } from '../../modules/dispatch/dispatch-status-publication/dispatch-status-publication.service.js';
 import { RegisterSupplierPickupDto } from './dto/register-supplier-pickup.dto.js';
@@ -22,19 +22,8 @@ const DISPATCH_TRANSFER_INCIDENT_REPORTED_TOPIC = 'dispatch.transfer.incident_re
 // idempotent retry of the other.
 const SUPPLIER_PICKUP_COLLECTION_KIND = 'supplier_pickup_collection';
 const WAREHOUSE_ARRIVAL_KIND = 'warehouse_arrival';
+const ARRIVAL_DISPATCH_TYPES = ['supplier_pickup', 'warehouse_return_pickup'];
 
-interface DispatchIdentity { route_batch_id: number | null; }
-interface RouteIdentity { route_batch_id: number; driver_id: number | null; }
-interface DispatchRow {
-    dispatch_id: number;
-    route_batch_id: number | null;
-    dispatch_type: string;
-    status: string;
-    tracking_code: string | null;
-    source_order_ref: string;
-    custody_received_at: Date | null;
-    arrived_at_warehouse_at: Date | null;
-}
 interface ExpectedItemRow { item_code: string; expected_quantity: string; }
 interface ReasonRow { incident_reason_id: number; code: string; }
 
@@ -63,7 +52,7 @@ export class SupplierPickupService {
         driverId: number,
         dto: RegisterSupplierPickupDto,
     ): Promise<SupplierPickupResponseDto> {
-        const dispatch = await this.loadOwnedDispatch(manager, dispatchId, driverId);
+        const dispatch = await loadOwnedDispatch(manager, dispatchId, driverId);
         if (dispatch.dispatch_type !== 'supplier_pickup') {
             throw new SupplierPickupConflictException('DISPATCH_NOT_SUPPLIER_PICKUP', 'This endpoint only applies to a supplier pickup.');
         }
@@ -200,9 +189,10 @@ export class SupplierPickupService {
         driverId: number,
         dto: ArrivedAtWarehouseDto,
     ): Promise<ArrivedAtWarehouseResponseDto> {
-        const dispatch = await this.loadOwnedDispatch(manager, dispatchId, driverId);
-        if (dispatch.dispatch_type !== 'supplier_pickup') {
-            throw new SupplierPickupConflictException('DISPATCH_NOT_SUPPLIER_PICKUP', 'This endpoint only applies to a supplier pickup.');
+        const dispatch = await loadOwnedDispatch(manager, dispatchId, driverId);
+        // ST-80.2: a customer return pickup also ends at the warehouse; the code stays the one ST-239.2 clients already know.
+        if (!ARRIVAL_DISPATCH_TYPES.includes(dispatch.dispatch_type)) {
+            throw new SupplierPickupConflictException('DISPATCH_NOT_SUPPLIER_PICKUP', 'This endpoint only applies to a supplier pickup or a customer return pickup.');
         }
 
         const previous = await this.dispatchEvents.findByClientEventId(dto.eventId, { manager });
@@ -257,31 +247,5 @@ export class SupplierPickupService {
         }, { manager });
 
         return { dispatchId, arrivedAtWarehouseAt: updated.arrived_at_warehouse_at };
-    }
-
-    private async loadOwnedDispatch(manager: EntityManager, dispatchId: number, driverId: number): Promise<DispatchRow> {
-        const [identity]: DispatchIdentity[] = await manager.query('SELECT route_batch_id FROM dispatches WHERE dispatch_id = $1', [dispatchId]);
-        if (!identity) throw new DispatchNotFoundException();
-        if (identity.route_batch_id === null) throw new ForbiddenException({ message: 'Dispatch is not assigned to your route.', error: 'INSUFFICIENT_PERMISSIONS' });
-
-        const [route]: RouteIdentity[] = await manager.query(
-            'SELECT route_batch_id, driver_id FROM route_batches WHERE route_batch_id = $1 FOR UPDATE',
-            [identity.route_batch_id],
-        );
-        const [dispatch]: DispatchRow[] = await manager.query(
-            `SELECT d.dispatch_id, d.route_batch_id, t.name AS dispatch_type, ds.name AS status,
-                    d.tracking_code, d.source_order_ref, d.custody_received_at, d.arrived_at_warehouse_at
-               FROM dispatches d
-               JOIN dispatch_types t ON t.dispatch_type_id = d.dispatch_type_id
-               JOIN dispatch_statuses ds ON ds.dispatch_status_id = d.dispatch_status_id
-              WHERE d.dispatch_id = $1
-              FOR UPDATE OF d`,
-            [dispatchId],
-        );
-        if (!dispatch) throw new DispatchNotFoundException();
-        if (!route || route.driver_id !== driverId || route.route_batch_id !== identity.route_batch_id || dispatch.route_batch_id !== route.route_batch_id) {
-            throw new ForbiddenException({ message: 'Dispatch is not assigned to your route.', error: 'INSUFFICIENT_PERMISSIONS' });
-        }
-        return dispatch;
     }
 }
