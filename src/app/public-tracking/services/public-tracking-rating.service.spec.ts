@@ -24,7 +24,7 @@ function trackingRow(status = 'delivered') {
     };
 }
 
-function setup(currentStatus = 'delivered', insertResult: unknown[] = [{ score: 4, created_at: CREATED_AT }]) {
+function setup(currentStatus = 'delivered', insertResult: unknown[] = [{ score: 4, comment: null, created_at: CREATED_AT }]) {
     const events: string[] = [];
     const publicQuery = vi.fn(async () => [trackingRow()]);
     const managerQuery = vi.fn(async (sql: string) => {
@@ -59,10 +59,11 @@ describe('PublicTrackingService.rate (ST-42.1)', () => {
     it('stores only after rechecking delivered under a row lock, then invalidates metrics after commit', async () => {
         const { service, events, managerQuery, invalidate } = setup();
 
-        await expect(service.rate(TOKEN, 4, NOW)).resolves.toEqual({ score: 4, createdAt: CREATED_AT });
+        await expect(service.rate(TOKEN, 4, undefined, NOW)).resolves.toEqual({ score: 4, comment: null, createdAt: CREATED_AT });
 
         expect(String(managerQuery.mock.calls[0][0])).toContain('FOR UPDATE OF d');
-        expect(String(managerQuery.mock.calls[1][0])).toContain('INSERT INTO dispatch_ratings');
+        expect(String(managerQuery.mock.calls[1][0])).toContain('INSERT INTO dispatch_ratings (dispatch_id, score, comment)');
+        expect(managerQuery.mock.calls[1][1]).toEqual([7, 4, null]);
         expect(events).toEqual(['insert', 'commit', 'invalidate:42']);
         expect(invalidate).toHaveBeenCalledWith(42);
     });
@@ -70,7 +71,7 @@ describe('PublicTrackingService.rate (ST-42.1)', () => {
     it('rejects a delivery whose state changed before the transaction lock and never writes or invalidates', async () => {
         const { service, managerQuery, invalidate } = setup('in_transit');
 
-        await expect(service.rate(TOKEN, 4, NOW)).rejects.toBeInstanceOf(RatingNotAllowedException);
+        await expect(service.rate(TOKEN, 4, undefined, NOW)).rejects.toBeInstanceOf(RatingNotAllowedException);
 
         expect(managerQuery).toHaveBeenCalledTimes(1);
         expect(invalidate).not.toHaveBeenCalled();
@@ -82,8 +83,17 @@ describe('PublicTrackingService.rate (ST-42.1)', () => {
         });
         const { service, invalidate } = setup('delivered', duplicate as unknown as unknown[]);
 
-        await expect(service.rate(TOKEN, 4, NOW)).rejects.toBeInstanceOf(RatingAlreadySubmittedException);
+        await expect(service.rate(TOKEN, 4, undefined, NOW)).rejects.toBeInstanceOf(RatingAlreadySubmittedException);
 
         expect(invalidate).not.toHaveBeenCalled();
+    });
+
+    it('stores and returns the optional trimmed comment', async () => {
+        const { service, managerQuery } = setup('delivered', [{ score: 5, comment: 'Buena atención', created_at: CREATED_AT }]);
+
+        await expect(service.rate(TOKEN, 5, 'Buena atención', NOW)).resolves.toEqual({
+            score: 5, comment: 'Buena atención', createdAt: CREATED_AT,
+        });
+        expect(managerQuery.mock.calls[1][1]).toEqual([7, 5, 'Buena atención']);
     });
 });
