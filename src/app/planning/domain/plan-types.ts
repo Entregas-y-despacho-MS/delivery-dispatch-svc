@@ -10,7 +10,10 @@ export interface AgreedWindow {
     end: Date;
 }
 
-/** A delivery waiting for a batch (`pending`, or `rescheduled` with no batch yet) or a stop of an open batch. */
+/**
+ * A delivery waiting for a batch (`pending`, or `rescheduled` with no batch yet), a customer pickup
+ * waiting for one (`pickup_scheduled`), or a stop of an open batch.
+ */
 export interface PlanDispatch {
     dispatchId: number;
     zoneId: number;
@@ -19,15 +22,16 @@ export interface PlanDispatch {
     zoneName: string;
     /** The zone was soft-deleted from the catalog. The order is still planned, with a warning. */
     zoneDeleted: boolean;
+    /** The hub the batch is tied to: a delivery's `origin_warehouse_id`, or a pickup's `destination_warehouse_id` — the vehicle starts and ends there either way. */
     warehouseId: number;
     latitude: number;
     longitude: number;
     /** `urgent` only orders the queue (D-16). */
     priority: string;
-    /** D0 is taken from here. */
+    /** D0 is taken from here. For a pickup with no history to speak of, its `created_at`. */
     orderConfirmedAt: Date;
-    status: 'pending' | 'rescheduled' | 'in_planning' | 'scheduled';
-    /** `rescheduled` only: the agreed local date, never recomputed (D-49). */
+    status: 'pending' | 'rescheduled' | 'pickup_scheduled' | 'in_planning' | 'scheduled';
+    /** The agreed local date, never recomputed (D-49): a `rescheduled` delivery's, or a pickup's own `preferredPickupDate` when it gave one — `null` otherwise, including an undated pickup, which is planned like a `pending` delivery instead. */
     fixedDate: string | null;
     /** `rescheduled` only: the window agreed with the customer, kept as it is. */
     agreedWindow: AgreedWindow | null;

@@ -90,6 +90,34 @@ describe('RouteBatchPromiseApprovalService', () => {
         expect(manager.query.mock.calls.some(([sql]) => String(sql).includes('promise_email_bounced'))).toBe(true);
     });
 
+    it('shows a customer pickup without a promise email, a status change or a tracking token', async () => {
+        const { service, manager, events } = setup({
+            dispatches: [{
+                id: 30, version: 1, status: 'pickup_scheduled', type: 'warehouse_return_pickup', contact_email: 'pickup@example.test',
+                scheduled_window_start: null, scheduled_window_end: null, tracking_token: null, promise_notified_at: null, promise_firmed_at: null,
+            }],
+        });
+
+        const result = await service.approve(7, { version: 1, dispatches: [{ dispatchId: 30, version: 1 }] }, 9);
+
+        expect(result).toMatchObject({ approvedCount: 1, emailCount: 0 });
+        expect(result.emailResults).toEqual([{ dispatchId: 30, result: 'skipped' }]);
+        expect(events.emit).not.toHaveBeenCalled();
+        expect(manager.query.mock.calls.some(([sql]) => String(sql).includes('promise_approved'))).toBe(false);
+        expect(manager.query.mock.calls.some(([sql]) => String(sql).includes('tracking_token ='))).toBe(false);
+    });
+
+    it('accepts a customer pickup still pickup_scheduled, where a delivery would need to be in_planning', async () => {
+        const { service } = setup({
+            dispatches: [{
+                id: 30, version: 1, status: 'pickup_scheduled', type: 'warehouse_return_pickup', contact_email: null,
+                scheduled_window_start: null, scheduled_window_end: null, tracking_token: null, promise_notified_at: null, promise_firmed_at: null,
+            }],
+        });
+
+        await expect(service.approve(7, { version: 1, dispatches: [{ dispatchId: 30, version: 1 }] }, 9)).resolves.toMatchObject({ approvedCount: 1 });
+    });
+
     it('reissues the preparation order of an already-firm dispatch coming back from a reschedule (ST-241.2)', async () => {
         const { service, firming } = setup({
             dispatches: [{

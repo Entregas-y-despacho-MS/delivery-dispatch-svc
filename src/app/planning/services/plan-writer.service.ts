@@ -39,6 +39,7 @@ export interface WrittenInsertion {
 interface LockedDispatch {
     dispatch_id: number;
     status: string;
+    type: string;
     version: number;
     route_batch_id: number | null;
     reserved: boolean;
@@ -98,6 +99,7 @@ export class PlanWriterService {
             sequence: index + 1,
             windowStart: stop.windowStart,
             windowEnd: stop.windowEnd,
+            targetStatus: this.targetStatusFor(locked, stop.dispatchId),
         })));
 
         await this.recordStatusEvents(manager, locked, ids, routeBatchId, context, statusEvents);
@@ -211,6 +213,7 @@ export class PlanWriterService {
         const added = numbered.filter((stop) => stop.isNew);
         await this.assignToBatch(manager, routeBatchId, added.map((stop) => ({
             dispatchId: stop.dispatchId, sequence: stop.sequence, windowStart: stop.windowStart, windowEnd: stop.windowEnd,
+            targetStatus: this.targetStatusFor(locked, stop.dispatchId),
         })));
 
         await manager.query(
@@ -249,11 +252,16 @@ export class PlanWriterService {
         return { routeBatchId, applied: true, stale: false, insertedDispatchIds, skippedDispatchIds };
     }
 
-    /** Puts the orders in the batch with their sequence and window, as `in_planning` (D-09: moving bumps the version). */
+    /**
+     * Puts the orders in the batch with their sequence, window and target status (D-09: moving bumps the version).
+     * A delivery moves to `in_planning`; a customer pickup stays `pickup_scheduled` (see
+     * `decisiones-planificacion-semiautomatica.md`) — its own promise/assignment steps happen later, at the
+     * two approvals, not at this generator step. The caller decides each stop's target status.
+     */
     private async assignToBatch(
         manager: EntityManager,
         routeBatchId: number,
-        stops: { dispatchId: number; sequence: number; windowStart: Date | null; windowEnd: Date | null }[],
+        stops: { dispatchId: number; sequence: number; windowStart: Date | null; windowEnd: Date | null; targetStatus: string }[],
     ): Promise<void> {
         if (stops.length === 0) return;
         await manager.query(
@@ -262,11 +270,12 @@ export class PlanWriterService {
                     sequence_order = v.seq,
                     scheduled_window_start = COALESCE(v.ws, d.scheduled_window_start),
                     scheduled_window_end = COALESCE(v.we, d.scheduled_window_end),
-                    dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $6),
+                    dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = v.target_status),
                     version = d.version + 1,
                     updated_at = NOW()
                FROM (SELECT unnest($2::int[]) AS id, unnest($3::int[]) AS seq,
-                            unnest($4::timestamptz[]) AS ws, unnest($5::timestamptz[]) AS we) AS v
+                            unnest($4::timestamptz[]) AS ws, unnest($5::timestamptz[]) AS we,
+                            unnest($6::text[]) AS target_status) AS v
               WHERE d.dispatch_id = v.id`,
             [
                 routeBatchId,
@@ -274,11 +283,23 @@ export class PlanWriterService {
                 stops.map((stop) => stop.sequence),
                 stops.map((stop) => stop.windowStart),
                 stops.map((stop) => stop.windowEnd),
-                DispatchStatusEnum.IN_PLANNING,
+                stops.map((stop) => stop.targetStatus),
             ],
         );
     }
 
+    /** A delivery moves to `in_planning`; a pickup keeps its current status. */
+    private targetStatusFor(locked: LockedDispatch[], dispatchId: number): string {
+        const type = locked.find((row) => row.dispatch_id === dispatchId)?.type;
+        if (type === 'warehouse_return_pickup') return DispatchStatusEnum.PICKUP_SCHEDULED;
+        return DispatchStatusEnum.IN_PLANNING;
+    }
+
+    /**
+     * One `status_changed` audit row and one emitted event per dispatch that actually changed status —
+     * a customer pickup did not (it stays `pickup_scheduled`), so it is left out here; it is
+     * still on record as added to the batch via the `route_batch_events` entry the caller writes.
+     */
     private async recordStatusEvents(
         manager: EntityManager,
         locked: LockedDispatch[],
@@ -288,6 +309,8 @@ export class PlanWriterService {
         statusEvents: DispatchStatusChangedEvent[],
         sequences?: Map<number, number>,
     ): Promise<void> {
+        const typeByDispatch = new Map(locked.map((row) => [row.dispatch_id, row.type]));
+        ids = ids.filter((dispatchId) => typeByDispatch.get(dispatchId) !== 'warehouse_return_pickup');
         const statusByDispatch = new Map(locked.map((row) => [row.dispatch_id, row.status]));
         const dispatchEvents = manager.getRepository(DispatchEvent);
         await dispatchEvents.save(ids.map((dispatchId, index) => dispatchEvents.create({
@@ -323,11 +346,12 @@ export class PlanWriterService {
     private async lockDispatches(manager: EntityManager, ids: number[]): Promise<LockedDispatch[]> {
         if (ids.length === 0) return [];
         return await manager.query(
-            `SELECT d.dispatch_id, s.name AS status, d.version, d.route_batch_id,
+            `SELECT d.dispatch_id, s.name AS status, t.name AS type, d.version, d.route_batch_id,
                     EXISTS (SELECT 1 FROM dispatch_reservations r
                              WHERE r.dispatch_id = d.dispatch_id AND r.expires_at > NOW()) AS reserved
                FROM dispatches d
                JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
+               JOIN dispatch_types t ON t.dispatch_type_id = d.dispatch_type_id
               WHERE d.dispatch_id = ANY($1)
               ORDER BY d.dispatch_id
                 FOR UPDATE OF d`,
@@ -368,11 +392,11 @@ export class PlanWriterService {
     }
 }
 
-/** Orders still `pending`/`rescheduled`, without batch and not being edited by a coordinator. */
+/** Deliveries still `pending`/`rescheduled`, or pickups still `pickup_scheduled`, without batch and not being edited by a coordinator. */
 function plannableIds(locked: LockedDispatch[]): Set<number> {
     return new Set(
         locked
-            .filter((row) => (row.status === DispatchStatusEnum.PENDING || row.status === DispatchStatusEnum.RESCHEDULED)
+            .filter((row) => (row.status === DispatchStatusEnum.PENDING || row.status === DispatchStatusEnum.RESCHEDULED || row.status === DispatchStatusEnum.PICKUP_SCHEDULED)
                 && row.route_batch_id === null && !row.reserved)
             .map((row) => row.dispatch_id),
     );

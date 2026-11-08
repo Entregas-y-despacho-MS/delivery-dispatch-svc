@@ -37,14 +37,14 @@ const currentStops = [
 function build(options: {
     batch?: { status: string; version: number } | null;
     current?: typeof currentStops;
-    locked?: { dispatch_id: number; status: string; version?: number; route_batch_id: number | null; reserved: boolean }[];
+    locked?: { dispatch_id: number; status: string; type?: string; version?: number; route_batch_id: number | null; reserved: boolean }[];
 }) {
     const saved: Record<string, any[]> = { DispatchEvent: [], RouteBatchEvent: [] };
     const manager: any = {
         query: vi.fn()
             .mockResolvedValueOnce(options.batch === null ? [] : [options.batch ?? { status: 'provisional', version: 3 }])
             .mockResolvedValueOnce(options.current ?? currentStops)
-            .mockResolvedValueOnce(options.locked ?? [{ dispatch_id: 1, status: 'pending', version: 0, route_batch_id: null, reserved: false }])
+            .mockResolvedValueOnce(options.locked ?? [{ dispatch_id: 1, status: 'pending', type: 'delivery', version: 0, route_batch_id: null, reserved: false }])
             .mockResolvedValue([]),
         getRepository: vi.fn((entity: { name: string }) => ({
             create: (data: unknown) => data,
@@ -106,7 +106,7 @@ describe('PlanWriterService.writeInsertion', () => {
         await service.writeInsertion(insertion(), context);
 
         const place = manager.query.mock.calls.find(([sql]: [string]) => sql.includes('route_batch_id = $1,'));
-        expect(place[1]).toEqual([500, [1], [2], [WINDOW_9], [WINDOW_11], 'in_planning']);
+        expect(place[1]).toEqual([500, [1], [2], [WINDOW_9], [WINDOW_11], ['in_planning']]);
     });
 
     it('records order_added with the position and the stops it shifted, and a status event', async () => {

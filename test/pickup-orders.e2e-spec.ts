@@ -26,6 +26,7 @@ describe('Órdenes de recojo (e2e, ST-81.2)', () => {
     const manualRefs: string[] = []; // `MANUAL-<código>` de lo que crea el POST: se borra por referencia exacta
     const userIds: Record<string, number> = {};
     const warehouse = { code: '', inactiveCode: '', id: 0 };
+    const zoneIdRef = { id: 0 };
 
     const run = Date.now().toString(36).toUpperCase();
     const prefix = `PK${run}`;
@@ -162,6 +163,16 @@ describe('Órdenes de recojo (e2e, ST-81.2)', () => {
             [warehouse.code, `${prefix} Almacén`, warehouse.inactiveCode, `${prefix} Almacén inactivo`],
         );
         warehouse.id = rows.find((r: { code: string }) => r.code === warehouse.code).warehouse_id;
+
+        // Covers (-16.5421, -68.0802), the point every fixture in this suite marks on the map — a manual
+        // pickup now needs a matching zone to start in pickup_scheduled instead of address_review.
+        const [{ delivery_zone_id: zoneId }] = await dataSource.query(
+            `INSERT INTO delivery_zones (code, name, estimated_time_min, boundary)
+             VALUES ($1, $2, 30, polygon '((-68.20,-16.60),(-68.00,-16.60),(-68.00,-16.40),(-68.20,-16.40))')
+             RETURNING delivery_zone_id`,
+            [`PK${run}`.slice(0, 20), `${prefix} Zona`],
+        );
+        zoneIdRef.id = zoneId;
     });
 
     afterAll(async () => {
@@ -175,6 +186,7 @@ describe('Órdenes de recojo (e2e, ST-81.2)', () => {
                 await manager.query(`DELETE FROM dispatches WHERE source_order_ref LIKE $1 OR source_order_ref = ANY($2::text[])`, [`${prefix}%`, manualRefs]);
                 if (batchIds.length) await manager.query(`DELETE FROM route_batches WHERE route_batch_id = ANY($1::int[])`, [batchIds]);
                 await manager.query(`DELETE FROM warehouses WHERE name LIKE $1`, [`${prefix}%`]);
+                if (zoneIdRef.id) await manager.query(`DELETE FROM delivery_zones WHERE delivery_zone_id = $1`, [zoneIdRef.id]);
                 await manager.query(`DELETE FROM users WHERE username LIKE $1`, [`e2e_pk_%_${run}`]);
             });
         }

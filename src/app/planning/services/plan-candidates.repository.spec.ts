@@ -7,7 +7,7 @@ const row = (over: Record<string, unknown> = {}) => ({
     zone_code: 'ZON-SUR',
     zone_name: 'Achumani',
     zone_deleted: false,
-    origin_warehouse_id: 1,
+    warehouse_id: 1,
     delivery_latitude: '-16.540000',
     delivery_longitude: '-68.080000',
     priority: 'normal',
@@ -16,6 +16,7 @@ const row = (over: Record<string, unknown> = {}) => ({
     estimated_weight_kg: '12.50',
     scheduled_window_start: null,
     reschedule_window_start: null,
+    preferred_pickup_date: null,
     ...over,
 });
 
@@ -109,6 +110,34 @@ describe('PlanCandidatesRepository.findCandidates', () => {
         });
         // Only rescheduled orders carry an agreed window; a pending one is free.
         expect(candidates[2].agreedWindow).toBeNull();
+    });
+
+    it("includes pickup_scheduled customer pickups alongside deliveries in the query", async () => {
+        const { query, repository } = build([row()]);
+
+        await repository.findCandidates();
+
+        const sql: string = query.mock.calls[0][0];
+        expect(sql).toContain("t.name = 'warehouse_return_pickup' AND s.name = 'pickup_scheduled'");
+        expect(sql).toContain('COALESCE(d.origin_warehouse_id, d.destination_warehouse_id)');
+    });
+
+    it('fixes a pickup to its preferred day when it gave one, and resolves its warehouse from the destination', async () => {
+        const { repository } = build([
+            row({ status: 'pickup_scheduled', warehouse_id: 9, preferred_pickup_date: '2026-11-10' }),
+        ]);
+
+        const [candidate] = await repository.findCandidates();
+
+        expect(candidate).toMatchObject({ status: 'pickup_scheduled', warehouseId: 9, fixedDate: '2026-11-10', agreedWindow: null });
+    });
+
+    it('leaves an undated pickup free, planned like a plain pending delivery', async () => {
+        const { repository } = build([row({ status: 'pickup_scheduled', preferred_pickup_date: null })]);
+
+        const [candidate] = await repository.findCandidates();
+
+        expect(candidate.fixedDate).toBeNull();
     });
 });
 

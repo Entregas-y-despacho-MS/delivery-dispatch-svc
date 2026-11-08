@@ -21,7 +21,8 @@ export interface ManualPickupInput {
 
 export interface ManualPickupCreated {
     dispatchId: number;
-    status: 'pickup_scheduled';
+    /** `address_review` when the marked point does not fall inside any known delivery zone (D-19, like a delivery). */
+    status: 'pickup_scheduled' | 'address_review';
     trackingCode: string;
     sourceOrderRef: string;
 }

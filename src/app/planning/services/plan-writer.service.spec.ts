@@ -20,8 +20,8 @@ const proposal = (overrides: Partial<ProposedBatch> = {}): ProposedBatch => ({
     ...overrides,
 });
 
-const locked = (id: number, status = 'pending', over: Partial<{ route_batch_id: number | null; reserved: boolean }> = {}) => ({
-    dispatch_id: id, status, version: 0, route_batch_id: null, reserved: false, ...over,
+const locked = (id: number, status = 'pending', over: Partial<{ route_batch_id: number | null; reserved: boolean; type: string }> = {}) => ({
+    dispatch_id: id, status, type: 'delivery', version: 0, route_batch_id: null, reserved: false, ...over,
 });
 
 function uniqueViolation(): QueryFailedError {
@@ -85,12 +85,27 @@ describe('PlanWriterService.writeNewBatch', () => {
         expect(update[1][0]).toBe(900);
         expect(update[1][1]).toEqual([101, 102, 103]);
         expect(update[1][2]).toEqual([1, 2, 3]);
-        expect(update[1][5]).toBe('in_planning');
+        expect(update[1][5]).toEqual(['in_planning', 'in_planning', 'in_planning']);
         expect(update[0]).toContain('version = d.version + 1');
         expect(events.emit).toHaveBeenCalledTimes(3);
         expect(events.emit).toHaveBeenCalledWith('dispatch.status_changed', expect.objectContaining({
             dispatchId: 101, previousStatus: 'pending', status: 'in_planning', version: 1,
         }));
+    });
+
+    it('keeps a customer pickup pickup_scheduled instead of moving it to in_planning, with no status event for it', async () => {
+        const { service, manager, saved, events } = build({
+            lockedRows: [locked(101), locked(102, 'pickup_scheduled', { type: 'warehouse_return_pickup' }), locked(103)],
+        });
+
+        await service.writeNewBatch(proposal(), context);
+
+        const update = manager.query.mock.calls.find(([sql]: [string]) => sql.includes('UPDATE dispatches'));
+        expect(update[1][5]).toEqual(['in_planning', 'pickup_scheduled', 'in_planning']);
+        // Only the two deliveries changed status; the pickup is not in this audit trail.
+        expect(saved.DispatchEvent.map((e: { dispatchId: number }) => e.dispatchId)).toEqual([101, 103]);
+        expect(events.emit).toHaveBeenCalledTimes(2);
+        expect(events.emit).not.toHaveBeenCalledWith('dispatch.status_changed', expect.objectContaining({ dispatchId: 102 }));
     });
 
     it('records one status event per order and a created event for the batch, all as system', async () => {

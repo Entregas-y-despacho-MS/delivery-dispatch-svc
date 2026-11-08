@@ -45,6 +45,7 @@ describe('PickupOrderService', () => {
         const query = vi
             .fn()
             .mockResolvedValueOnce([{ warehouse_id: 9 }])
+            .mockResolvedValueOnce([{ id: 3 }]) // zone lookup
             .mockResolvedValueOnce([{ dispatch_id: 44 }])
             .mockResolvedValue([]);
 
@@ -58,6 +59,7 @@ describe('PickupOrderService', () => {
         const query = vi
             .fn()
             .mockResolvedValueOnce([{ warehouse_id: 9 }]) // warehouse lookup
+            .mockResolvedValueOnce([{ id: 3 }]) // zone lookup
             .mockResolvedValueOnce([{ dispatch_id: 42 }]) // dispatch insert
             .mockResolvedValue([]);
 
@@ -66,8 +68,10 @@ describe('PickupOrderService', () => {
         expect(result).toEqual({ dispatchId: 42, status: 'pickup_scheduled' });
         const insertDispatch = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO dispatches'));
         expect(insertDispatch?.[1]).toEqual(
-            expect.arrayContaining(['pickup_scheduled', 'RMA-1', 'Av. Siempre Viva 123', -17.78, -63.18, 'Cliente Uno', '77712345', 'Producto defectuoso', 9, 1]),
+            expect.arrayContaining(['pickup_scheduled', 'RMA-1', 'Av. Siempre Viva 123', -17.78, -63.18, 3, 'Cliente Uno', '77712345', 'Producto defectuoso', 9, 1]),
         );
+        const zoneLookup = query.mock.calls.find(([sql]) => String(sql).includes('FROM delivery_zones'));
+        expect(zoneLookup?.[1]).toEqual([-63.18, -17.78]);
         const insertPackage = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO dispatch_packages'));
         expect(insertPackage?.[1]).toEqual([42, 'PKG-1', 30, 20, 15, 4.5]);
         const insertEvent = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO dispatch_events'));
@@ -102,6 +106,7 @@ describe('PickupOrderService', () => {
             const query = vi
                 .fn()
                 .mockResolvedValueOnce([{ warehouse_id: 9 }]) // warehouse lookup
+                .mockResolvedValueOnce([{ id: 3 }]) // zone lookup
                 .mockResolvedValueOnce([{ code: 'DSP-2026-00042' }]) // next_tracking_code()
                 .mockResolvedValueOnce([{ dispatch_id: 55 }]) // dispatch insert
                 .mockResolvedValue([]);
@@ -110,10 +115,10 @@ describe('PickupOrderService', () => {
 
             expect(result).toEqual({ dispatchId: 55, status: 'pickup_scheduled', trackingCode: 'DSP-2026-00042', sourceOrderRef: 'MANUAL-DSP-2026-00042' });
             const insertDispatch = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO dispatches'));
-            expect(String(insertDispatch?.[0])).toContain("name = 'pickup_scheduled'");
+            expect(String(insertDispatch?.[0])).toContain("dispatch_status_id FROM dispatch_statuses WHERE name = $1");
             expect(String(insertDispatch?.[0])).toContain("AT TIME ZONE 'America/La_Paz'");
             expect(insertDispatch?.[1]).toEqual([
-                'MANUAL-DSP-2026-00042', 'DSP-2026-00042', 'Av. Siempre Viva 123', null, -16.5, -68.1, 'Cliente Uno', '77712345', null,
+                'pickup_scheduled', 'MANUAL-DSP-2026-00042', 'DSP-2026-00042', 'Av. Siempre Viva 123', null, -16.5, -68.1, 3, 'Cliente Uno', '77712345', null,
                 'Producto defectuoso', '1 notebook', 9, null, '2026-11-10',
             ]);
             const insertEvent = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO dispatch_events'));
@@ -124,12 +129,32 @@ describe('PickupOrderService', () => {
         });
 
         it('never uses the RMA as the order reference, so the RMA message that arrives later does not collide', async () => {
-            const query = vi.fn().mockResolvedValueOnce([{ warehouse_id: 9 }]).mockResolvedValueOnce([{ code: 'DSP-2026-00043' }]).mockResolvedValueOnce([{ dispatch_id: 56 }]).mockResolvedValue([]);
+            const query = vi.fn()
+                .mockResolvedValueOnce([{ warehouse_id: 9 }])
+                .mockResolvedValueOnce([{ id: 3 }]) // zone lookup
+                .mockResolvedValueOnce([{ code: 'DSP-2026-00043' }])
+                .mockResolvedValueOnce([{ dispatch_id: 56 }])
+                .mockResolvedValue([]);
 
             await service.createManual(input, 7, { manager: { query } as unknown as EntityManager });
 
             const insertDispatch = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO dispatches'));
             expect(insertDispatch?.[1]).not.toContain('RMA-9');
+        });
+
+        it('starts in address_review when the marked point falls outside every known zone, same as a delivery', async () => {
+            const query = vi.fn()
+                .mockResolvedValueOnce([{ warehouse_id: 9 }]) // warehouse lookup
+                .mockResolvedValueOnce([]) // zone lookup: no match
+                .mockResolvedValueOnce([{ code: 'DSP-2026-00044' }])
+                .mockResolvedValueOnce([{ dispatch_id: 57 }])
+                .mockResolvedValue([]);
+
+            const result = await service.createManual(input, 7, { manager: { query } as unknown as EntityManager });
+
+            expect(result.status).toBe('address_review');
+            const insertDispatch = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO dispatches'));
+            expect(insertDispatch?.[1]).toEqual(expect.arrayContaining(['address_review', null]));
         });
 
         it('requires the transaction manager', async () => {
@@ -150,5 +175,20 @@ describe('PickupOrderService', () => {
         expect(result).toEqual({ dispatchId: 43, status: 'address_review' });
         const insertDispatch = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO dispatches'));
         expect(insertDispatch?.[1]).toEqual(expect.arrayContaining(['address_review']));
+    });
+
+    it('also lands in address_review when the coordinates fall outside every known zone', async () => {
+        const query = vi
+            .fn()
+            .mockResolvedValueOnce([{ warehouse_id: 9 }])
+            .mockResolvedValueOnce([]) // zone lookup: no match, despite having coordinates
+            .mockResolvedValueOnce([{ dispatch_id: 45 }])
+            .mockResolvedValue([]);
+
+        const result = await service.createFromRma(data, { manager: { query } as unknown as EntityManager });
+
+        expect(result).toEqual({ dispatchId: 45, status: 'address_review' });
+        const insertDispatch = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO dispatches'));
+        expect(insertDispatch?.[1]).toEqual(expect.arrayContaining(['address_review', -17.78, -63.18, null]));
     });
 });
