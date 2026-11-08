@@ -57,6 +57,7 @@ import { DispatchIncidentsAppModule } from './app/dispatch-incidents/dispatch-in
 import { SupplierPickupModule } from './app/supplier-pickup/supplier-pickup.module.js';
 import { PickupOrdersModule } from './app/pickup-orders/pickup-orders.module.js';
 import { SlaReportModule } from './app/sla-report/sla-report.module.js';
+import { FleetKpisModule } from './app/fleet-kpis/fleet-kpis.module.js';
 
 @Module({
   imports: [
@@ -85,6 +86,7 @@ import { SlaReportModule } from './app/sla-report/sla-report.module.js';
     DispatchOtpModule,
     DriverMetricsModule,
     SlaReportModule,
+    FleetKpisModule,
     DispatchEvidenceModule,
     AuditLogsModule,
     RouteBatchCorrectionModule,

@@ -62,6 +62,7 @@ reservado). Debe coincidir con `PORTAL_ROUTES` del portal web (`config/portal-ro
 | Recojos | `GET /pickup-orders` (desde ST-81.2) | Sí (solo lectura, también el Coordinador) |
 | Recojos | `POST /pickup-orders`, `PATCH /pickup-orders/:id/cancel` (desde ST-81.2) | **No**, solo Coordinador |
 | Flota | `/vehicles` (CRUD), `GET`, `POST` y `PATCH :id/status` de `/vehicle-maintenances`, `/vehicle-incident-types` (`GET`, `POST`, `PUT`) | Sí |
+| Flota | `GET /fleet/kpis?period=today\|week\|month` (desde ST-61.1) | Sí (también el Coordinador; el Repartidor recibe 403) |
 | Catálogos | `GET /warehouses`, `GET /incident-reasons`, `GET /reschedule-reasons` | Sí (solo lectura) |
 | Catálogos | `POST` y `PUT` de `/incident-reasons` y `/reschedule-reasons` | **No**, solo Coordinador (desde ST-59.1) |
 | Catálogos | `/service-levels`, `/delivery-zones` | **No**, solo Coordinador |
@@ -80,7 +81,6 @@ Cualquier usuario autenticado, incluido el Supervisor, puede usar `POST /auth/lo
 | Tarea | Endpoint | Permiso previsto |
 |---|---|---|
 | `ST-60.1` | `GET /fleet/live-positions` | Supervisor y Coordinador |
-| `ST-61.1` | `GET /fleet/kpis` | Por definir |
 | `ST-62.1` | `PATCH /vehicles/:id/status` | Supervisor y Coordinador |
 | `ST-63.1` | `POST /route-batches/:id/reassign` | Supervisor |
 

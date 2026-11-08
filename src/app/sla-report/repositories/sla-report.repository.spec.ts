@@ -36,7 +36,7 @@ describe('SlaReportRepository.aggregate', () => {
 
     it('does not run anything for a grouping outside the whitelist', async () => {
         const { repository, query } = build();
-        await expect(repository.aggregate('vehicle' as SlaGroupBy, '2026-10-01', '2026-10-31')).rejects.toThrow('Unsupported SLA report grouping: vehicle');
+        await expect(repository.aggregate('nope' as SlaGroupBy, '2026-10-01', '2026-10-31')).rejects.toThrow('Unsupported SLA report grouping: nope');
         expect(query).not.toHaveBeenCalled();
     });
 });
@@ -64,6 +64,13 @@ describe('the SQL of the report', () => {
         expect(SLA_REPORT_SQL[SlaGroupBy.SERVICE_LEVEL]).toContain('d.service_level_id AS group_id');
         expect(SLA_REPORT_SQL[SlaGroupBy.DRIVER]).toContain('rb.driver_id AS group_id');
         expect(SLA_REPORT_SQL[SlaGroupBy.DRIVER]).toContain('g.full_name AS group_name');
+    });
+
+    it('groups by the vehicle of the route, named by its plate (ST-61.1)', () => {
+        expect(SLA_REPORT_SQL[SlaGroupBy.VEHICLE]).toContain('rb.vehicle_id AS group_id');
+        expect(SLA_REPORT_SQL[SlaGroupBy.VEHICLE]).toContain('g.plate AS group_name');
+        expect(SLA_REPORT_SQL[SlaGroupBy.VEHICLE]).toContain('LEFT JOIN vehicles g ON g.vehicle_id = rb.vehicle_id');
+        expect(SLA_REPORT_SQL[SlaGroupBy.VEHICLE]).not.toContain('g.active');
     });
 
     it('keeps the soft-deleted zones, levels and drivers (they are still who made the trip)', () => {

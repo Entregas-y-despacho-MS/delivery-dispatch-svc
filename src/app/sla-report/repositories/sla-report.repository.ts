@@ -57,6 +57,12 @@ const GROUPS: Record<SlaGroupBy, GroupDefinition> = {
         idSql: 'rb.driver_id',
         nameSql: 'g.full_name',
     },
+    // ST-61.1: the vehicle of the route (its plate); a vehicle removed later is still the one that made the trip.
+    [SlaGroupBy.VEHICLE]: {
+        joinSql: 'LEFT JOIN vehicles g ON g.vehicle_id = rb.vehicle_id',
+        idSql: 'rb.vehicle_id',
+        nameSql: 'g.plate',
+    },
 };
 
 /**
@@ -125,6 +131,7 @@ export const SLA_REPORT_SQL: Readonly<Record<SlaGroupBy, string>> = {
     [SlaGroupBy.ZONE]: buildSql(GROUPS[SlaGroupBy.ZONE]),
     [SlaGroupBy.SERVICE_LEVEL]: buildSql(GROUPS[SlaGroupBy.SERVICE_LEVEL]),
     [SlaGroupBy.DRIVER]: buildSql(GROUPS[SlaGroupBy.DRIVER]),
+    [SlaGroupBy.VEHICLE]: buildSql(GROUPS[SlaGroupBy.VEHICLE]),
 };
 
 interface SlaGroupRow {

@@ -42,7 +42,7 @@ export class SlaReportDto {
     @ApiProperty({ type: String, format: 'date', example: '2026-10-31', description: 'Last Bolivia day of the range, inclusive (YYYY-MM-DD)' })
     to!: string;
 
-    @ApiProperty({ enum: SlaGroupBy, example: 'zone', description: 'Grouping of `rows`' })
+    @ApiProperty({ enum: [SlaGroupBy.ZONE, SlaGroupBy.SERVICE_LEVEL, SlaGroupBy.DRIVER], example: 'zone', description: 'Grouping of `rows`' })
     groupBy!: SlaGroupBy;
 
     @ApiProperty({ type: SlaMetricsDto, description: 'The figures of all the rows together, computed from their real sums (not an average of the group averages). With `service_level` the levels that are no longer active are not in the rows, so they are not in the totals either' })

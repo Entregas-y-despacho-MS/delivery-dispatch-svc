@@ -51,6 +51,8 @@ const ALLOWED_LISTS: Route[] = [
     { method: 'get', path: '/reschedule-reasons' },
     // ST-67.1: umbrales de alerta (Supervisor y Coordinador leen).
     { method: 'get', path: '/settings/alert-thresholds' },
+    // ST-61.1: KPIs de flota (Supervisor y Coordinador leen).
+    { method: 'get', path: '/fleet/kpis?period=week' },
     // ST-81.2: la lista de órdenes de recojo es de lectura para el Supervisor.
     { method: 'get', path: '/pickup-orders' },
 ];
