@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { Dispatch } from '../entities/dispatch.entity.js';
 import { DispatchEvent } from '../../dispatch-events/entities/dispatch-event.entity.js';
 import { DispatchIncident } from '../../dispatch-incidents/entities/dispatch-incident.entity.js';
@@ -12,6 +12,7 @@ import type {
     DispatchDetailDto,
     DispatchDetailEventDto,
     DispatchDetailEvidenceDto,
+    DispatchDetailRatingDto,
     DispatchDetailUserDto,
 } from '../dto/dispatch-detail.dto.js';
 
@@ -23,6 +24,12 @@ const num = (value: string | number | null | undefined): number | null => (value
 // PATCH /dispatches/:id/status (ST-30.3) stores the device position as `lat`/`lng` in the event metadata.
 const coordinate = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null);
 const user = (u: { id: number; fullName: string } | null | undefined): DispatchDetailUserDto | null => (u ? { id: u.id, fullName: u.fullName } : null);
+
+interface DispatchRatingRow {
+    score: number;
+    comment: string | null;
+    created_at: Date;
+}
 
 /**
  * RF-A09 — unified 360° view of a dispatch. A fixed number of queries (the dispatch with its
@@ -36,6 +43,7 @@ export class DispatchDetailService {
         @InjectRepository(DispatchIncident) private readonly incidents: Repository<DispatchIncident>,
         @InjectRepository(DispatchReschedule) private readonly reschedules: Repository<DispatchReschedule>,
         @InjectRepository(DeliveryEvidence) private readonly evidences: Repository<DeliveryEvidence>,
+        @InjectDataSource() private readonly dataSource: DataSource,
         private readonly storage: StoragePort,
     ) {}
 
@@ -50,15 +58,22 @@ export class DispatchDetailService {
         });
         if (!dispatch) throw new DispatchNotFoundException();
 
-        const [events, incidents, reschedules, evidences] = await Promise.all([
+        const [events, incidents, reschedules, evidences, ratingRows] = await Promise.all([
             this.events.find({ where: { dispatchId: id }, relations: { actorUser: true }, order: { createdAt: 'ASC', id: 'ASC' } }),
             this.incidents.find({ where: { dispatchId: id }, relations: { incidentReason: true }, order: { createdAt: 'ASC', id: 'ASC' } }),
             this.reschedules.find({ where: { dispatchId: id }, relations: { rescheduleReason: true, rescheduledByUser: true }, order: { createdAt: 'ASC', id: 'ASC' } }),
             this.evidences.find({ where: { dispatchId: id }, order: { createdAt: 'ASC', id: 'ASC' } }),
+            this.dataSource.query('SELECT score, comment, created_at FROM dispatch_ratings WHERE dispatch_id = $1', [id]),
         ]);
 
         const evidenceDtos = await Promise.all(evidences.map((e) => this.toEvidence(e)));
         const batch = dispatch.routeBatch;
+        const ratingRow = (ratingRows as DispatchRatingRow[])[0];
+        const rating: DispatchDetailRatingDto | null = ratingRow ? {
+            score: Number(ratingRow.score),
+            comment: ratingRow.comment,
+            createdAt: new Date(ratingRow.created_at).toISOString(),
+        } : null;
 
         return {
             id: dispatch.id,
@@ -93,6 +108,7 @@ export class DispatchDetailService {
                 vehicle: batch.vehicle ? { id: batch.vehicle.id, plate: batch.vehicle.plate, type: batch.vehicle.type, model: batch.vehicle.model } : null,
             } : null,
             receiver: evidenceDtos.find((e) => e.type === 'signature' && e.receiverName) ?? null,
+            rating,
             timeline: events.map((e) => this.toEvent(e)),
             incidents: incidents.map((i) => ({
                 id: i.id, reasonCode: i.incidentReason.code, reasonName: i.incidentReason.name,

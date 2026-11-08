@@ -21,6 +21,7 @@ describe('Public tracking rating (e2e, ST-42.1)', () => {
     let prefix: string;
     let driverId: number;
     let delivered: { token: string; dispatchId: number };
+    let deliveredWithComment: { token: string; dispatchId: number };
     let inTransit: { token: string; dispatchId: number };
     const run = Date.now().toString(36).toUpperCase();
     const username = `e2e_rating_${run}`;
@@ -64,7 +65,12 @@ describe('Public tracking rating (e2e, ST-42.1)', () => {
         inTransit = await fixtures.create({
             status: 'in_transit', routeBatchId: batchId, sequence: 2, zoneId, warehouseId: warehouse.id,
         });
-        await db.query(`UPDATE dispatches SET closed_at = NOW() WHERE dispatch_id = $1`, [delivered.dispatchId]);
+        deliveredWithComment = await fixtures.create({
+            status: 'delivered', routeBatchId: batchId, sequence: 3, zoneId, warehouseId: warehouse.id,
+        });
+        await db.query(`UPDATE dispatches SET closed_at = NOW() WHERE dispatch_id = ANY($1::int[])`, [
+            [delivered.dispatchId, deliveredWithComment.dispatchId],
+        ]);
     });
 
     afterAll(async () => {
@@ -102,13 +108,45 @@ describe('Public tracking rating (e2e, ST-42.1)', () => {
         const res = await rate(delivered.token, { score: 4 });
 
         expect(res.status).toBe(200);
-        expect(res.body).toMatchObject({ score: 4 });
+        expect(res.body).toMatchObject({ score: 4, comment: null });
         expect(Number.isNaN(Date.parse(res.body.createdAt))).toBe(false);
         const viewRes = await view(delivered.token);
-        expect(viewRes.body).toMatchObject({ rating: { score: 4 }, canRate: false });
+        expect(viewRes.body).toMatchObject({ rating: { score: 4, comment: null }, canRate: false });
 
         const after = await metrics.get(driverId, DriverMetricsPeriod.TODAY);
         expect(after).toMatchObject({ rating: 4, ratingsCount: 1 });
+    });
+
+    it('stores a trimmed optional comment and returns it in POST and public GET', async () => {
+        const res = await rate(deliveredWithComment.token, { score: 5, comment: '  Excelente atención.  ' });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({ score: 5, comment: 'Excelente atención.' });
+        const viewRes = await view(deliveredWithComment.token);
+        expect(viewRes.status).toBe(200);
+        expect(viewRes.body).toMatchObject({ rating: { score: 5, comment: 'Excelente atención.' }, canRate: false });
+        const [{ comment }] = await db.query(`SELECT comment FROM dispatch_ratings WHERE dispatch_id = $1`, [deliveredWithComment.dispatchId]);
+        expect(comment).toBe('Excelente atención.');
+    });
+
+    it('rejects a comment longer than 500 characters after trimming', async () => {
+        const res = await rate(deliveredWithComment.token, { score: 4, comment: ` ${'x'.repeat(501)} ` });
+
+        expect(res.status).toBe(400);
+        expect(res.body.message).toContain('comment must not be longer than 500 characters.');
+        const [{ count }] = await db.query(`SELECT COUNT(*)::int AS count FROM dispatch_ratings WHERE dispatch_id = $1`, [deliveredWithComment.dispatchId]);
+        expect(Number(count)).toBe(1);
+    });
+
+    it('normalizes a whitespace-only comment to null', async () => {
+        const blank = await fixtures.create({ status: 'delivered', shiftDate: null });
+        // The public score does not require the delivery to have an assigned driver.
+        await db.query(`UPDATE dispatches SET closed_at = NOW() WHERE dispatch_id = $1`, [blank.dispatchId]);
+        const res = await rate(blank.token, { score: 3, comment: '   ' });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({ score: 3, comment: null });
+        expect((await view(blank.token)).body.rating).toMatchObject({ comment: null });
     });
 
     it('uses the unique database index to reject a second rating with 409', async () => {

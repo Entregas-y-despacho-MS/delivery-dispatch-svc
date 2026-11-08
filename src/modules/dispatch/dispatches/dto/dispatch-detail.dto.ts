@@ -220,6 +220,17 @@ export class DispatchDetailEvidenceDto {
     receiverDocument!: string | null;
 }
 
+export class DispatchDetailRatingDto {
+    @ApiProperty({ type: 'integer', minimum: 1, maximum: 5, description: 'Customer rating for the delivery.' })
+    score!: number;
+
+    @ApiProperty({ type: String, nullable: true, maxLength: 500, description: 'Optional trimmed plain-text customer comment; null when omitted or blank.' })
+    comment!: string | null;
+
+    @ApiProperty({ type: String, format: 'date-time', description: 'When the customer submitted the rating.' })
+    createdAt!: string;
+}
+
 export class DispatchDetailDto {
     @ApiProperty({ type: 'integer', example: 120, description: 'Id of the dispatch' })
     id!: number;
@@ -268,6 +279,9 @@ export class DispatchDetailDto {
 
     @NullableRef(DispatchDetailEvidenceDto, 'Signature evidence that carries the receiver, i.e. who got the order; `null` if nobody has signed')
     receiver!: DispatchDetailEvidenceDto | null;
+
+    @NullableRef(DispatchDetailRatingDto, 'Customer opinion with stars, optional comment and date; `null` when the customer has not rated the delivery')
+    rating!: DispatchDetailRatingDto | null;
 
     @ApiProperty({ type: [DispatchDetailEventDto], description: 'Timeline, oldest first' })
     timeline!: DispatchDetailEventDto[];

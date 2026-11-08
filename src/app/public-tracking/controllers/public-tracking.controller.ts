@@ -74,11 +74,11 @@ export class PublicTrackingController {
     @Header('Cache-Control', 'no-store')
     @ApiOperation({
         summary: 'Rate a completed delivery from its tracking link',
-        description: 'Public, no login. Accepts one integer score from 1 to 5 only after the delivery is `delivered`. The database unique constraint is the final guard against duplicate submissions; a second rating answers 409 `RATING_ALREADY_SUBMITTED`. Other delivery states answer 409 `RATING_NOT_ALLOWED`. The same token validation and per-IP request limit as the public tracking page apply.',
+        description: 'Public, no login. Accepts one integer score from 1 to 5 and an optional plain-text `comment` of up to 500 characters (trimmed before storage), only after the delivery is `delivered`. A missing or blank comment is stored as null. The response returns the saved score, comment and creation time. The database unique constraint is the final guard against duplicate submissions; a second rating answers 409 `RATING_ALREADY_SUBMITTED`. Other delivery states answer 409 `RATING_NOT_ALLOWED`. The same token validation and per-IP request limit as the public tracking page apply.',
     })
     @ApiParam(TOKEN_PARAM)
     @ApiOkResponse({ type: RatingDto })
-    @ApiBadRequests({ validation: true, example: ['score must not be greater than 5.'] })
+    @ApiBadRequests({ validation: true, example: ['score must not be greater than 5.', 'comment must not be longer than 500 characters.'] })
     @ApiNotFound({ code: 'TRACKING_LINK_NOT_FOUND', message: 'Tracking link not found.' })
     @ApiConflict(
         { code: 'RATING_NOT_ALLOWED', message: 'This delivery cannot be rated yet.' },
@@ -86,7 +86,7 @@ export class PublicTrackingController {
     )
     @ApiResponse(TOO_MANY_REQUESTS)
     async rate(@Param('token') token: string, @Body() dto: RateDeliveryDto): Promise<RatingDto> {
-        return await this.service.rate(token, dto.score);
+        return await this.service.rate(token, dto.score, dto.comment);
     }
 
     @Post(':token/verification-code')

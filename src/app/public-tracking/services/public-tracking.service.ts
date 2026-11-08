@@ -44,6 +44,7 @@ interface LiveRow {
 
 interface RatingRow {
     score: number;
+    comment: string | null;
     created_at: Date;
 }
 
@@ -129,7 +130,7 @@ export class PublicTrackingService {
     }
 
     /** Stores one rating for a delivered dispatch and refreshes the assigned driver's cached metrics. */
-    async rate(token: string, score: number, now: Date = new Date()): Promise<RatingDto> {
+    async rate(token: string, score: number, comment?: string | null, now: Date = new Date()): Promise<RatingDto> {
         const context = await this.resolve(token, now);
         let rating: RatingDto | null = null;
         let driverId: number | null = null;
@@ -152,12 +153,12 @@ export class PublicTrackingService {
 
             try {
                 const inserted: RatingRow[] = await manager.query(
-                    `INSERT INTO dispatch_ratings (dispatch_id, score)
-                     VALUES ($1, $2)
-                     RETURNING score, created_at`,
-                    [current.dispatch_id, score],
+                    `INSERT INTO dispatch_ratings (dispatch_id, score, comment)
+                     VALUES ($1, $2, $3)
+                     RETURNING score, comment, created_at`,
+                    [current.dispatch_id, score, comment ?? null],
                 );
-                rating = { score: inserted[0].score, createdAt: inserted[0].created_at };
+                rating = { score: inserted[0].score, comment: inserted[0].comment, createdAt: inserted[0].created_at };
                 driverId = current.driver_id === null ? null : Number(current.driver_id);
             } catch (error) {
                 if (isDispatchRatingUniqueViolation(error)) throw new RatingAlreadySubmittedException();
@@ -173,11 +174,11 @@ export class PublicTrackingService {
 
     private async findRating(dispatchId: number): Promise<RatingDto | null> {
         const rows: RatingRow[] = await this.dataSource.query(
-            `SELECT score, created_at FROM dispatch_ratings WHERE dispatch_id = $1`,
+            `SELECT score, comment, created_at FROM dispatch_ratings WHERE dispatch_id = $1`,
             [dispatchId],
         );
         const row = rows[0];
-        return row ? { score: Number(row.score), createdAt: row.created_at } : null;
+        return row ? { score: Number(row.score), comment: row.comment, createdAt: row.created_at } : null;
     }
 
     /**

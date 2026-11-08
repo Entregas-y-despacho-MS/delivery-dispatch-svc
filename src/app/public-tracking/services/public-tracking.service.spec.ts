@@ -249,11 +249,11 @@ describe('PublicTrackingService', () => {
 
         it('returns the submitted rating and prevents rating a second time', async () => {
             const createdAt = new Date('2026-10-17T15:00:00Z');
-            const { service } = setup([row({ status: 'delivered' })], {}, [], [{ score: 4, created_at: createdAt }]);
+            const { service } = setup([row({ status: 'delivered' })], {}, [], [{ score: 4, comment: 'Llegó a tiempo', created_at: createdAt }]);
 
             const view = await service.view(TOKEN, NOW);
 
-            expect(view).toMatchObject({ rating: { score: 4, createdAt }, canRate: false });
+            expect(view).toMatchObject({ rating: { score: 4, comment: 'Llegó a tiempo', createdAt }, canRate: false });
         });
 
         it('does not query ratings or allow rating before delivery', async () => {
