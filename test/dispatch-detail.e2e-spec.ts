@@ -136,6 +136,11 @@ describe('GET /dispatches/:id/detail (e2e, ST-56.2)', () => {
             );
             batchIds.push(route_batch_id);
             dispatchId = await insertDispatch('delivered', route_batch_id);
+            await db.query(
+                `INSERT INTO dispatch_ratings (dispatch_id, score, comment, created_at)
+                 VALUES ($1, 5, 'Todo llegó en perfecto estado', '2040-01-01T10:01:00Z')`,
+                [dispatchId],
+            );
 
             await db.query(
                 `INSERT INTO dispatch_packages (dispatch_id, external_package_id, length_cm, width_cm, height_cm, gross_weight_kg)
@@ -189,6 +194,8 @@ describe('GET /dispatches/:id/detail (e2e, ST-56.2)', () => {
             });
             expect(res.body.packages).toHaveLength(2);
             expect(res.body.packages[0]).toMatchObject({ lengthCm: 40, grossWeightKg: 5.5 });
+            expect(res.body.rating).toEqual({ score: 5, comment: 'Todo llegó en perfecto estado', createdAt: '2040-01-01T10:01:00.000Z' });
+            expect((await detail(dispatchId, 'supervisor')).body.rating).toEqual(res.body.rating);
         });
 
         it('el supervisor también puede verla', async () => {
@@ -251,7 +258,7 @@ describe('GET /dispatches/:id/detail (e2e, ST-56.2)', () => {
             const id = await insertDispatch('pending');
             const res = await detail(id);
             expect(res.status).toBe(200);
-            expect(res.body).toMatchObject({ id, evidences: [], incidents: [], reschedules: [], timeline: [], packages: [], receiver: null, route: null });
+            expect(res.body).toMatchObject({ id, evidences: [], incidents: [], reschedules: [], timeline: [], packages: [], receiver: null, route: null, rating: null });
         });
     });
 
