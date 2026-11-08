@@ -98,7 +98,7 @@ export class SupplierPickupController {
     @ApiIdParam('Dispatch')
     @ApiOperation({
         summary: 'Register the driver’s arrival at the destination warehouse',
-        description: 'The assigned driver marks arrival at the destination warehouse for a picked_up_in_transit supplier pickup. Does not change the dispatch status; Inventarios still receives dispatch.transfer.status_changed. eventId makes retries idempotent.',
+        description: 'The assigned driver marks arrival at the destination warehouse for a picked_up_in_transit supplier pickup or customer return pickup (warehouse_return_pickup). Does not change the dispatch status; Inventarios still receives dispatch.transfer.status_changed. eventId makes retries idempotent.',
     })
     @ApiOkResponse({ type: ArrivedAtWarehouseResponseDto, description: 'The arrival was registered (or this eventId was already processed; the original result is returned).', headers: { [SETTINGS_VERSION_HEADER]: { description: 'Current operational settings version. Reload settings when this value changes.', schema: { type: 'integer' } } } })
     @ApiBadRequests({ validation: true, id: true, example: ['eventId must be a UUID v7'] })
@@ -106,7 +106,7 @@ export class SupplierPickupController {
     @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'Dispatch is not assigned to your route.' })
     @ApiNotFound({ code: 'DISPATCH_NOT_FOUND', message: 'Dispatch not found.' })
     @ApiConflict(
-        { code: 'DISPATCH_NOT_SUPPLIER_PICKUP', message: 'This endpoint only applies to a supplier pickup.' },
+        { code: 'DISPATCH_NOT_SUPPLIER_PICKUP', message: 'This endpoint only applies to a supplier pickup or a customer return pickup.' },
         { code: 'DISPATCH_NOT_PICKED_UP', message: 'The warehouse arrival can only be registered after the pickup was collected.' },
         { code: 'WAREHOUSE_ARRIVAL_ALREADY_REGISTERED', message: 'The arrival at the warehouse was already registered for this dispatch.' },
         { code: 'EVENT_ID_ALREADY_USED', message: 'This eventId was already used for another event.' },

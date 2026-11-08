@@ -22,6 +22,7 @@ const DISPATCH_TRANSFER_INCIDENT_REPORTED_TOPIC = 'dispatch.transfer.incident_re
 // idempotent retry of the other.
 const SUPPLIER_PICKUP_COLLECTION_KIND = 'supplier_pickup_collection';
 const WAREHOUSE_ARRIVAL_KIND = 'warehouse_arrival';
+const ARRIVAL_DISPATCH_TYPES = ['supplier_pickup', 'warehouse_return_pickup'];
 
 interface ExpectedItemRow { item_code: string; expected_quantity: string; }
 interface ReasonRow { incident_reason_id: number; code: string; }
@@ -189,8 +190,9 @@ export class SupplierPickupService {
         dto: ArrivedAtWarehouseDto,
     ): Promise<ArrivedAtWarehouseResponseDto> {
         const dispatch = await loadOwnedDispatch(manager, dispatchId, driverId);
-        if (dispatch.dispatch_type !== 'supplier_pickup') {
-            throw new SupplierPickupConflictException('DISPATCH_NOT_SUPPLIER_PICKUP', 'This endpoint only applies to a supplier pickup.');
+        // ST-80.2: a customer return pickup also ends at the warehouse; the code stays the one ST-239.2 clients already know.
+        if (!ARRIVAL_DISPATCH_TYPES.includes(dispatch.dispatch_type)) {
+            throw new SupplierPickupConflictException('DISPATCH_NOT_SUPPLIER_PICKUP', 'This endpoint only applies to a supplier pickup or a customer return pickup.');
         }
 
         const previous = await this.dispatchEvents.findByClientEventId(dto.eventId, { manager });
