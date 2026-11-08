@@ -8,6 +8,10 @@ describe('slaReportCacheKey', () => {
         expect(slaReportCacheKey(SlaGroupBy.SERVICE_LEVEL, '2026-10-01', '2026-10-31')).toBe('reports:sla:service_level:2026-10-01:2026-10-31');
     });
 
+    it('has its own entry for the vehicle grouping of the fleet KPIs (ST-61.1)', () => {
+        expect(slaReportCacheKey(SlaGroupBy.VEHICLE, '2026-10-19', '2026-10-21')).toBe('reports:sla:vehicle:2026-10-19:2026-10-21');
+    });
+
     it('differs when any of the three parameters differs', () => {
         const keys = new Set([
             slaReportCacheKey(SlaGroupBy.ZONE, '2026-10-01', '2026-10-31'),
