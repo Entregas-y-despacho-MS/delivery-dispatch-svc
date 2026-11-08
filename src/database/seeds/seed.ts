@@ -5,6 +5,7 @@ import { AppDataSource } from '../config/data-source.js';
 import { User } from '../../modules/auth/users/entities/user.entity.js';
 import { Role } from '../../modules/auth/roles/entities/role.entity.js';
 import { hashPassword } from '../../shared/utils/crypto.util.js';
+import { EnvironmentEnum } from '../../shared/enums/environment.enum.js';
 
 const GREEN  = '\x1b[32m';
 const YELLOW = '\x1b[33m';
@@ -72,29 +73,67 @@ async function seedRootUser(): Promise<void> {
     console.log(`  ${YELLOW}⚠  Change the root password in production.${RESET}`);
 }
 
+interface DemoUserSpec {
+    label: string;
+    role: string;
+    envPrefix: string;
+    defaultUsername: string;
+    defaultFullName: string;
+    defaultEmail: string;
+    defaultPassword: string;
+}
+
+const DEMO_USERS: readonly DemoUserSpec[] = [
+    {
+        label: 'Supervisor', role: 'supervisor', envPrefix: 'SEED_SUPERVISOR',
+        defaultUsername: 'supervisor', defaultFullName: 'Supervisor de Flota',
+        defaultEmail: 'supervisor@app.com', defaultPassword: 'Supervisor1234!',
+    },
+    {
+        label: 'Coordinator', role: 'coordinator', envPrefix: 'SEED_COORDINATOR',
+        defaultUsername: 'coordinator', defaultFullName: 'Coordinador de Despacho',
+        defaultEmail: 'coordinator@app.com', defaultPassword: 'Coordinator1234!',
+    },
+    {
+        label: 'Driver', role: 'driver', envPrefix: 'SEED_DRIVER',
+        defaultUsername: 'driver', defaultFullName: 'Repartidor Demo',
+        defaultEmail: 'driver@app.com', defaultPassword: 'Driver1234!',
+    },
+] as const;
+
 /**
- * Inserts a development Supervisor user if it does not already exist (ST-59.1, RF-A12), so the
- * Supervisor's portal views and permissions can be tried without creating the account by hand.
- * Idempotent — safe to run multiple times. The default password satisfies the password policy
- * (RF-A25) and is meant for development only: set SEED_SUPERVISOR_PASSWORD or change it elsewhere.
+ * True unless NODE_ENV=production without SEED_DEMO_USERS=true — the demo accounts below (ST-59.1,
+ * RF-A12, and their coordinator/driver siblings) use a password hardcoded in this file, so a real
+ * deployment must opt in explicitly instead of getting them by default. The Dockerfile's CMD runs
+ * this seed on every boot, production included, so this check is what keeps them out of it.
  */
-async function seedSupervisorUser(): Promise<void> {
-    const username = process.env.SEED_SUPERVISOR_USERNAME  ?? 'supervisor';
-    const fullName  = process.env.SEED_SUPERVISOR_FULL_NAME ?? 'Supervisor de Flota';
-    const email     = process.env.SEED_SUPERVISOR_EMAIL     ?? 'supervisor@app.com';
-    const password  = process.env.SEED_SUPERVISOR_PASSWORD  ?? 'Supervisor1234!';
+function demoUsersEnabled(): boolean {
+    return process.env.NODE_ENV !== EnvironmentEnum.PRODUCTION || process.env.SEED_DEMO_USERS === 'true';
+}
+
+/**
+ * Inserts one demo user (Supervisor/Coordinator/Driver) if it does not already exist, so each
+ * role's views can be tried right after a fresh deploy without creating the account by hand.
+ * Idempotent — safe to run multiple times. Skipped entirely in production unless SEED_DEMO_USERS=true
+ * (see demoUsersEnabled()) — the password below is a known default, never meant to reach a real environment.
+ */
+async function seedDemoUser(spec: DemoUserSpec): Promise<void> {
+    const username = process.env[`${spec.envPrefix}_USERNAME`]  ?? spec.defaultUsername;
+    const fullName  = process.env[`${spec.envPrefix}_FULL_NAME`] ?? spec.defaultFullName;
+    const email     = process.env[`${spec.envPrefix}_EMAIL`]     ?? spec.defaultEmail;
+    const password  = process.env[`${spec.envPrefix}_PASSWORD`]  ?? spec.defaultPassword;
 
     const userRepo = AppDataSource.getRepository(User);
     const roleRepo = AppDataSource.getRepository(Role);
 
     const existing = await userRepo.findOne({ where: { username } });
     if (existing) {
-        console.log(`  ${YELLOW}⚠  Supervisor user already exists${RESET} (${username}) — skipping.`);
+        console.log(`  ${YELLOW}⚠  ${spec.label} user already exists${RESET} (${username}) — skipping.`);
         return;
     }
 
-    const supervisorRole = await roleRepo.findOneBy({ name: 'supervisor' });
-    if (!supervisorRole) throw new Error('Supervisor role not found — seedRoles() must run before seedSupervisorUser().');
+    const role = await roleRepo.findOneBy({ name: spec.role });
+    if (!role) throw new Error(`${spec.role} role not found — seedRoles() must run before seedDemoUser(${spec.role}).`);
 
     const user = userRepo.create({
         username,
@@ -102,12 +141,12 @@ async function seedSupervisorUser(): Promise<void> {
         email,
         passwordHash:      await hashPassword(password),
         passwordChangedAt: new Date(),
-        roleId:            supervisorRole.id,
+        roleId:            role.id,
         requiresPwdChange: false,
     });
     await userRepo.save(user);
 
-    console.log(`  ${GREEN}✔  Supervisor user created${RESET} → ${BOLD}${username}${RESET}`);
+    console.log(`  ${GREEN}✔  ${spec.label} user created${RESET} → ${BOLD}${username}${RESET}`);
     console.log(`  ${YELLOW}⚠  Development account — do not seed it in production with the default password.${RESET}`);
 }
 
@@ -120,7 +159,11 @@ async function seed(): Promise<void> {
     try {
         await seedRoles();
         await seedRootUser();
-        await seedSupervisorUser();
+        if (demoUsersEnabled()) {
+            for (const spec of DEMO_USERS) await seedDemoUser(spec);
+        } else {
+            console.log(`  ${YELLOW}⚠  Skipping demo users${RESET} (NODE_ENV=production without SEED_DEMO_USERS=true).`);
+        }
         // Add more seeders here in dependency order.
 
         console.log(`\n${GREEN}${BOLD}✔  Seed completed.${RESET}\n`);

@@ -17,7 +17,9 @@ export class RedisCacheAdapter extends CacheService implements OnModuleInit, OnM
                 port: config.port,
                 connectTimeout: 1500,
                 reconnectStrategy: (retries) => Math.min(250 * 2 ** Math.min(retries, 4), 4000),
+                ...(config.tls && { tls: true }),
             },
+            ...(config.password && { password: config.password }),
         });
         this.client.on('error', () => this.logger.warn('Redis is unavailable; settings will use PostgreSQL.'));
     }

@@ -22,9 +22,12 @@ export const envValidation = Joi.object({
     DB_NAME:     Joi.string().required(),
     DB_LOGS:     Joi.boolean().default(false),
 
-    CACHE_ADAPTER: Joi.string().valid('redis', 'memory').default('redis'),
-    REDIS_HOST:    Joi.string().default('localhost'),
-    REDIS_PORT:    Joi.number().port().default(6379),
+    CACHE_ADAPTER:   Joi.string().valid('redis', 'memory').default('redis'),
+    REDIS_HOST:      Joi.string().default('localhost'),
+    REDIS_PORT:      Joi.number().port().default(6379),
+    // Most managed Redis offerings (ElastiCache with auth, Memorystore, Upstash, Redis Cloud...) require both.
+    REDIS_PASSWORD:  Joi.string().allow('').default(''),
+    REDIS_TLS:       Joi.boolean().default(false),
 
     // -- Plugin: messaging (Google Cloud Pub/Sub) -------------------------------
     // Production must select Pub/Sub explicitly; local development defaults to the emulator configuration in .env.example.
