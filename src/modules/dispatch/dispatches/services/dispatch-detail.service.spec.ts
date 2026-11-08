@@ -4,7 +4,7 @@ import { DispatchNotFoundException } from '../exceptions/index.js';
 
 const at = (iso: string) => new Date(iso);
 
-function build(overrides: { dispatch?: unknown; events?: unknown[]; evidences?: unknown[] } = {}) {
+function build(overrides: { dispatch?: unknown; events?: unknown[]; evidences?: unknown[]; ratings?: unknown[] } = {}) {
     const dispatch = overrides.dispatch === undefined ? {
         id: 5, trackingCode: 'T1', sourceOrderRef: 'SO-1', priority: 'normal', evidencePolicy: 'hand_delivery_standard',
         paymentStatusLabel: null, scheduledWindowStart: null, scheduledWindowEnd: null, createdAt: at('2026-10-18T10:00:00Z'),
@@ -20,15 +20,34 @@ function build(overrides: { dispatch?: unknown; events?: unknown[]; evidences?: 
     const reschedules = repo([]);
     const evidences = repo(overrides.evidences ?? []);
     const storage = { getAccessUrl: vi.fn().mockResolvedValue({ url: 'http://signed', expiresAt: at('2026-10-18T10:05:00Z') }) };
-    const service = new DispatchDetailService(dispatches as any, events as any, incidents as any, reschedules as any, evidences as any, storage as any);
-    return { service, storage, dispatches, events, incidents, reschedules, evidences };
+    const dataSource = { query: vi.fn().mockResolvedValue(overrides.ratings ?? []) };
+    const service = new DispatchDetailService(dispatches as any, events as any, incidents as any, reschedules as any, evidences as any, dataSource as any, storage as any);
+    return { service, storage, dispatches, events, incidents, reschedules, evidences, dataSource };
 }
 
 describe('DispatchDetailService', () => {
     it('throws DISPATCH_NOT_FOUND when the dispatch does not exist and reads nothing else', async () => {
-        const { service, events } = build({ dispatch: null });
+        const { service, events, dataSource } = build({ dispatch: null });
         await expect(service.findDetail(9)).rejects.toBeInstanceOf(DispatchNotFoundException);
         expect(events.find).not.toHaveBeenCalled();
+        expect(dataSource.query).not.toHaveBeenCalled();
+    });
+
+    it('includes the customer rating and comment with a fixed query', async () => {
+        const createdAt = at('2026-10-18T10:01:00Z');
+        const { service, dataSource } = build({ ratings: [{ score: '5', comment: 'Todo bien', created_at: createdAt }] });
+
+        const detail = await service.findDetail(5);
+
+        expect(detail.rating).toEqual({ score: 5, comment: 'Todo bien', createdAt: createdAt.toISOString() });
+        expect(dataSource.query).toHaveBeenCalledWith(
+            'SELECT score, comment, created_at FROM dispatch_ratings WHERE dispatch_id = $1', [5],
+        );
+    });
+
+    it('returns null rating when the customer has not rated the dispatch', async () => {
+        const { service } = build();
+        await expect(service.findDetail(5)).resolves.toMatchObject({ rating: null });
     });
 
     it('exposes only whitelisted metadata keys of an event', async () => {
