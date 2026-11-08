@@ -1,4 +1,4 @@
-import { ApiExtraModels, ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiExtraModels, ApiProperty } from '@nestjs/swagger';
 import { nullableRef } from '../../../modules/dispatch/route-batches/dto/nullable-ref.js';
 import type { SelfServiceClosedReason } from '../domain/self-service.js';
 
@@ -71,8 +71,8 @@ export class RatingDto {
     @ApiProperty({ type: 'integer', minimum: 1, maximum: 5, description: 'Customer rating for the delivery.' })
     score!: number;
 
-    @ApiPropertyOptional({ type: String, nullable: true, maxLength: 500, description: 'Optional trimmed plain-text comment from the customer; null when omitted or blank.' })
-    comment?: string | null;
+    @ApiProperty({ type: String, nullable: true, maxLength: 500, description: 'Optional trimmed plain-text comment from the customer; null when omitted or blank.' })
+    comment!: string | null;
 
     @ApiProperty({ type: String, format: 'date-time', description: 'When the customer submitted the rating.' })
     createdAt!: Date;

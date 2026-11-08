@@ -174,11 +174,11 @@ export class PublicTrackingService {
 
     private async findRating(dispatchId: number): Promise<RatingDto | null> {
         const rows: RatingRow[] = await this.dataSource.query(
-            `SELECT score, created_at FROM dispatch_ratings WHERE dispatch_id = $1`,
+            `SELECT score, comment, created_at FROM dispatch_ratings WHERE dispatch_id = $1`,
             [dispatchId],
         );
         const row = rows[0];
-        return row ? { score: Number(row.score), createdAt: row.created_at } : null;
+        return row ? { score: Number(row.score), comment: row.comment, createdAt: row.created_at } : null;
     }
 
     /**
