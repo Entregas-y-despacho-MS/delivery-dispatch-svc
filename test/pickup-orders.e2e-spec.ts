@@ -377,6 +377,38 @@ describe('Órdenes de recojo (e2e, ST-81.2)', () => {
             expect(await batchRow(batchId)).toMatchObject({ status: 'cancelled', version: 2 });
         });
 
+        it('pickup_scheduled en un lote provisional con otras paradas (ST-81.3): sale del lote igual que in_planning', async () => {
+            // El generador deja un recojo en pickup_scheduled dentro del lote, no en in_planning (D-56):
+            // anularlo debe sacarlo del lote igual que a una entrega, no dejarlo huérfano con su route_batch_id.
+            const batchId = await newBatch('provisional', { version: 3 });
+            const first = await insert({ status: 'in_planning', batchId, sequence: 1, type: 'delivery' });
+            const id = await insert({ status: 'pickup_scheduled', batchId, sequence: 2 });
+            const last = await insert({ status: 'in_planning', batchId, sequence: 3, type: 'delivery' });
+            const before = await dispatchRow(id);
+
+            const res = await cancel(id);
+
+            expect(res.status, JSON.stringify(res.body)).toBe(200);
+            expect(res.body).toMatchObject({ status: 'cancelled', previousStatus: 'pickup_scheduled', routeBatchId: null, routeBatchClosed: false });
+            const after = await dispatchRow(id);
+            expect(after).toMatchObject({ status: 'cancelled', route_batch_id: null, sequence_order: null, version: before.version + 1 });
+            expect(after.closed_at).not.toBeNull();
+            expect(await batchRow(batchId)).toMatchObject({ status: 'provisional', version: 4 });
+            expect((await dispatchRow(first)).sequence_order).toBe(1);
+            expect((await dispatchRow(last)).sequence_order).toBe(2);
+            expect((await cancelEvents(id))[0].metadata).toMatchObject({ previousStatus: 'pickup_scheduled', routeBatchId: null, fromBatchId: batchId, version: after.version });
+        });
+
+        it('pickup_scheduled, única parada de un lote provisional: el lote queda cancelado', async () => {
+            const batchId = await newBatch('provisional', { version: 1 });
+            const id = await insert({ status: 'pickup_scheduled', batchId, sequence: 1 });
+
+            const res = await cancel(id);
+
+            expect(res.status).toBe(200);
+            expect(await batchRow(batchId)).toMatchObject({ status: 'cancelled', version: 2 });
+        });
+
         it.each(['assigned', 'scheduled', 'pending', 'in_transit', 'picked_up_in_transit', 'delivered', 'cancelled'])('%s → 409 DISPATCH_CANCEL_NOT_ALLOWED y no cambia nada', async (status) => {
             const id = await insert({ status });
             const before = await dispatchRow(id);
