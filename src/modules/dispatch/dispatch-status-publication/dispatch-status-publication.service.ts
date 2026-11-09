@@ -8,6 +8,7 @@ import {
     dispatchStatusMessagePayload,
     DISPATCH_TRANSFER_STATUS_CHANGED_TOPIC,
     PUBLISHED_DELIVERY_OUTCOME_STATUSES,
+    type PublishedReceipt,
 } from './dispatch-status-message.js';
 
 interface DispatchIdentityRow {
@@ -26,6 +27,8 @@ export interface PublishDispatchStatusChangeInput {
     previousStatus: string;
     occurredAt: Date;
     reasonCode?: string;
+    /** Warehouse receipt behind the transition (ST-240.3): adds `result` and the items with differences. */
+    receipt?: PublishedReceipt;
 }
 
 const ORDER_ID_TYPES = new Set(['delivery', 'warehouse_return_pickup', 'supplier_pickup', 'supplier_return']);
@@ -93,6 +96,7 @@ export class DispatchStatusPublicationService {
             occurredAt,
             recordVersion,
             reasonCode: input.reasonCode,
+            receipt: input.receipt,
         });
 
         await this.outbox.enqueue(buildEnvelope({

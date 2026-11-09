@@ -7,6 +7,7 @@ import { DispatchEventsService } from '../../../dispatch/dispatch-events/service
 import { DispatchIncidentsService } from '../../../dispatch/dispatch-incidents/services/dispatch-incidents.service.js';
 import { DispatchStatusPublicationService } from '../../../dispatch/dispatch-status-publication/dispatch-status-publication.service.js';
 import { isTerminalDispatchStatus } from '../../../dispatch/dispatches/utils/terminal-statuses.js';
+import type { DispatchStatusChangedEvent } from '../../../../app/dispatch-status/dispatch-status-changed.event.js';
 import type { InventoryReceiptConfirmedData } from '../domain/warehouse-receipt-message.types.js';
 
 const RECEIPT_DIFFERENCE_REASON_CODE = 'INC-RECEIPT-DIFF';
@@ -21,8 +22,15 @@ interface DispatchRow {
     tracking_code:  string | null;
 }
 
+/** Socket payloads the consumer emits once the transaction has committed (ST-240.3). */
+export interface AppliedReceiptEvents {
+    statusChanged: DispatchStatusChangedEvent;
+    /** Only when the receipt opened a `receipt_difference` incident. */
+    incidentReported?: { dispatchId: number; incidentId: string; reasonCode: string; reportedAt: string; criticality: 'high' };
+}
+
 export type ApplyReceiptResult =
-    | { status: 'applied'; dispatchId: number; newStatus: string }
+    | { status: 'applied'; dispatchId: number; newStatus: string; events: AppliedReceiptEvents }
     | { status: 'orphan'; dispatchId: number | null; referenceId: string }
     | { status: 'ignored' }
     | { status: 'correction'; dispatchId: number };
@@ -92,8 +100,8 @@ export class WarehouseReceiptIntakeService {
 
         const newStatus = this.targetStatus(data);
         await this.saveReceipt(manager, data, found.dispatch_id, 'applied');
-        await this.transition(manager, found, data, newStatus, receivedAt);
-        return { status: 'applied', dispatchId: found.dispatch_id, newStatus };
+        const events = await this.transition(manager, found, data, newStatus, receivedAt);
+        return { status: 'applied', dispatchId: found.dispatch_id, newStatus, events };
     }
 
     private targetStatus(data: InventoryReceiptConfirmedData): string {
@@ -107,41 +115,52 @@ export class WarehouseReceiptIntakeService {
         data: InventoryReceiptConfirmedData,
         newStatus: string,
         receivedAt: Date,
-    ): Promise<void> {
+    ): Promise<AppliedReceiptEvents> {
         const closesDispatch = isTerminalDispatchStatus(newStatus);
-        const [updated]: { version: number }[] = await manager.query(
+        // TypeORM answers UPDATE ... RETURNING with `[rows, affectedCount]`, not with the rows.
+        const [updatedRows]: [{ version: number; updated_at: Date }[], number] = await manager.query(
             `UPDATE dispatches
                 SET dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $2),
                     closed_at = CASE WHEN $3 THEN $4::timestamptz ELSE NULL END,
                     updated_at = NOW()
               WHERE dispatch_id = $1
-          RETURNING version`,
+          RETURNING version, updated_at`,
             [found.dispatch_id, newStatus, closesDispatch, receivedAt],
         );
+        const updated = updatedRows[0];
 
+        let incidentReported: AppliedReceiptEvents['incidentReported'];
         if (newStatus === 'incident') {
             const [reason]: { incident_reason_id: number }[] = await manager.query(
                 `SELECT incident_reason_id FROM incident_reasons WHERE code = $1 AND active = TRUE AND deleted_at IS NULL`,
                 [RECEIPT_DIFFERENCE_REASON_CODE],
             );
             if (!reason) throw new Error(`Incident reason ${RECEIPT_DIFFERENCE_REASON_CODE} is missing.`);
+            const incidentId = uuidv7();
             await this.dispatchIncidents.create({
-                id: uuidv7(),
+                id: incidentId,
                 dispatchId: found.dispatch_id,
                 incidentReasonId: reason.incident_reason_id,
                 description: data.notes ?? `Warehouse receipt ${data.receiptId}: ${data.result}.`,
                 occurredAt: receivedAt,
             }, { manager });
+            incidentReported = {
+                dispatchId: found.dispatch_id, incidentId, reasonCode: RECEIPT_DIFFERENCE_REASON_CODE,
+                reportedAt: receivedAt.toISOString(), criticality: 'high',
+            };
         }
 
-        if (data.referenceType === 'purchase_order') {
-            await this.statusPublication.publishTransferUpdate(manager, {
-                dispatchId: found.dispatch_id,
-                status: newStatus,
-                previousStatus: found.status,
-                occurredAt: receivedAt,
-            });
-        }
+        // Same transaction as the transition (ST-240.3): a purchase order's result goes to Compras and an
+        // RMA that ends in `incident` to Inventarios. `publish` skips a complete RMA
+        // (`returned_to_warehouse`): that outcome is Inventarios' own message. The outbox only writes a row,
+        // so a broker outage never blocks this transition.
+        const outboundRecordVersion = await this.statusPublication.publish(manager, {
+            dispatchId: found.dispatch_id,
+            status: newStatus,
+            previousStatus: found.status,
+            occurredAt: receivedAt,
+            receipt: { result: data.result, items: data.items },
+        });
 
         await this.dispatchEvents.create({
             dispatchId: found.dispatch_id,
@@ -149,7 +168,10 @@ export class WarehouseReceiptIntakeService {
             detail: `${found.status} -> ${newStatus}`,
             actorType: 'system',
             reason: 'warehouse_receipt_confirmed',
-            metadata: { receiptId: data.receiptId, result: data.result, version: updated.version },
+            metadata: {
+                receiptId: data.receiptId, result: data.result, version: updated.version,
+                ...(outboundRecordVersion !== null && { outboundRecordVersion }),
+            },
             occurredAt: receivedAt,
         }, { manager });
 
@@ -158,6 +180,17 @@ export class WarehouseReceiptIntakeService {
                 dispatchId: found.dispatch_id, dispatchStatus: newStatus, cause: 'warehouse_receipt_confirmed',
             });
         }
+
+        return {
+            statusChanged: {
+                dispatchId: found.dispatch_id,
+                status: newStatus,
+                previousStatus: found.status,
+                version: updated.version,
+                updatedAt: new Date(updated.updated_at).toISOString(),
+            },
+            ...(incidentReported && { incidentReported }),
+        };
     }
 
     private async saveReceipt(

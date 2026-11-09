@@ -51,6 +51,43 @@ describe('DispatchStatusPublicationService', () => {
         expect(ctx.outbox.enqueue.mock.calls[0][0].data).toMatchObject({ recordVersion: 1, reasonCode: 'INC-CUST-ABSENT' });
     });
 
+    it('adds the warehouse result and only the items with differences (ST-240.3)', async () => {
+        const ctx = setup({ dispatch: [{ dispatch_type: 'supplier_pickup', source_order_ref: 'PO-9', tracking_code: 'DSP-2026-00002' }] });
+        await ctx.service.publish(ctx.manager as never, {
+            ...input, status: 'incident', previousStatus: 'picked_up_in_transit',
+            receipt: {
+                result: 'with_differences',
+                items: [
+                    { itemCode: 'SKU-1', acceptedQuantity: 8, missingQuantity: 2, damagedQuantity: 0, detail: 'Faltan 2' },
+                    { itemCode: 'SKU-2', acceptedQuantity: 5, missingQuantity: 0, damagedQuantity: 0 },
+                    { packageId: 41, acceptedQuantity: 0, missingQuantity: 0, damagedQuantity: 3 },
+                    { acceptedQuantity: 0, missingQuantity: 1, damagedQuantity: 0 }, // no identifier: cannot satisfy the contract
+                ],
+            },
+        });
+
+        const data = ctx.outbox.enqueue.mock.calls[0][0].data;
+        expect(data).toMatchObject({ purchaseOrderId: 'PO-9', status: 'incident', result: 'with_differences' });
+        expect(data.items).toEqual([
+            { itemCode: 'SKU-1', acceptedQuantity: 8, missingQuantity: 2, damagedQuantity: 0, detail: 'Faltan 2' },
+            { packageId: 41, acceptedQuantity: 0, missingQuantity: 0, damagedQuantity: 3 },
+        ]);
+    });
+
+    it('sends result without items when nothing differs, and nothing receipt-related without a receipt', async () => {
+        const ctx = setup({ dispatch: [{ dispatch_type: 'supplier_pickup', source_order_ref: 'PO-9', tracking_code: 'DSP-2026-00002' }] });
+        await ctx.service.publish(ctx.manager as never, { ...input, receipt: { result: 'complete', items: [
+            { itemCode: 'SKU-1', acceptedQuantity: 10, missingQuantity: 0, damagedQuantity: 0 },
+        ] } });
+        await ctx.service.publish(ctx.manager as never, input);
+
+        const [withReceipt, without] = ctx.outbox.enqueue.mock.calls.map(([envelope]) => envelope.data);
+        expect(withReceipt).toMatchObject({ result: 'complete' });
+        expect(withReceipt).not.toHaveProperty('items');
+        expect(without).not.toHaveProperty('result');
+        expect(without).not.toHaveProperty('items');
+    });
+
     it('does not publish intermediate statuses', async () => {
         const ctx = setup();
         await expect(ctx.service.publish(ctx.manager as never, { ...input, status: 'in_transit' })).resolves.toBeNull();

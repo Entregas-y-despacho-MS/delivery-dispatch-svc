@@ -3,9 +3,11 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { MessageEnvelope } from '../../../../plugins/messaging/envelope/message-envelope.js';
 import { InboundMessageTransaction } from '../../../../plugins/messaging/inbound-message-transaction.port.js';
 import { MessageBus, type MessageHandlingResult } from '../../../../plugins/messaging/message-bus.port.js';
+import { INCIDENT_REPORTED_EVENT } from '../../../../app/dispatch-incidents/domain/incident-report.js';
+import { DISPATCH_STATUS_CHANGED_EVENT } from '../../../../app/dispatch-status/dispatch-status-changed.event.js';
 import { DISPATCH_CHANGE_REQUIRES_ATTENTION } from '../../sales-order-intake/services/dispatch-change-events.service.js';
-import type { InventoryReceiptConfirmedData } from '../domain/warehouse-receipt-message.types.js';
-import { WarehouseReceiptIntakeService, type ApplyReceiptResult } from './warehouse-receipt-intake.service.js';
+import { toReceiptData } from '../domain/warehouse-receipt-message.types.js';
+import { WarehouseReceiptIntakeService, type AppliedReceiptEvents, type ApplyReceiptResult } from './warehouse-receipt-intake.service.js';
 
 export const INVENTORY_RECEIPT_CONFIRMED_TOPIC = 'inventory.receipt.confirmed';
 
@@ -25,7 +27,7 @@ export class WarehouseReceiptConsumer implements OnModuleInit {
     }
 
     private async handle(envelope: MessageEnvelope): Promise<MessageHandlingResult> {
-        const data = envelope.data as unknown as InventoryReceiptConfirmedData;
+        const data = toReceiptData(envelope.data);
         let outcome: ApplyReceiptResult | undefined;
 
         // Serialize by referenceId (the RMA/purchase order the traslado belongs to), not receiptId: two
@@ -52,9 +54,24 @@ export class WarehouseReceiptConsumer implements OnModuleInit {
             this.emitAttention(outcome.dispatchId, data.referenceId, 'receipt_correction');
         } else {
             this.logger.debug(`Receipt ${data.receiptId} applied: dispatch ${outcome.dispatchId} -> ${outcome.newStatus}.`);
+            this.emitApplied(outcome.events);
         }
 
         return result;
+    }
+
+    /** After commit (ST-240.3): coordinators and supervisors see the status and, with differences, the incident. */
+    private emitApplied(events: AppliedReceiptEvents): void {
+        const emit = (name: string, payload: object): void => {
+            try {
+                this.events.emit(name, payload);
+            } catch (error) {
+                // The receipt is already committed; a failing listener must not turn the message into a retry.
+                this.logger.error(`A listener of ${name} failed for dispatch ${events.statusChanged.dispatchId}: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        };
+        emit(DISPATCH_STATUS_CHANGED_EVENT, events.statusChanged);
+        if (events.incidentReported) emit(INCIDENT_REPORTED_EVENT, events.incidentReported);
     }
 
     private emitAttention(dispatchId: number | null, referenceId: string, changeType: 'orphan_receipt' | 'receipt_correction'): void {

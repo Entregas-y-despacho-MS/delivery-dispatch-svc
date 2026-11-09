@@ -23,3 +23,29 @@ export interface InventoryReceiptConfirmedData {
     trackingCode?:     string | null;
     items?:            WarehouseReceiptItemData[];
 }
+
+/** An item exactly as `inventory.receipt.confirmed` carries it (contract: `itemId`, `notes`, optional missing/damaged). */
+export interface WarehouseReceiptContractItem {
+    itemId:            string;
+    expectedQuantity?: number;
+    acceptedQuantity:  number;
+    missingQuantity?:  number;
+    damagedQuantity?:  number;
+    notes?:            string | null;
+}
+
+/**
+ * Maps the wire payload to what `WarehouseReceiptIntakeService` stores and republishes (ST-240.3): the
+ * contract names the product `itemId` and the free text `notes`, and omits a zero `missingQuantity` /
+ * `damagedQuantity`; the table needs `item_code`, `detail` and explicit quantities.
+ */
+export function toReceiptData(raw: Record<string, unknown>): InventoryReceiptConfirmedData {
+    const items = (raw.items as WarehouseReceiptContractItem[] | undefined)?.map((item): WarehouseReceiptItemData => ({
+        itemCode:         item.itemId,
+        acceptedQuantity: item.acceptedQuantity,
+        missingQuantity:  item.missingQuantity ?? 0,
+        damagedQuantity:  item.damagedQuantity ?? 0,
+        detail:           item.notes ?? null,
+    }));
+    return { ...(raw as unknown as InventoryReceiptConfirmedData), items };
+}
