@@ -24,6 +24,15 @@ describe('IncidentAlertListener', () => {
         });
     });
 
+    it('does nothing, and never queries the dispatch, when the incident is not high criticality', async () => {
+        const { listener, dataSource, alerts } = build();
+
+        await listener.handle({ dispatchId: 55, incidentId: 'INC-1', reasonCode: 'INC-ACCIDENT', reportedAt: '2026-11-09T14:00:00.000Z', criticality: 'low' });
+
+        expect(dataSource.query).not.toHaveBeenCalled();
+        expect(alerts.raise).not.toHaveBeenCalled();
+    });
+
     it('does nothing (and never throws) when the dispatch cannot be resolved', async () => {
         const { listener, dataSource, alerts } = build();
         dataSource.query.mockResolvedValue([]);

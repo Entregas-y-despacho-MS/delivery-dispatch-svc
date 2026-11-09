@@ -15,9 +15,9 @@ function build() {
 }
 
 describe('OperationalAlertsService.raise', () => {
-    it('inserts and emits when the subject has no open alert of this kind', async () => {
+    it('inserts and emits when the subject has no open alert of this kind and was not acknowledged today', async () => {
         const { service, dataSource, events } = build();
-        dataSource.query.mockResolvedValue([{ operational_alert_id: 1 }]);
+        dataSource.query.mockResolvedValueOnce([]).mockResolvedValueOnce([{ operational_alert_id: 1 }]);
 
         await service.raise({
             kind: OperationalAlertKindEnum.CRITICAL_INCIDENT,
@@ -26,8 +26,8 @@ describe('OperationalAlertsService.raise', () => {
             detail: { incidentId: 'INC-1' },
         });
 
-        expect(dataSource.query.mock.calls[0]?.[0]).toContain('ON CONFLICT (kind, COALESCE(zone_id, -1)');
-        expect(dataSource.query.mock.calls[0]?.[1]).toEqual([
+        expect(dataSource.query.mock.calls[1]?.[0]).toContain('ON CONFLICT (kind, COALESCE(zone_id, -1)');
+        expect(dataSource.query.mock.calls[1]?.[1]).toEqual([
             'critical_incident', 'critical', 2, 55, 7, 9, JSON.stringify({ incidentId: 'INC-1' }),
         ]);
         expect(events.emit).toHaveBeenCalledWith(OPERATIONAL_ALERT_RAISED_EVENT, {
@@ -38,7 +38,7 @@ describe('OperationalAlertsService.raise', () => {
 
     it('does nothing when a conflict means the subject already has this kind open (no duplicate, no re-notify)', async () => {
         const { service, dataSource, events } = build();
-        dataSource.query.mockResolvedValue([]);
+        dataSource.query.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
 
         await service.raise({
             kind: OperationalAlertKindEnum.GPS_STALE, severity: OperationalAlertSeverityEnum.WARNING,
@@ -48,9 +48,22 @@ describe('OperationalAlertsService.raise', () => {
         expect(events.emit).not.toHaveBeenCalled();
     });
 
+    it('does nothing, and never queries the insert, when the same subject was already acknowledged today', async () => {
+        const { service, dataSource, events } = build();
+        dataSource.query.mockResolvedValueOnce([{ '?column?': 1 }]);
+
+        await service.raise({
+            kind: OperationalAlertKindEnum.GPS_STALE, severity: OperationalAlertSeverityEnum.WARNING,
+            driverId: 7, detail: {},
+        });
+
+        expect(dataSource.query).toHaveBeenCalledOnce();
+        expect(events.emit).not.toHaveBeenCalled();
+    });
+
     it('does not fail the raise when the listener throws, just logs it', async () => {
         const { service, dataSource, events } = build();
-        dataSource.query.mockResolvedValue([{ operational_alert_id: 1 }]);
+        dataSource.query.mockResolvedValueOnce([]).mockResolvedValueOnce([{ operational_alert_id: 1 }]);
         events.emit.mockImplementation(() => { throw new Error('listener failed'); });
 
         await expect(service.raise({

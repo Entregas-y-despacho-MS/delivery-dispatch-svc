@@ -4,6 +4,7 @@ import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { DtoRepository } from '../../../shared/orm/index.js';
 import { PaginationResponseDto } from '../../../shared/dto/index.js';
+import { OPERATING_TIME_ZONE, todayInOperatingTimeZone } from '../../dispatch/dispatches/utils/operating-date.util.js';
 import { OperationalAlertKindEnum, OperationalAlertSeverityEnum, OperationalAlertStatusEnum } from '../../../shared/enums/operational-alert.enum.js';
 import { OperationalAlert } from '../entities/operational-alert.entity.js';
 import { OperationalAlertDto } from '../dto/operational-alert.dto.js';
@@ -57,11 +58,27 @@ export class OperationalAlertsService {
     }
 
     /**
-     * Inserts the alert if its subject has no open alert of this kind yet. Emits
-     * `OPERATIONAL_ALERT_RAISED_EVENT` only when it actually inserted — a duplicate while one stays
-     * open must never re-notify (Escenario 2 de ES-66).
+     * Inserts the alert if its subject has no open alert of this kind yet, and was not already
+     * acknowledged today. Emits `OPERATIONAL_ALERT_RAISED_EVENT` only when it actually inserted — a
+     * duplicate while one stays open must never re-notify (Escenario 2 de ES-66). Without the
+     * acknowledged-today check, a `gps_stale`/`driver_incidents`/`sla_below_threshold` alert that a
+     * supervisor just acknowledged would come right back on the next minute's evaluation if the
+     * underlying condition is still true — defeating what acknowledging it was for. `critical_incident`
+     * never repeats for the same dispatch anyway (a dispatch only gets one `dispatch_incidents` row
+     * before it leaves `in_transit`), so this check is a no-op for it in practice.
      */
     async raise(params: RaiseAlertParams): Promise<void> {
+        const [acknowledgedToday]: unknown[] = await this.dataSource.query(
+            `SELECT 1 FROM operational_alerts
+              WHERE kind = $1 AND COALESCE(zone_id, -1) = COALESCE($2, -1)
+                AND COALESCE(dispatch_id, -1) = COALESCE($3, -1) AND COALESCE(driver_id, -1) = COALESCE($4, -1)
+                AND status = 'acknowledged'
+                AND acknowledged_at >= ($5::date)::timestamp AT TIME ZONE '${OPERATING_TIME_ZONE}'
+              LIMIT 1`,
+            [params.kind, params.zoneId ?? null, params.dispatchId ?? null, params.driverId ?? null, todayInOperatingTimeZone()],
+        );
+        if (acknowledgedToday) return;
+
         const rows: RaisedRow[] = await this.dataSource.query(
             `INSERT INTO operational_alerts (kind, severity, zone_id, dispatch_id, driver_id, vehicle_id, detail, status)
              VALUES ($1, $2, $3, $4, $5, $6, $7, 'open')

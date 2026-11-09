@@ -21,9 +21,11 @@ interface DispatchSubjectRow {
 }
 
 /**
- * Escenario 1 de ES-66: toda incidencia reportada (`dispatch.incident_reported`, ST-32.2) se trata
- * como crítica — `criticality` del evento viene siempre `'high'` hoy, sin una columna real de
- * severidad en `incident_reasons` (decisión del usuario, 2026-11-09: no agregar esa columna todavía).
+ * Escenario 1 de ES-66: una incidencia reportada (`dispatch.incident_reported`, ST-32.2) de
+ * criticidad alta levanta la alerta. `criticality` viene siempre `'high'` hoy — no hay una columna
+ * real de severidad en `incident_reasons` todavía (decisión del usuario, 2026-11-09: no agregarla
+ * en este ticket) — así que en la práctica toda incidencia la levanta, pero el guard explícito deja
+ * esto funcionando solo cuando esa columna exista, sin otro cambio en este listener.
  */
 @Injectable()
 export class IncidentAlertListener {
@@ -36,6 +38,8 @@ export class IncidentAlertListener {
 
     @OnEvent(INCIDENT_REPORTED_EVENT, { async: true })
     async handle(event: IncidentReportedEvent): Promise<void> {
+        if (event.criticality !== 'high') return;
+
         const [subject]: DispatchSubjectRow[] = await this.dataSource.query(
             `SELECT COALESCE(d.delivery_zone_id, rb.delivery_zone_id) AS zone_id, rb.driver_id, rb.vehicle_id
                FROM dispatches d LEFT JOIN route_batches rb ON rb.route_batch_id = d.route_batch_id
@@ -47,6 +51,11 @@ export class IncidentAlertListener {
             return;
         }
 
+        // A second incident on the same dispatch while the first one's alert is still open is not a
+        // new subject for uq_operational_alerts_open_subject (same kind + dispatch_id) — raise() is a
+        // no-op for it, with no second alert and no second notification. Acceptable: a dispatch moves
+        // out of in_transit on its first incident, so this can only repeat via a correction flow, not
+        // the normal path, and the coordinator reviewing the alert already sees the dispatch itself.
         await this.alerts.raise({
             kind: OperationalAlertKindEnum.CRITICAL_INCIDENT,
             severity: OperationalAlertSeverityEnum.CRITICAL,
