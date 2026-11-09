@@ -185,9 +185,10 @@ export function validateCutoffBatch(facts: BatchFacts, params: SimParams): Cutof
     }
 
     // Slots with margin: the promised window is fixed; the route is simulated in the order of the plan.
+    // A customer pickup's window is never a promise (ST-81.3) — it stays flexible here too.
     const simStops: SimStop[] = facts.stops.map((stop) => ({
         id: stop.dispatchId,
-        fixedWindow: stop.window
+        fixedWindow: stop.window && stop.dispatch.status !== 'pickup_scheduled'
             ? { startMinute: toLocalMoment(stop.window.start).minuteOfDay, endMinute: toLocalMoment(stop.window.end).minuteOfDay }
             : null,
     }));

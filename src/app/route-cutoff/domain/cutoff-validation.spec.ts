@@ -140,6 +140,16 @@ describe('validateCutoffBatch', () => {
         expect(result.failures[0].detail).toMatchObject({ reason: 'late_for_window', failedDispatchId: 30 });
     });
 
+    it('never fails a customer pickup on its own window: it is the planner\'s estimate, never a promise', () => {
+        const tightWindowPickup = stopFacts(30, {
+            window: ['09:00', '09:30'],
+            status: 'pickup_scheduled',
+            dispatch: dispatch(30, { km: 30, status: 'pickup_scheduled', packages: [] }),
+        });
+        const result = validateCutoffBatch(facts({ stops: [stopFacts(1), tightWindowPickup] }), PARAMS);
+        expect(result.passed).toBe(true);
+    });
+
     it('keeps a batch the reoptimization could not complete out of review', () => {
         const result = validateCutoffBatch(facts({ reoptimizationIncomplete: true }), PARAMS);
         expect(codes(result)).toEqual(['reoptimization_incomplete']);
