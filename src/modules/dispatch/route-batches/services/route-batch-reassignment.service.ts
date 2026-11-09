@@ -102,14 +102,13 @@ export class RouteBatchReassignmentService {
         if (origin.shift_date !== target.shift_date) {
             throw new RouteBatchReassignConflictException('ROUTE_BATCH_DIFFERENT_SHIFT_DATE', `Both route batches must be the same shift day (origin: ${origin.shift_date}, destination: ${target.shift_date}).`);
         }
-        const missingResources: string[] = [];
-        if (origin.driver_id === null) missingResources.push('the origin batch has no driver');
-        if (origin.vehicle_id === null) missingResources.push('the origin batch has no vehicle');
-        if (target.driver_id === null) missingResources.push('the destination batch has no driver');
-        if (target.vehicle_id === null) missingResources.push('the destination batch has no vehicle');
-        if (missingResources.length > 0) {
-            throw new RouteBatchReassignConflictException('ROUTE_BATCH_VEHICLE_REQUIRED', `Both route batches must have a driver and a vehicle assigned: ${missingResources.join(', ')}.`);
-        }
+        // Sequential single-variable checks (not combined into one condition) so TypeScript actually
+        // narrows origin.driverId/vehicleId and target.driverId/vehicleId to non-null for the rest of
+        // this method — no `!` needed below.
+        if (origin.driver_id === null) throw new RouteBatchReassignConflictException('ROUTE_BATCH_VEHICLE_REQUIRED', 'The origin batch has no driver assigned.');
+        if (origin.vehicle_id === null) throw new RouteBatchReassignConflictException('ROUTE_BATCH_VEHICLE_REQUIRED', 'The origin batch has no vehicle assigned.');
+        if (target.driver_id === null) throw new RouteBatchReassignConflictException('ROUTE_BATCH_VEHICLE_REQUIRED', 'The destination batch has no driver assigned.');
+        if (target.vehicle_id === null) throw new RouteBatchReassignConflictException('ROUTE_BATCH_VEHICLE_REQUIRED', 'The destination batch has no vehicle assigned.');
         if (origin.version !== dto.version) {
             throw new RouteBatchReassignConflictException('ROUTE_BATCH_VERSION_CONFLICT', 'The origin route batch changed. Reload it before reassigning.');
         }
@@ -170,7 +169,7 @@ export class RouteBatchReassignmentService {
             );
         }
 
-        await this.capacity.assertAssignable(dto.targetBatchId, target.vehicle_id!, manager);
+        await this.capacity.assertAssignable(dto.targetBatchId, target.vehicle_id, manager);
 
         // TypeORM answers UPDATE ... RETURNING with [rows, affectedCount], not with the rows (see
         // route-batch-closing.service.ts) — the inner array is where the returned row actually is.
@@ -214,8 +213,8 @@ export class RouteBatchReassignmentService {
         const event: RouteBatchReassignedEvent = {
             fromBatchId: originBatchId,
             toBatchId: dto.targetBatchId,
-            fromDriverId: origin.driver_id!,
-            toDriverId: target.driver_id!,
+            fromDriverId: origin.driver_id,
+            toDriverId: target.driver_id,
             dispatchIds: dto.dispatchIds,
             fromVersion: locked.version,
             toVersion,
@@ -223,21 +222,23 @@ export class RouteBatchReassignmentService {
         };
         const originAssigned: RouteAssignedEvent = {
             routeId: originBatchId,
-            driverId: origin.driver_id!,
-            vehicleId: origin.vehicle_id!,
+            driverId: origin.driver_id,
+            vehicleId: origin.vehicle_id,
             dispatchIds: originDispatches.map((row) => row.dispatch_id),
             dispatches: originDispatches.map(({ dispatch_id, priority }) => ({ dispatchId: dispatch_id, priority })),
             zoneName: zoneNameOf(originBatchId) ?? 'Zona sin especificar',
             version: locked.version,
+            fromReassignment: true,
         };
         const targetAssigned: RouteAssignedEvent = {
             routeId: dto.targetBatchId,
-            driverId: target.driver_id!,
-            vehicleId: target.vehicle_id!,
+            driverId: target.driver_id,
+            vehicleId: target.vehicle_id,
             dispatchIds: targetDispatches.map((row) => row.dispatch_id),
             dispatches: targetDispatches.map(({ dispatch_id, priority }) => ({ dispatchId: dispatch_id, priority })),
             zoneName: zoneNameOf(dto.targetBatchId) ?? 'Zona sin especificar',
             version: toVersion,
+            fromReassignment: true,
         };
         return { response, event, originAssigned, targetAssigned };
     }

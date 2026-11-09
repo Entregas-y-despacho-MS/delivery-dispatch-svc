@@ -56,13 +56,16 @@ describe('RouteBatchReassignmentService.reassign', () => {
             fromBatchId: 10, toBatchId: 20, fromDriverId: 4, toDriverId: 9,
             dispatchIds: [31], fromVersion: 6, toVersion: 4, zoneName: 'Centro',
         });
-        // route.assigned is emitted once per side too, so the board and its push listener (which only
-        // know that event) refresh both rows without waiting for ST-63.3's own event.
+        // route.assigned is emitted once per side too, so the board (which only knows that event)
+        // refreshes both rows without waiting for ST-63.3's own event. fromReassignment:true on both
+        // is what makes RouteAssignedPushListener/LateApprovalNoticeListener skip their own work for
+        // it (their own specs cover that) — the origin side keeps it even with an empty dispatchIds,
+        // the exact case those listeners must not misread as "a real new assignment of nothing".
         expect(events.emit).toHaveBeenCalledWith(ROUTE_ASSIGNED_EVENT, {
-            routeId: 10, driverId: 4, vehicleId: 2, dispatchIds: [], dispatches: [], zoneName: 'Origen', version: 6,
+            routeId: 10, driverId: 4, vehicleId: 2, dispatchIds: [], dispatches: [], zoneName: 'Origen', version: 6, fromReassignment: true,
         });
         expect(events.emit).toHaveBeenCalledWith(ROUTE_ASSIGNED_EVENT, {
-            routeId: 20, driverId: 9, vehicleId: 7, dispatchIds: [31], dispatches: [{ dispatchId: 31, priority: 'normal' }], zoneName: 'Centro', version: 4,
+            routeId: 20, driverId: 9, vehicleId: 7, dispatchIds: [31], dispatches: [{ dispatchId: 31, priority: 'normal' }], zoneName: 'Centro', version: 4, fromReassignment: true,
         });
     });
 

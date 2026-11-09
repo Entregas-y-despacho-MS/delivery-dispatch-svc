@@ -11,6 +11,9 @@ export class RouteAssignedPushListener {
 
     @OnEvent(ROUTE_ASSIGNED_EVENT, { async: true })
     async handleRouteAssigned(event: RouteAssignedEvent): Promise<void> {
+        // A reassignment's own route.assigned is for the board only; notifyReassigned already covers
+        // the push for both sides (see the field's doc comment).
+        if (event.fromReassignment) return;
         await this.notifications.notify(event);
     }
 
