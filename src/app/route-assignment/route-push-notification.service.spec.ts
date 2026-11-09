@@ -116,4 +116,51 @@ describe('RoutePushNotificationService', () => {
             data: { routeId: 18, vehicleId: 7, vehiclePlate: 'ABC-123', version: 6, acceptanceRevoked: true },
         }]);
     });
+
+    it('notifies both drivers of a batch reassignment, each with their own message', async () => {
+        const provider = new SimulatedPushAdapter();
+        const tokenService = {
+            findActiveByUserId: vi.fn((driverId: number) => Promise.resolve(driverId === 4 ? [{ token: 'origin-device' }] : [{ token: 'dest-device' }])),
+            revokeByToken: vi.fn(),
+        };
+        const service = new RoutePushNotificationService(tokenService as any, provider, new PushReceiptMonitor(provider, tokenService as any));
+
+        await service.notifyReassigned({
+            fromBatchId: 10, toBatchId: 20, fromDriverId: 4, toDriverId: 9,
+            dispatchIds: [31, 32], fromVersion: 6, toVersion: 3, zoneName: 'Centro',
+        });
+
+        expect(provider.sent).toEqual([
+            {
+                to: 'origin-device', title: 'Paradas reasignadas',
+                body: '2 parada(s) de tu ruta #10 se movieron a otro repartidor.',
+                data: { routeId: 10, dispatchIds: [31, 32], direction: 'removed' },
+            },
+            {
+                to: 'dest-device', title: 'Nuevas paradas asignadas',
+                body: '2 parada(s) se agregaron a tu ruta #20 en Centro.',
+                data: { routeId: 20, dispatchIds: [31, 32], direction: 'added' },
+            },
+        ]);
+    });
+
+    it('a reassignment push failure for one side does not swallow the other, and never throws', async () => {
+        const provider = new SimulatedPushAdapter();
+        const tokenService = {
+            findActiveByUserId: vi.fn((driverId: number) => (driverId === 4 ? Promise.reject(new Error('database unavailable')) : Promise.resolve([{ token: 'dest-device' }]))),
+            revokeByToken: vi.fn(),
+        };
+        const service = new RoutePushNotificationService(tokenService as any, provider, new PushReceiptMonitor(provider, tokenService as any));
+
+        await expect(service.notifyReassigned({
+            fromBatchId: 10, toBatchId: 20, fromDriverId: 4, toDriverId: 9,
+            dispatchIds: [31], fromVersion: 6, toVersion: 3, zoneName: null,
+        })).resolves.toBeUndefined();
+
+        expect(provider.sent).toEqual([{
+            to: 'dest-device', title: 'Nuevas paradas asignadas',
+            body: '1 parada(s) se agregaron a tu ruta #20.',
+            data: { routeId: 20, dispatchIds: [31], direction: 'added' },
+        }]);
+    });
 });

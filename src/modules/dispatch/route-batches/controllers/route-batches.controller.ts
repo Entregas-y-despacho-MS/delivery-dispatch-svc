@@ -37,6 +37,11 @@ import { FindRouteBatchesResponseDto } from '../dto/find-route-batches-response.
 import { RouteBatchDetailDto } from '../dto/route-batch-detail.dto.js';
 import { StartRouteBatchDto } from '../dto/start-route-batch.dto.js';
 import { StartRouteBatchResponseDto } from '../dto/start-route-batch-response.dto.js';
+import { ReassignRouteBatchDto } from '../dto/reassign-route-batch.dto.js';
+import { ReassignRouteBatchResponseDto } from '../dto/reassign-route-batch-response.dto.js';
+import { ReassignmentTargetDto } from '../dto/reassignment-target.dto.js';
+import { RouteBatchReassignmentService } from '../services/route-batch-reassignment.service.js';
+import { ReassignmentTargetsService } from '../services/reassignment-targets.service.js';
 import { Roles } from '../../../../app/auth/decorators/index.js';
 import { CurrentUser } from '../../../../shared/decorators/current-user.decorator.js';
 import { ParseIdPipe } from '../../../../shared/pipes/index.js';
@@ -79,6 +84,8 @@ export class RouteBatchesController {
     private readonly cotejoPhotoService: RouteBatchCotejoPhotoService,
     private readonly acceptService: RouteBatchAcceptService,
     private readonly cotejoExclusionsService: RouteBatchCotejoExclusionsService,
+    private readonly reassignmentService: RouteBatchReassignmentService,
+    private readonly reassignmentTargetsService: ReassignmentTargetsService,
   ) {}
 
   // Declared before `:id` so that `cotejo-exclusions` is not read as a route batch id.
@@ -367,5 +374,60 @@ export class RouteBatchesController {
       userId,
       dto.reason,
     );
+  }
+
+  @Get(':id/reassignment-targets')
+  @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
+  @ApiOperation({
+    summary: 'List the other in_execution route batches that can receive reassigned stops',
+    description:
+      'ES-63 (RF-A16). The other route batches `in_execution` of the same shift day as this one, each with its driver, vehicle plate, zone, current `version` (use it as `targetVersion`) and the remaining weight/volume capacity of its vehicle. Use `routeBatchId` as `targetBatchId` in `POST /route-batches/:id/reassign`. Read only: it writes nothing. Requires coordinator or supervisor role, or root.',
+  })
+  @ApiIdParam('Route batch')
+  @ApiOkResponse({ type: [ReassignmentTargetDto] })
+  @ApiBadRequests({ id: true })
+  @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+  @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
+  @ApiNotFound({ code: 'ROUTE_BATCH_NOT_FOUND', message: 'Route batch not found.' })
+  async findReassignmentTargets(@Param('id', ParseIdPipe) id: number): Promise<ReassignmentTargetDto[]> {
+    return await this.reassignmentTargetsService.findTargets(id);
+  }
+
+  @Post(':id/reassign')
+  @HttpCode(HttpStatus.OK)
+  @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
+  @ApiOperation({
+    summary: 'Reassign stops to another route batch in execution',
+    description:
+      "ES-63 (RF-A16, Escenarios 1-3). Moves the given dispatches, currently out_for_delivery in this (the origin) batch, to the end of the sequence of `targetBatchId` (also in_execution). Both batches must be in_execution and different from each other; `version`/`targetVersion` are checked against both (409 on a stale value, Escenario 2). Every dispatch must belong to the origin batch and be out_for_delivery, or the whole request is rejected (409, Escenario 3), as is a destination without enough remaining vehicle capacity. In one transaction: the stops leave the origin (its version goes up once per stop, and it closes automatically if nothing open is left in it, D-50), are appended at the end of the destination's sequence (its version goes up by the number of stops moved), and a route_batch_events row is written on each side. After commit it emits route.batch_reassigned: the live board and both drivers (push and socket). Requires coordinator or supervisor role, or root.",
+  })
+  @ApiIdParam('Route batch')
+  @ApiOkResponse({ type: ReassignRouteBatchResponseDto })
+  @ApiBadRequests({
+    validation: true, id: true,
+    errors: [{ code: 'RESCHEDULE_REASON_INVALID', message: "The reschedule reason 'CODE' does not exist or is not active." }],
+    example: ['dispatchIds must contain at least 1 elements', 'reasonCode should not be empty'],
+  })
+  @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
+  @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
+  @ApiNotFound(
+    { code: 'ROUTE_BATCH_NOT_FOUND', message: 'Route batch not found.' },
+    { code: 'DISPATCH_NOT_FOUND', message: 'Dispatch not found.' },
+  )
+  @ApiConflict(
+    { code: 'ROUTE_BATCH_SAME_BATCH', message: 'The destination batch must be different from the origin batch.' },
+    { code: 'ROUTE_BATCH_NOT_IN_EXECUTION', message: 'Both route batches must be in_execution to reassign stops between them.' },
+    { code: 'ROUTE_BATCH_VEHICLE_REQUIRED', message: 'Both route batches must have a driver, and the destination a vehicle, assigned.' },
+    { code: 'ROUTE_BATCH_VERSION_CONFLICT', message: 'The origin route batch changed. Reload it before reassigning.' },
+    { code: 'DISPATCH_NOT_IN_BATCH', message: 'A dispatch does not belong to the origin route batch.' },
+    { code: 'DISPATCH_NOT_OUT_FOR_DELIVERY', message: 'A dispatch is not out_for_delivery; it cannot be reassigned.' },
+    { code: 'ROUTE_CAPACITY_EXCEEDED', message: 'The route cannot be assigned to this vehicle because its cargo exceeds the vehicle capacity or package dimensions.' },
+  )
+  async reassign(
+    @Param('id', ParseIdPipe) id: number,
+    @Body() dto: ReassignRouteBatchDto,
+    @CurrentUser('id') actorUserId: number,
+  ): Promise<ReassignRouteBatchResponseDto> {
+    return await this.reassignmentService.reassign(id, dto, actorUserId);
   }
 }

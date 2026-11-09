@@ -196,6 +196,20 @@ describe('DispatchEventsSocketListener', () => {
         );
     });
 
+    it('forwards a batch reassignment to both coordinators/supervisors and both drivers', () => {
+        const socket = { emitToRooms: vi.fn() };
+        const listener = new DispatchEventsSocketListener(socket as never, {} as never);
+        const event = { fromBatchId: 10, toBatchId: 20, fromDriverId: 4, toDriverId: 9, dispatchIds: [31], fromVersion: 6, toVersion: 3, zoneName: 'Centro' };
+
+        listener.forwardBatchReassigned(event);
+
+        expect(socket.emitToRooms).toHaveBeenCalledWith(
+            ['coordinators', 'supervisors', 'driver:4', 'driver:9'],
+            'route.batch_reassigned',
+            event,
+        );
+    });
+
     it('joins coordinators to every active zone and drivers only to zones on their active route today', async () => {
         const socket = { joinRoom: vi.fn() };
         const dataSource = { query: vi.fn()

@@ -30,4 +30,14 @@ describe('RouteAssignedPushListener', () => {
         expect(notifications.notifyVehicleChanged).toHaveBeenCalledWith(event);
         expect(notifications.notify).not.toHaveBeenCalled();
     });
+
+    it('passes a batch reassignment to its own notification path', async () => {
+        const notifications = { notifyReassigned: vi.fn().mockResolvedValue(undefined) };
+        const listener = new RouteAssignedPushListener(notifications as any);
+        const event = { fromBatchId: 10, toBatchId: 20, fromDriverId: 4, toDriverId: 9, dispatchIds: [31], fromVersion: 6, toVersion: 3, zoneName: 'Centro' };
+
+        await listener.handleBatchReassigned(event);
+
+        expect(notifications.notifyReassigned).toHaveBeenCalledWith(event);
+    });
 });

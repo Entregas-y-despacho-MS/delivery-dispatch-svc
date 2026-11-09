@@ -9,3 +9,4 @@ export * from './route-batch-not-correctable.exception.js';
 export * from './cotejo-photo-id-conflict.exception.js';
 export * from './route-batch-accept-conflict.exception.js';
 export * from './cotejo-resolution-conflict.exception.js';
+export * from './route-batch-reassign-conflict.exception.js';
