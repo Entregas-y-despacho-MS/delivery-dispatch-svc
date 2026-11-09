@@ -1,0 +1,36 @@
+{
+  "scenario": "receipt-unknown-reference",
+  "script": "demo-returns",
+  "description": "Recepción de una orden de compra que Despachos no conoce.",
+  "expected": "La recepción se guarda como orphan, ningún despacho cambia de estado, no se publica nada y la web recibe dispatch.change_requires_attention (orphan_receipt).",
+  "anchor": "2026-11-09T12:00:00Z",
+  "steps": [
+    {
+      "label": "Almacén confirma la recepción de una orden de compra desconocida",
+      "message": {
+        "messageId": "01930000-0000-7000-8000-000000000068",
+        "type": "inventory.receipt.confirmed",
+        "schemaVersion": 1,
+        "source": "inventory",
+        "occurredAt": "2026-11-09T12:45:00Z",
+        "data": {
+          "receiptId": "RCP-SIM-0301",
+          "recordVersion": 1,
+          "updatedAt": "2026-11-09T12:45:00Z",
+          "receivedAt": "2026-11-09T12:40:12Z",
+          "warehouseId": "WH-LPZ-01",
+          "referenceType": "purchase_order",
+          "referenceId": "PO-SIM-0999",
+          "result": "complete",
+          "items": [
+            {
+              "itemId": "SKU-LAP-14",
+              "expectedQuantity": 1,
+              "acceptedQuantity": 1
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

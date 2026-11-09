@@ -1,0 +1,30 @@
+{
+  "scenario": "receipt-invalid",
+  "script": "demo-returns",
+  "description": "Mensaje inválido por campo faltante: la recepción llega sin `items`.",
+  "expected": "El mensaje va a inventory.receipt.confirmed.dead-letter (reasonCode schema_invalid), se emite integration.message_rejected y no se guarda ninguna recepción.",
+  "anchor": "2026-11-09T12:00:00Z",
+  "steps": [
+    {
+      "label": "Almacén confirma una recepción sin ítems",
+      "message": {
+        "messageId": "01930000-0000-7000-8000-00000000006b",
+        "type": "inventory.receipt.confirmed",
+        "schemaVersion": 1,
+        "source": "inventory",
+        "occurredAt": "2026-11-09T12:45:00Z",
+        "data": {
+          "receiptId": "RCP-SIM-0401",
+          "recordVersion": 1,
+          "updatedAt": "2026-11-09T12:45:00Z",
+          "receivedAt": "2026-11-09T12:40:12Z",
+          "warehouseId": "WH-LPZ-01",
+          "referenceType": "purchase_order",
+          "referenceId": "PO-SIM-0401",
+          "result": "complete"
+        }
+      },
+      "expectInvalid": true
+    }
+  ]
+}
