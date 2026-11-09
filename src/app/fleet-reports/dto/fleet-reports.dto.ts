@@ -19,6 +19,6 @@ export class FleetReportsDto {
     @ApiProperty({ type: [SlaReportRowDto], description: 'Driver metrics from the SLA aggregation; empty when no dispatches closed in the range' })
     drivers!: SlaReportRowDto[];
 
-    @ApiProperty({ type: [FleetReportVehicleRowDto], description: 'Vehicle metrics from the SLA aggregation plus maintenance figures; empty when no dispatches closed in the range' })
+    @ApiProperty({ type: [FleetReportVehicleRowDto], description: 'Vehicle metrics from closed dispatches plus vehicles with maintenance overlapping the range; maintenance-only vehicles have zero delivery metrics' })
     vehicles!: FleetReportVehicleRowDto[];
 }

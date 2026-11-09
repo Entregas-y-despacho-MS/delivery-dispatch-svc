@@ -68,13 +68,40 @@ export class FleetReportsService {
             this.maintenance.aggregate(from, to),
         ]);
         const maintenanceByVehicle = new Map(maintenance.map((row) => [row.vehicleId, row]));
+        const vehicleRows = new Map<number | null, FleetReportVehicleRowDto>(vehicles.rows.map((row) => [row.groupId, {
+            ...row,
+            maintenanceCount: 0,
+            daysInMaintenance: 0,
+        }]));
+        for (const figures of maintenance) {
+            if (!vehicleRows.has(figures.vehicleId)) {
+                vehicleRows.set(figures.vehicleId, {
+                    groupId: figures.vehicleId,
+                    groupName: figures.vehiclePlate,
+                    closedCount: 0,
+                    deliveredCount: 0,
+                    onTimeCount: 0,
+                    lateCount: 0,
+                    onTimePercentage: 0,
+                    averageDelayMinutes: null,
+                    averageCycleMinutes: null,
+                    incidentCount: 0,
+                    maintenanceCount: figures.maintenanceCount,
+                    daysInMaintenance: figures.daysInMaintenance,
+                });
+            }
+        }
         const report: FleetReportsDto = {
             from,
             to,
             drivers: drivers.rows,
-            vehicles: vehicles.rows.map((row) => {
+            vehicles: [...vehicleRows.values()].sort((a, b) => (a.groupName ?? '').localeCompare(b.groupName ?? '')).map((row) => {
                 const figures = row.groupId === null ? undefined : maintenanceByVehicle.get(row.groupId);
-                return { ...row, maintenanceCount: figures?.maintenanceCount ?? 0, daysInMaintenance: figures?.daysInMaintenance ?? 0 };
+                return {
+                    ...row,
+                    maintenanceCount: figures?.maintenanceCount ?? row.maintenanceCount,
+                    daysInMaintenance: figures?.daysInMaintenance ?? row.daysInMaintenance,
+                };
             }),
         };
         try {

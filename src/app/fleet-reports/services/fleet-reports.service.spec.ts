@@ -35,6 +35,20 @@ describe('FleetReportsService', () => {
         expect(report.vehicles).toEqual([]);
     });
 
+    it('includes vehicles with overlapping maintenance even when they have no closed dispatches', async () => {
+        const empty = buildSlaReport('2026-10-01', '2026-10-31', SlaGroupBy.DRIVER, []);
+        const maintenance = { aggregate: vi.fn().mockResolvedValue([{ vehicleId: 7, vehiclePlate: 'ABC-123', maintenanceCount: 1, daysInMaintenance: 3 }]) };
+        const service = new FleetReportsService(
+            { compute: vi.fn().mockResolvedValue(empty) } as never,
+            maintenance as never,
+            { get: vi.fn().mockResolvedValue(null), setWithTtl: vi.fn() } as never,
+        );
+
+        await expect(service.get('2026-10-01', '2026-10-31')).resolves.toMatchObject({
+            vehicles: [{ groupId: 7, groupName: 'ABC-123', closedCount: 0, maintenanceCount: 1, daysInMaintenance: 3 }],
+        });
+    });
+
     it('serves a valid composed cache hit without querying PostgreSQL', async () => {
         const { service, sla, maintenance, cache } = setup();
         const cached = { from: '2026-10-01', to: '2026-10-31', drivers: [], vehicles: [] };
