@@ -9,3 +9,6 @@ export const PLAN_GENERATION_TASK = 'plan-generation';
 
 /** The D-1 cutoff: optimization and validation of the batches (ST-51.3). Schedule: `route_cutoff_time`. */
 export const ROUTE_CUTOFF_TASK = 'route-cutoff';
+
+/** Operational alerts evaluator (ST-66.2, ES-66): gps_stale, driver_incidents, sla_below_threshold. Every minute. */
+export const OPERATIONAL_ALERTS_EVALUATION_TASK = 'operational-alerts-evaluation';

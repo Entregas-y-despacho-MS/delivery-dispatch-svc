@@ -111,6 +111,12 @@ describe('POST /dispatches/:id/incidents (ST-32.2)', () => {
 
     afterAll(async () => {
         if (db?.isInitialized) await withEventPurge(db, { dispatchRefs: [`${tag}%`], routeBatchIds: batchIds, userNames: [`e2e_st322_%_${run}`] }, async (manager) => {
+            // Before deleting the dispatches: operational_alerts.dispatch_id is ON DELETE SET NULL, and
+            // several of this file's real incidents can each raise their own critical_incident alert
+            // (different dispatch_id at insert time). Deleting the dispatches would null all of them at
+            // once, collapsing several previously-distinct open alerts onto the same (kind, zone=-1,
+            // dispatch=-1, driver) subject and violating uq_operational_alerts_open_subject mid-DELETE.
+            await manager.query('DELETE FROM operational_alerts WHERE dispatch_id = ANY($1::int[])', [dispatchIds]);
             await manager.query('DELETE FROM delivery_evidences WHERE dispatch_id = ANY($1::int[])', [dispatchIds]);
             await manager.query('DELETE FROM dispatch_incidents WHERE dispatch_id = ANY($1::int[])', [dispatchIds]);
             await manager.query('DELETE FROM dispatches WHERE source_order_ref LIKE $1', [`${tag}%`]);

@@ -60,6 +60,7 @@ import { SupplierPickupModule } from './app/supplier-pickup/supplier-pickup.modu
 import { PickupOrdersModule } from './app/pickup-orders/pickup-orders.module.js';
 import { SlaReportModule } from './app/sla-report/sla-report.module.js';
 import { FleetKpisModule } from './app/fleet-kpis/fleet-kpis.module.js';
+import { OperationalAlertsModule } from './modules/operational-alerts/operational-alerts.module.js';
 import { FleetReportsModule } from './app/fleet-reports/fleet-reports.module.js';
 
 @Module({
@@ -91,6 +92,7 @@ import { FleetReportsModule } from './app/fleet-reports/fleet-reports.module.js'
     DriverMetricsModule,
     SlaReportModule,
     FleetKpisModule,
+    OperationalAlertsModule,
     FleetReportsModule,
     DispatchEvidenceModule,
     AuditLogsModule,
