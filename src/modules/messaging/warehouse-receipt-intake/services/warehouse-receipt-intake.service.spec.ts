@@ -12,6 +12,8 @@ const data: InventoryReceiptConfirmedData = {
     recordVersion: 1,
 };
 
+const UPDATED_AT = new Date('2026-11-08T12:00:01Z');
+
 const foundDispatch = {
     dispatch_id: 55,
     status: 'picked_up_in_transit',
@@ -23,7 +25,7 @@ const foundDispatch = {
 function build() {
     const dispatchEvents = { create: vi.fn() };
     const dispatchIncidents = { create: vi.fn() };
-    const statusPublication = { publishTransferUpdate: vi.fn() };
+    const statusPublication = { publish: vi.fn().mockResolvedValue(1) };
     const batchClosing = { closeIfComplete: vi.fn() };
     const service = new WarehouseReceiptIntakeService(
         dispatchEvents as any, dispatchIncidents as any, statusPublication as any, batchClosing as any,
@@ -59,7 +61,7 @@ describe('WarehouseReceiptIntakeService.apply', () => {
             .mockResolvedValueOnce([foundDispatch])
             .mockResolvedValueOnce([])
             .mockResolvedValueOnce([])
-            .mockResolvedValueOnce([{ version: 4 }]);
+            .mockResolvedValueOnce([[{ version: 4, updated_at: UPDATED_AT }], 1]);
 
         await service.apply(data, { manager: { query } as unknown as EntityManager });
 
@@ -170,21 +172,24 @@ describe('WarehouseReceiptIntakeService.apply', () => {
         expect(result).toEqual({ status: 'orphan', dispatchId: 55, referenceId: 'RMA-1' });
     });
 
-    it('closes a complete RMA pickup as returned_to_warehouse, with no outbound publish', async () => {
+    it('closes a complete RMA pickup as returned_to_warehouse, with no outbound message', async () => {
         const { service, dispatchEvents, statusPublication, batchClosing } = build();
+        statusPublication.publish.mockResolvedValue(null); // returned_to_warehouse is not a published outcome
         const query = vi.fn()
             .mockResolvedValueOnce([])
             .mockResolvedValueOnce([foundDispatch])
             .mockResolvedValueOnce([]) // insert receipt
             .mockResolvedValueOnce([]) // delete items
-            .mockResolvedValueOnce([{ version: 4 }]); // UPDATE dispatches
+            .mockResolvedValueOnce([[{ version: 4, updated_at: UPDATED_AT }], 1]); // UPDATE dispatches
 
         const result = await service.apply(data, { manager: { query } as unknown as EntityManager });
 
-        expect(result).toEqual({ status: 'applied', dispatchId: 55, newStatus: 'returned_to_warehouse' });
+        expect(result).toMatchObject({ status: 'applied', dispatchId: 55, newStatus: 'returned_to_warehouse' });
         const update = query.mock.calls.find(([sql]: [string]) => sql.includes('UPDATE dispatches'));
         expect(update[1]).toEqual([55, 'returned_to_warehouse', true, new Date(data.receivedAt)]);
-        expect(statusPublication.publishTransferUpdate).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ events: { statusChanged: { dispatchId: 55, status: 'returned_to_warehouse', previousStatus: 'picked_up_in_transit', version: 4, updatedAt: '2026-11-08T12:00:01.000Z' } } });
+        expect((result as any).events.incidentReported).toBeUndefined();
+        expect(dispatchEvents.create.mock.calls[0][0].metadata).not.toHaveProperty('outboundRecordVersion');
         expect(dispatchEvents.create).toHaveBeenCalledWith(
             expect.objectContaining({ dispatchId: 55, detail: 'picked_up_in_transit -> returned_to_warehouse' }),
             { manager: expect.anything() },
@@ -200,12 +205,12 @@ describe('WarehouseReceiptIntakeService.apply', () => {
             .mockResolvedValueOnce([withBatch])
             .mockResolvedValueOnce([])
             .mockResolvedValueOnce([])
-            .mockResolvedValueOnce([{ version: 4 }]);
+            .mockResolvedValueOnce([[{ version: 4, updated_at: UPDATED_AT }], 1]);
         batchClosing.closeIfComplete.mockResolvedValue(false);
 
         const result = await service.apply(data, { manager: { query } as unknown as EntityManager });
 
-        expect(result).toEqual({ status: 'applied', dispatchId: 55, newStatus: 'returned_to_warehouse' });
+        expect(result).toMatchObject({ status: 'applied', dispatchId: 55, newStatus: 'returned_to_warehouse' });
         expect(batchClosing.closeIfComplete).toHaveBeenCalledWith(expect.anything(), 7, {
             dispatchId: 55, dispatchStatus: 'returned_to_warehouse', cause: 'warehouse_receipt_confirmed',
         });
@@ -218,7 +223,7 @@ describe('WarehouseReceiptIntakeService.apply', () => {
             .mockResolvedValueOnce([foundDispatch]) // route_batch_id: null
             .mockResolvedValueOnce([])
             .mockResolvedValueOnce([])
-            .mockResolvedValueOnce([{ version: 4 }]);
+            .mockResolvedValueOnce([[{ version: 4, updated_at: UPDATED_AT }], 1]);
 
         await service.apply(data, { manager: { query } as unknown as EntityManager });
 
@@ -233,15 +238,15 @@ describe('WarehouseReceiptIntakeService.apply', () => {
             .mockResolvedValueOnce([withBatch])
             .mockResolvedValueOnce([])
             .mockResolvedValueOnce([])
-            .mockResolvedValueOnce([{ version: 4 }]);
+            .mockResolvedValueOnce([[{ version: 4, updated_at: UPDATED_AT }], 1]);
 
         const result = await service.apply(
             { ...data, referenceType: 'purchase_order', referenceId: 'PO-1' },
             { manager: { query } as unknown as EntityManager },
         );
 
-        expect(result).toEqual({ status: 'applied', dispatchId: 55, newStatus: 'delivered' });
-        expect(statusPublication.publishTransferUpdate).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        expect(result).toMatchObject({ status: 'applied', dispatchId: 55, newStatus: 'delivered' });
+        expect(statusPublication.publish).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
             dispatchId: 55, status: 'delivered', previousStatus: 'picked_up_in_transit',
         }));
         expect(batchClosing.closeIfComplete).toHaveBeenCalledWith(expect.anything(), 900, expect.objectContaining({ dispatchId: 55 }));
@@ -254,7 +259,7 @@ describe('WarehouseReceiptIntakeService.apply', () => {
             .mockResolvedValueOnce([foundDispatch])
             .mockResolvedValueOnce([])
             .mockResolvedValueOnce([])
-            .mockResolvedValueOnce([{ version: 4 }]) // UPDATE dispatches
+            .mockResolvedValueOnce([[{ version: 4, updated_at: UPDATED_AT }], 1]) // UPDATE dispatches
             .mockResolvedValueOnce([{ incident_reason_id: 6 }]); // incident_reasons lookup
 
         const result = await service.apply(
@@ -262,7 +267,7 @@ describe('WarehouseReceiptIntakeService.apply', () => {
             { manager: { query } as unknown as EntityManager },
         );
 
-        expect(result).toEqual({ status: 'applied', dispatchId: 55, newStatus: 'incident' });
+        expect(result).toMatchObject({ status: 'applied', dispatchId: 55, newStatus: 'incident' });
         const update = query.mock.calls.find(([sql]: [string]) => sql.includes('UPDATE dispatches'));
         expect(update[1][1]).toBe('incident');
         expect(update[1][2]).toBe(false); // does not close the dispatch
@@ -278,7 +283,7 @@ describe('WarehouseReceiptIntakeService.apply', () => {
             .mockResolvedValueOnce([foundDispatch])
             .mockResolvedValueOnce([])
             .mockResolvedValueOnce([])
-            .mockResolvedValueOnce([{ version: 4 }])
+            .mockResolvedValueOnce([[{ version: 4, updated_at: UPDATED_AT }], 1])
             .mockResolvedValueOnce([{ incident_reason_id: 6 }]);
 
         await service.apply(
@@ -286,7 +291,7 @@ describe('WarehouseReceiptIntakeService.apply', () => {
             { manager: { query } as unknown as EntityManager },
         );
 
-        expect(statusPublication.publishTransferUpdate).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        expect(statusPublication.publish).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
             dispatchId: 55, status: 'incident', previousStatus: 'picked_up_in_transit',
         }));
     });
@@ -298,12 +303,12 @@ describe('WarehouseReceiptIntakeService.apply', () => {
             .mockResolvedValueOnce([foundDispatch])
             .mockResolvedValueOnce([])
             .mockResolvedValueOnce([])
-            .mockResolvedValueOnce([{ version: 4 }])
+            .mockResolvedValueOnce([[{ version: 4, updated_at: UPDATED_AT }], 1])
             .mockResolvedValueOnce([{ incident_reason_id: 6 }]);
 
         const result = await service.apply({ ...data, result: 'rejected' }, { manager: { query } as unknown as EntityManager });
 
-        expect(result).toEqual({ status: 'applied', dispatchId: 55, newStatus: 'incident' });
+        expect(result).toMatchObject({ status: 'applied', dispatchId: 55, newStatus: 'incident' });
         expect(dispatchIncidents.create).toHaveBeenCalledOnce();
     });
 
@@ -314,11 +319,84 @@ describe('WarehouseReceiptIntakeService.apply', () => {
             .mockResolvedValueOnce([foundDispatch])
             .mockResolvedValueOnce([])
             .mockResolvedValueOnce([])
-            .mockResolvedValueOnce([{ version: 4 }])
+            .mockResolvedValueOnce([[{ version: 4, updated_at: UPDATED_AT }], 1])
             .mockResolvedValueOnce([]); // incident_reasons lookup: not found
 
         await expect(service.apply({ ...data, result: 'rejected' }, { manager: { query } as unknown as EntityManager }))
             .rejects.toThrow('INC-RECEIPT-DIFF');
+    });
+
+    const diffItems = [
+        { itemCode: 'SKU-1', acceptedQuantity: 8, missingQuantity: 2, damagedQuantity: 0, detail: 'Faltan 2' },
+        { itemCode: 'SKU-2', acceptedQuantity: 5, missingQuantity: 0, damagedQuantity: 0 },
+    ];
+
+    function incidentQuery(itemInserts = 0) {
+        const query = vi.fn()
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([foundDispatch])
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([]);
+        for (let i = 0; i < itemInserts; i++) query.mockResolvedValueOnce([]);
+        return query
+            .mockResolvedValueOnce([[{ version: 4, updated_at: UPDATED_AT }], 1])
+            .mockResolvedValueOnce([{ incident_reason_id: 6 }]);
+    }
+
+    it('hands the receipt result and its items to the publication, in the same transaction manager', async () => {
+        const { service, statusPublication } = build();
+        const manager = { query: incidentQuery(diffItems.length) } as unknown as EntityManager;
+
+        await service.apply(
+            { ...data, referenceType: 'purchase_order', referenceId: 'PO-1', result: 'with_differences', items: diffItems as never },
+            { manager },
+        );
+
+        expect(statusPublication.publish).toHaveBeenCalledWith(manager, {
+            dispatchId: 55, status: 'incident', previousStatus: 'picked_up_in_transit',
+            occurredAt: new Date(data.receivedAt),
+            receipt: { result: 'with_differences', items: diffItems },
+        });
+    });
+
+    it('publishes an RMA that ends in incident too (Inventarios), not only supplier pickups', async () => {
+        const { service, statusPublication } = build();
+
+        await service.apply({ ...data, result: 'rejected' }, { manager: { query: incidentQuery() } as unknown as EntityManager });
+
+        expect(statusPublication.publish).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+            dispatchId: 55, status: 'incident', receipt: expect.objectContaining({ result: 'rejected' }),
+        }));
+    });
+
+    it('keeps the outbound record version in the dispatch event so the next publication continues the sequence', async () => {
+        const { service, statusPublication, dispatchEvents } = build();
+        statusPublication.publish.mockResolvedValue(3);
+
+        await service.apply({ ...data, result: 'rejected' }, { manager: { query: incidentQuery() } as unknown as EntityManager });
+
+        expect(dispatchEvents.create.mock.calls[0][0].metadata).toMatchObject({ receiptId: 'RCPT-1', result: 'rejected', outboundRecordVersion: 3 });
+    });
+
+    it('returns the socket events: the status change and, with a difference, the incident alert', async () => {
+        const { service, dispatchIncidents } = build();
+
+        const result = await service.apply(
+            { ...data, result: 'with_differences' },
+            { manager: { query: incidentQuery() } as unknown as EntityManager },
+        );
+
+        const created = dispatchIncidents.create.mock.calls[0][0];
+        expect(result).toMatchObject({
+            status: 'applied',
+            events: {
+                statusChanged: { dispatchId: 55, status: 'incident', previousStatus: 'picked_up_in_transit', version: 4, updatedAt: '2026-11-08T12:00:01.000Z' },
+                incidentReported: {
+                    dispatchId: 55, incidentId: created.id, reasonCode: 'INC-RECEIPT-DIFF',
+                    reportedAt: '2026-11-08T12:00:00.000Z', criticality: 'high',
+                },
+            },
+        });
     });
 
     it('requires the inbound transaction manager', async () => {

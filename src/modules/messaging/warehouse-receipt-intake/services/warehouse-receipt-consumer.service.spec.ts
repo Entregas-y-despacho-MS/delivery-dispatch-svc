@@ -103,12 +103,49 @@ describe('WarehouseReceiptConsumer', () => {
         }));
     });
 
-    it('does not emit anything when the receipt was applied', async () => {
-        receipts.apply.mockResolvedValue({ status: 'applied', dispatchId: 55, newStatus: 'returned_to_warehouse' });
+    const statusChanged = { dispatchId: 55, status: 'returned_to_warehouse', previousStatus: 'picked_up_in_transit', version: 3, updatedAt: '2026-11-08T12:00:01.000Z' };
+    const incidentReported = { dispatchId: 55, incidentId: 'inc-1', reasonCode: 'INC-RECEIPT-DIFF', reportedAt: '2026-11-08T12:00:00.000Z', criticality: 'high' };
+
+    it('emits dispatch.status_changed after commit when the receipt was applied, and no incident alert', async () => {
+        receipts.apply.mockResolvedValue({ status: 'applied', dispatchId: 55, newStatus: 'returned_to_warehouse', events: { statusChanged } });
 
         await send();
 
+        expect(events.emit).toHaveBeenCalledTimes(1);
+        expect(events.emit).toHaveBeenCalledWith('dispatch.status_changed', statusChanged);
+    });
+
+    it('also emits dispatch.incident_reported when the receipt opened an incident', async () => {
+        receipts.apply.mockResolvedValue({
+            status: 'applied', dispatchId: 55, newStatus: 'incident',
+            events: { statusChanged: { ...statusChanged, status: 'incident' }, incidentReported },
+        });
+
+        await send({ result: 'with_differences' });
+
+        expect(events.emit).toHaveBeenCalledWith('dispatch.status_changed', expect.objectContaining({ status: 'incident' }));
+        expect(events.emit).toHaveBeenCalledWith('dispatch.incident_reported', incidentReported);
+    });
+
+    it('emits nothing when the transaction fails: the error reaches the bus and nothing was committed', async () => {
+        transaction.process.mockRejectedValue(new Error('db down'));
+
+        await expect(send()).rejects.toThrow('db down');
+
         expect(events.emit).not.toHaveBeenCalled();
+    });
+
+    it('still emits the incident alert when the status listener throws', async () => {
+        receipts.apply.mockResolvedValue({
+            status: 'applied', dispatchId: 55, newStatus: 'incident',
+            events: { statusChanged: { ...statusChanged, status: 'incident' }, incidentReported },
+        });
+        events.emit.mockImplementationOnce(() => { throw new Error('listener failed'); });
+
+        const result = await send({ result: 'rejected' });
+
+        expect(result).toBe('receipt-committed');
+        expect(events.emit).toHaveBeenCalledWith('dispatch.incident_reported', incidentReported);
     });
 
     it('does not turn a failing listener into a retry', async () => {

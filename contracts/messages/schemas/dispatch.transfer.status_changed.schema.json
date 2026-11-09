@@ -23,11 +23,42 @@
         "previousStatus": { "$ref": "#/$defs/dispatchStatus" },
         "occurredAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
         "recordVersion": { "$ref": "../envelope.schema.json#/$defs/recordVersion" },
-        "reasonCode": { "$ref": "#/$defs/reasonCode" }
+        "reasonCode": { "$ref": "#/$defs/reasonCode" },
+        "result": { "$ref": "#/$defs/receiptResult" },
+        "items": {
+          "description": "Solo junto a `result`: ítems recibidos con diferencias (faltantes o dañados).",
+          "type": "array",
+          "maxItems": 500,
+          "items": { "$ref": "#/$defs/receiptItem" }
+        }
       },
       "oneOf": [
         { "properties": { "salesOrderId": true }, "required": ["salesOrderId"] },
         { "properties": { "purchaseOrderId": true }, "required": ["purchaseOrderId"] }
+      ],
+      "dependentRequired": { "items": ["result"] },
+      "additionalProperties": false
+    },
+    "receiptResult": {
+      "description": "Resultado de la recepción en Almacén (`inventory.receipt.confirmed`) que cerró el traslado.",
+      "type": "string",
+      "enum": ["complete", "with_differences", "rejected"]
+    },
+    "receiptItem": {
+      "description": "Ítem recibido con diferencias, identificado por `itemCode` o por `packageId`, exactamente uno.",
+      "type": "object",
+      "required": ["acceptedQuantity", "missingQuantity", "damagedQuantity"],
+      "properties": {
+        "itemCode": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "packageId": { "type": "integer", "minimum": 1 },
+        "acceptedQuantity": { "type": "integer", "minimum": 0 },
+        "missingQuantity": { "type": "integer", "minimum": 0 },
+        "damagedQuantity": { "type": "integer", "minimum": 0 },
+        "detail": { "type": "string", "maxLength": 500 }
+      },
+      "oneOf": [
+        { "properties": { "itemCode": true }, "required": ["itemCode"] },
+        { "properties": { "packageId": true }, "required": ["packageId"] }
       ],
       "additionalProperties": false
     },
