@@ -22,8 +22,10 @@ jobs:
 
       # Not `npm test`: that chains contracts:check, which reads the message catalog from the
       # sibling delivery-dispatch-docs repo and only exists inside the full erp/ workspace — an
-      # isolated CI checkout doesn't have it. Unit tests alone don't need it.
-      - run: npx vitest run
+      # isolated CI checkout doesn't have it. test/contracts/messages.spec.ts (matched by vitest's
+      # default **/*.spec.ts include, even though it lives under test/) needs that same catalog,
+      # so it's excluded too; every other unit test runs normally.
+      - run: npx vitest run --exclude '**/contracts/**'
 
       # e2e (vitest.config.e2e.ts) needs a real Postgres loaded with the delivery-dispatch-db
       # schema, a sibling private repo — left for a follow-up once that cross-repo checkout is
