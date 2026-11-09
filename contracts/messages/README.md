@@ -75,7 +75,7 @@ Cada fila corresponde a `schemas/<tópico>.schema.json` y `examples/<tópico>.ex
 | `dispatch.shipment.departed` | Inventarios | Un mensaje por pedido: `departedAt`, `driverId` y `packageIds`. |
 | `dispatch.pickup.scheduled` | Compras | `pickupWindow` en UTC; una reprogramación sube `recordVersion`. |
 | `dispatch.sync.requested` | Marketplace / Inventarios | `entityType`: `sales_order` va a Marketplace y `shipment` va a Inventarios. Reintentos cada 15 minutos, máximo 3 por pedido. |
-| `dispatch.transfer.status_changed` | Marketplace / Compras / Inventarios | Exactamente uno de `salesOrderId` o `purchaseOrderId`. Sin datos personales ni `tracking_token`. |
+| `dispatch.transfer.status_changed` | Marketplace / Compras / Inventarios | Exactamente uno de `salesOrderId` o `purchaseOrderId`. `result` e `items` (solo ítems con diferencias) cuando lo origina una recepción de Almacén. Sin datos personales ni `tracking_token`. |
 | `dispatch.transfer.incident_reported` | Marketplace / Compras | `reasonCode` del catálogo `incident_reasons` y `nextStep` decidido por Despacho. |
 
 ## Publicación y entrega
