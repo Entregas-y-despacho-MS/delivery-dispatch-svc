@@ -1,0 +1,173 @@
+// ST-66.2 (ES-66, ES-279) — evaluador de alertas operativas. Cubre el Escenario 1 (incidencia
+// crítica real → alerta visible por GET/socket) y el control de acceso de GET/PATCH /alerts.
+// Las tres evaluaciones periódicas (Escenario 2) y la lógica de deduplicación ya están probadas a
+// nivel unitario (operational-alerts.service.spec.ts, operational-alerts-evaluation.service.spec.ts)
+// — este e2e no vuelve a correr la tarea programada, solo verifica el camino real HTTP+DB.
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { Test } from '@nestjs/testing';
+import { INestApplication, ValidationPipe } from '@nestjs/common';
+import request from 'supertest';
+import { DataSource } from 'typeorm';
+import { v7 as uuidv7 } from 'uuid';
+import { AppModule } from '../src/app.module.js';
+import { AppConfig } from '../src/config/services/app.config.js';
+import { HttpExceptionFilter } from '../src/shared/filters/index.js';
+import { hashPassword } from '../src/shared/utils/crypto.util.js';
+import { withEventPurge } from './helpers/purge-append-only-events.js';
+
+describe('Alertas operativas (e2e, ST-66.2, RF-A19)', () => {
+    let app: INestApplication;
+    let db: DataSource;
+    let prefix: string;
+
+    const run = Date.now().toString(36).toUpperCase();
+    const tag = `ST662-${run}`;
+    const usernames: string[] = [];
+    const batchIds: number[] = [];
+    const dispatchIds: number[] = [];
+    const reasonIds: number[] = [];
+    const alertIds: number[] = [];
+    const tokens: Record<string, string> = {};
+    const users: Record<string, number> = {};
+    let deliveryTypeId: number;
+    let statusIds: Record<string, number> = {};
+    let reasonCode: string;
+
+    const auth = (who: string) => ({ Authorization: `Bearer ${tokens[who]}` });
+    const alertsUrl = (qs = '') => `/${prefix}/alerts${qs ? `?${qs}` : ''}`;
+    const listAlerts = (qs = '', who = 'coordinator') => request(app.getHttpServer()).get(alertsUrl(qs)).set(auth(who));
+    const acknowledge = (id: number, who = 'coordinator') => request(app.getHttpServer()).patch(`/${prefix}/alerts/${id}/acknowledge`).set(auth(who));
+    const reportIncident = (dispatchId: number) => request(app.getHttpServer())
+        .post(`/${prefix}/dispatches/${dispatchId}/incidents`)
+        .set(auth('driver'))
+        .send({ incidentId: uuidv7(), reasonCode, observations: 'The customer was not available at the delivery address.', occurredAt: new Date(Date.now() - 60_000).toISOString(), lat: -16.5, lng: -68.1 });
+
+    async function waitForAlert(dispatchId: number, attempts = 20): Promise<{ id: number; status: string } | undefined> {
+        for (let i = 0; i < attempts; i++) {
+            const [row] = await db.query(`SELECT operational_alert_id AS id, status FROM operational_alerts WHERE dispatch_id = $1 AND kind = 'critical_incident'`, [dispatchId]);
+            if (row) {
+                alertIds.push(row.id);
+                return row;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        return undefined;
+    }
+
+    async function makeDispatch(): Promise<number> {
+        const [{ route_batch_id: batchId }] = await db.query(
+            `INSERT INTO route_batches (driver_id, shift_date, status) VALUES ($1, DATE '2040-02-01' + $2::int, 'in_execution') RETURNING route_batch_id`,
+            [users.driver, batchIds.length],
+        );
+        batchIds.push(batchId);
+        const [{ dispatch_id: id }] = await db.query(
+            `INSERT INTO dispatches (dispatch_type_id, dispatch_status_id, route_batch_id, sequence_order, source_order_ref, tracking_code, delivery_address)
+             VALUES ($1,$2,$3,1,$4,$5,'ST-66.2 incident test address') RETURNING dispatch_id`,
+            [deliveryTypeId, statusIds.in_transit, batchId, `${tag}-${batchId}`, `A${run.slice(-5)}${batchId}`.slice(0, 20)],
+        );
+        dispatchIds.push(id);
+        return id;
+    }
+
+    beforeAll(async () => {
+        const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+        app = moduleRef.createNestApplication();
+        prefix = app.get(AppConfig).apiPrefix;
+        app.setGlobalPrefix(prefix);
+        app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true, transformOptions: { enableImplicitConversion: false } }));
+        app.useGlobalFilters(new HttpExceptionFilter());
+        await app.init();
+        db = moduleRef.get(DataSource);
+
+        const passwordHash = await hashPassword('E2eTest1234');
+        for (const who of ['driver', 'coordinator', 'supervisor']) {
+            const [{ role_id: roleId }] = await db.query('SELECT role_id FROM roles WHERE name = $1', [who]);
+            const username = `e2e_st662_${who}_${run}`;
+            usernames.push(username);
+            const [{ user_id: id }] = await db.query(
+                `INSERT INTO users (role_id, full_name, username, password_hash, requires_pwd_change) VALUES ($1,$2,$3,$4,false) RETURNING user_id`,
+                [roleId, `ST-66.2 ${who}`, username, passwordHash],
+            );
+            users[who] = id;
+            const login = await request(app.getHttpServer()).post(`/${prefix}/auth/login`).send({ username, password: 'E2eTest1234' });
+            expect(login.status).toBe(200);
+            tokens[who] = login.body.accessToken;
+        }
+
+        const rows = await db.query('SELECT name, dispatch_status_id FROM dispatch_statuses');
+        statusIds = Object.fromEntries(rows.map((r: { name: string; dispatch_status_id: number }) => [r.name, r.dispatch_status_id]));
+        [{ dispatch_type_id: deliveryTypeId }] = await db.query(`SELECT dispatch_type_id FROM dispatch_types WHERE name = 'delivery'`);
+
+        reasonCode = `${tag}-ACCIDENT`;
+        const [{ incident_reason_id: reasonId }] = await db.query(
+            `INSERT INTO incident_reasons (code, name, requires_evidence, counts_as_attempt, active) VALUES ($1,$2,false,false,true) RETURNING incident_reason_id`,
+            [reasonCode, `Accidente ${tag}`],
+        );
+        reasonIds.push(reasonId);
+    }, 30000);
+
+    afterAll(async () => {
+        if (db?.isInitialized) {
+            await withEventPurge(db, { dispatchRefs: [`${tag}%`], routeBatchIds: batchIds, userNames: [`e2e_st662_%_${run}`] }, async (manager) => {
+                await manager.query('DELETE FROM operational_alerts WHERE operational_alert_id = ANY($1::int[])', [alertIds]);
+                await manager.query('DELETE FROM dispatch_incidents WHERE dispatch_id = ANY($1::int[])', [dispatchIds]);
+                await manager.query('DELETE FROM dispatches WHERE source_order_ref LIKE $1', [`${tag}%`]);
+                await manager.query('DELETE FROM route_batches WHERE route_batch_id = ANY($1::int[])', [batchIds]);
+                await manager.query('DELETE FROM incident_reasons WHERE incident_reason_id = ANY($1::int[])', [reasonIds]);
+                await manager.query('DELETE FROM users WHERE username LIKE $1', [`e2e_st662_%_${run}`]);
+            });
+        }
+        await app?.close();
+    });
+
+    it('a reported incident raises a critical_incident alert, visible via GET /alerts?status=open', async () => {
+        const dispatchId = await makeDispatch();
+
+        const report = await reportIncident(dispatchId);
+        expect(report.status).toBe(201);
+
+        const alert = await waitForAlert(dispatchId);
+        expect(alert).toBeDefined();
+        expect(alert!.status).toBe('open');
+
+        const list = await listAlerts('status=open');
+        expect(list.status).toBe(200);
+        expect(list.body.data).toContainEqual(expect.objectContaining({ id: alert!.id, kind: 'critical_incident', severity: 'critical', dispatchId, status: 'open' }));
+    });
+
+    it('a supervisor can acknowledge an open alert; a second acknowledge answers 409; a bad id answers 404', async () => {
+        const dispatchId = await makeDispatch();
+        await reportIncident(dispatchId);
+        const alert = await waitForAlert(dispatchId);
+        expect(alert).toBeDefined();
+
+        const ack = await acknowledge(alert!.id, 'supervisor');
+        expect(ack.status).toBe(200);
+        expect(ack.body).toMatchObject({ id: alert!.id, status: 'acknowledged', acknowledgedBy: users.supervisor });
+        expect(ack.body.acknowledgedAt).not.toBeNull();
+
+        const again = await acknowledge(alert!.id, 'supervisor');
+        expect(again.status).toBe(409);
+        expect(again.body.error).toBe('OPERATIONAL_ALERT_ALREADY_ACKNOWLEDGED');
+
+        const missing = await acknowledge(999_999_999, 'supervisor');
+        expect(missing.status).toBe(404);
+        expect(missing.body.error).toBe('OPERATIONAL_ALERT_NOT_FOUND');
+
+        const list = await listAlerts('status=open');
+        expect(list.body.data.map((row: { id: number }) => row.id)).not.toContain(alert!.id);
+    });
+
+    it('a driver cannot list or acknowledge alerts (403)', async () => {
+        const list = await listAlerts('status=open', 'driver');
+        expect(list.status).toBe(403);
+
+        const ack = await acknowledge(1, 'driver');
+        expect(ack.status).toBe(403);
+    });
+
+    it('rejects an unknown status filter with 400', async () => {
+        const response = await listAlerts('status=not_a_status');
+        expect(response.status).toBe(400);
+    });
+});
