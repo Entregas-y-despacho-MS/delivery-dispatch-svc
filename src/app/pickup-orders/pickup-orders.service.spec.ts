@@ -23,7 +23,7 @@ const row = {
     id: 55, tracking_code: 'DSP-2026-00042', source_order_ref: 'MANUAL-DSP-2026-00042', origin: 'manual' as const, status: 'pickup_scheduled',
     contact_name: 'María', contact_phone: '+59171234567', contact_email: null, address: 'Calle 21', reference: null,
     latitude: '-16.540000', longitude: '-68.080000', return_reason: 'Falla', package_contents: '1 notebook', estimated_boxes: null,
-    preferred_pickup_date: '2026-11-06', warehouse_id: 3, warehouse_code: 'WH-LPZ-01', warehouse_name: 'Central', created_at: NOW,
+    preferred_pickup_date: '2026-11-06', warehouse_id: 3, warehouse_code: 'WH-LPZ-01', warehouse_name: 'Central', created_at: NOW, receipt_result: null,
 };
 
 function build(overrides: { findRows?: unknown[]; emit?: () => void } = {}) {
@@ -117,7 +117,7 @@ describe('PickupOrdersService.findAll', () => {
 
         await service.findAll({ page: 1, limit: 10, origin });
 
-        const where = String(query.mock.calls[1][0]).split('WHERE')[1] as string;
+        const where = String(query.mock.calls[1][0]).split('WHERE dt.name')[1] as string;
         expect(where).toContain(expected);
         if (absent) expect(where).not.toContain(absent);
     });
@@ -142,6 +142,16 @@ describe('PickupOrdersService.findOne', () => {
         const { service } = build({ findRows: [] });
 
         await expect(service.findOne(99)).rejects.toBeInstanceOf(PickupOrderNotFoundException);
+    });
+});
+
+describe('toPickupOrderDto receiptResult', () => {
+    it.each(['complete', 'with_differences', 'rejected'] as const)('passes a %s receipt through', (result) => {
+        expect(toPickupOrderDto({ ...row, receipt_result: result }).receiptResult).toBe(result);
+    });
+
+    it('is null when the order has no receipt', () => {
+        expect(toPickupOrderDto({ ...row, receipt_result: null }).receiptResult).toBeNull();
     });
 });
 
