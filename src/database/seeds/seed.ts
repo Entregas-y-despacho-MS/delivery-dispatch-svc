@@ -102,10 +102,10 @@ const DEMO_USERS: readonly DemoUserSpec[] = [
 ] as const;
 
 /**
- * True unless NODE_ENV=production without SEED_DEMO_USERS=true — the demo accounts below (ST-59.1,
- * RF-A12, and their coordinator/driver siblings) use a password hardcoded in this file, so a real
- * deployment must opt in explicitly instead of getting them by default. The Dockerfile's CMD runs
- * this seed on every boot, production included, so this check is what keeps them out of it.
+ * True unless NODE_ENV=production without SEED_DEMO_USERS=true — the demo accounts below (the
+ * Supervisor one and its coordinator/driver siblings) use a password hardcoded in this file, so a
+ * real deployment must opt in explicitly instead of getting them by default. The Dockerfile's CMD
+ * runs this seed on every boot, production included, so this check is what keeps them out of it.
  */
 function demoUsersEnabled(): boolean {
     return process.env.NODE_ENV !== EnvironmentEnum.PRODUCTION || process.env.SEED_DEMO_USERS === 'true';
