@@ -12,10 +12,11 @@ export type ChangeSource = 'marketplace' | 'inventory' | 'procurement';
 export interface ChangeRequiresAttention {
   /** Present for an existing dispatch; absent while the sales order is still incomplete. */
   dispatchId?: number;
-  /** Present when attention is needed before a dispatch has been created. */
+  /** Present when attention is needed before a dispatch has been created, or when a reference never resolved to one at all (`orphan_receipt`). */
   salesOrderId?: string;
   source: ChangeSource;
-  changeType: 'order_changed' | 'order_cancelled' | 'incomplete_order';
+  /** `orphan_receipt` (ST-240.2): a warehouse receipt whose reference matched no dispatch, or whose dispatch was not `picked_up_in_transit`. */
+  changeType: 'order_changed' | 'order_cancelled' | 'incomplete_order' | 'orphan_receipt';
   /** ISO-8601 UTC. */
   receivedAt: string;
 }
