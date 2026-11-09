@@ -52,10 +52,10 @@ function build(worlds: World[], windowMinutes = 720) {
                 return [{ last_version: Math.max(0, ...sent.map((e) => e.metadata.recordVersion)) }];
             }
             if (sql.includes('UPDATE dispatches')) {
-                if (!w || w.firmedAt) return [];
+                if (!w || w.firmedAt) return [[], 0];
                 w.firmedAt = params[1];
                 w.confirmation = 'confirmed';
-                return [{ dispatch_id: w.id }];
+                return [[{ dispatch_id: w.id }], 1];
             }
             if (sql.includes('INSERT INTO dispatch_events')) {
                 const type = /'(promise_firmed|preparation_order_reissued)'/.exec(sql)![1];

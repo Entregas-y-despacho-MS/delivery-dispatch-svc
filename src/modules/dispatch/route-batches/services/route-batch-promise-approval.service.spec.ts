@@ -16,6 +16,7 @@ function setup(options?: { reviewerId?: number | null; version?: number; dispatc
     const manager = { query: vi.fn(async (sql: string) => {
         if (sql.includes('FROM route_batches')) return [{ id: 7, version: options?.version ?? 1, status: 'provisional', reviewer_user_id: options?.reviewerId ?? 9, vehicle_id: 4 }];
         if (sql.includes('FROM dispatches d')) return rows;
+        if (sql.includes('UPDATE dispatches')) return [[{ dispatch_id: 21 }], 1];
         return [];
     }) };
     const dataSource = { transaction: vi.fn((work: (manager: any) => Promise<any>) => work(manager)) };

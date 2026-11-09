@@ -123,6 +123,102 @@ describe('DispatchEventsSocketListener', () => {
             }
         });
 
+        it('a point that arrives after the window cancels the pending flush, so the older point is never emitted after it', async () => {
+            vi.useFakeTimers();
+            try {
+                const socket = { emitToRoom: vi.fn() };
+                const dataSource = { query: vi.fn(async () => [{ route_batch_id: 93, driver_id: 45, vehicle_id: 5 }]) };
+                const listener = new DispatchEventsSocketListener(socket as never, dataSource as never);
+
+                await listener.forwardLocationUpdated({ ...event, latitude: -17.700, recordedAt: '2026-10-19T12:00:00.000Z' }); // t=0 — emits
+                vi.advanceTimersByTime(1000);
+                await listener.forwardLocationUpdated({ ...event, latitude: -17.701, recordedAt: '2026-10-19T12:00:01.000Z' }); // t=1s — pending, timer due at t=2s
+                // The timer is late (a busy event loop) and a newer point arrives once the window has already elapsed.
+                vi.setSystemTime(Date.now() + 1500); // t=2.5s without letting the timer run
+                await listener.forwardLocationUpdated({ ...event, latitude: -17.702, recordedAt: '2026-10-19T12:00:02.500Z' });
+
+                expect(socket.emitToRoom).toHaveBeenCalledTimes(2);
+                expect(socket.emitToRoom).toHaveBeenLastCalledWith('dispatch-board', 'dispatch.location.updated', expect.objectContaining({ latitude: -17.702 }));
+
+                await vi.advanceTimersByTimeAsync(5000); // the old timer must be gone: nothing else is emitted
+                expect(socket.emitToRoom).toHaveBeenCalledTimes(2);
+                listener.onModuleDestroy();
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it('an older point never replaces a newer pending one, even when its lookup finishes last', async () => {
+            vi.useFakeTimers();
+            try {
+                const socket = { emitToRoom: vi.fn() };
+                const dataSource = { query: vi.fn(async () => [{ route_batch_id: 93, driver_id: 45, vehicle_id: 5 }]) };
+                const listener = new DispatchEventsSocketListener(socket as never, dataSource as never);
+
+                await listener.forwardLocationUpdated({ ...event, latitude: -17.700, recordedAt: '2026-10-19T12:00:00.000Z' }); // t=0 — emits
+                vi.advanceTimersByTime(500);
+                await listener.forwardLocationUpdated({ ...event, latitude: -17.703, recordedAt: '2026-10-19T12:00:00.800Z' }); // newer, pending
+                await listener.forwardLocationUpdated({ ...event, latitude: -17.701, recordedAt: '2026-10-19T12:00:00.400Z' }); // older, arrives last
+
+                await vi.advanceTimersByTimeAsync(2000);
+
+                expect(socket.emitToRoom).toHaveBeenCalledTimes(2);
+                expect(socket.emitToRoom).toHaveBeenLastCalledWith('dispatch-board', 'dispatch.location.updated', expect.objectContaining({ latitude: -17.703 }));
+                listener.onModuleDestroy();
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it('drops a point older than the one the board already shows', async () => {
+            const socket = { emitToRoom: vi.fn() };
+            const dataSource = { query: vi.fn(async () => [{ route_batch_id: 93, driver_id: 45, vehicle_id: 5 }]) };
+            const listener = new DispatchEventsSocketListener(socket as never, dataSource as never);
+
+            await listener.forwardLocationUpdated({ ...event, recordedAt: '2026-10-19T12:00:05.000Z' });
+            await listener.forwardLocationUpdated({ ...event, recordedAt: '2026-10-19T12:00:01.000Z' });
+
+            expect(socket.emitToRoom).toHaveBeenCalledTimes(1);
+            listener.onModuleDestroy();
+        });
+
+        it('a point stamped in the future does not freeze the board: later points of the real clock still go out', async () => {
+            vi.useFakeTimers();
+            try {
+                const socket = { emitToRoom: vi.fn() };
+                const dataSource = { query: vi.fn(async () => [{ route_batch_id: 93, driver_id: 45, vehicle_id: 5 }]) };
+                const listener = new DispatchEventsSocketListener(socket as never, dataSource as never);
+
+                await listener.forwardLocationUpdated({ ...event, recordedAt: new Date(Date.now() + 120_000).toISOString() }); // device clock 2 min ahead
+                vi.advanceTimersByTime(2500);
+                await listener.forwardLocationUpdated({ ...event, latitude: -17.9, recordedAt: new Date().toISOString() });
+
+                expect(socket.emitToRoom).toHaveBeenCalledTimes(2);
+                expect(socket.emitToRoom).toHaveBeenLastCalledWith('dispatch-board', 'dispatch.location.updated', expect.objectContaining({ latitude: -17.9 }));
+                listener.onModuleDestroy();
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it('a recordedAt that is not a date does not switch the ordering off for that driver', async () => {
+            vi.useFakeTimers();
+            try {
+                const socket = { emitToRoom: vi.fn() };
+                const dataSource = { query: vi.fn(async () => [{ route_batch_id: 93, driver_id: 45, vehicle_id: 5 }]) };
+                const listener = new DispatchEventsSocketListener(socket as never, dataSource as never);
+
+                await listener.forwardLocationUpdated({ ...event, recordedAt: 'not-a-date' });
+                vi.advanceTimersByTime(2500);
+                await listener.forwardLocationUpdated({ ...event, recordedAt: new Date(Date.now() - 60_000).toISOString() }); // older than "now": dropped
+
+                expect(socket.emitToRoom).toHaveBeenCalledTimes(1);
+                listener.onModuleDestroy();
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
         it('onModuleDestroy clears a pending flush so it never fires after teardown', async () => {
             vi.useFakeTimers();
             try {

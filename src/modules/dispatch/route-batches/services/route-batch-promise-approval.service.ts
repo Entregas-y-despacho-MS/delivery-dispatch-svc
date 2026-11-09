@@ -279,7 +279,8 @@ export class RouteBatchPromiseApprovalService {
 
     private async recordSuccessfulNotification(plan: ApprovalPlan, dispatch: DispatchRow): Promise<void> {
         await this.dataSource.transaction(async (manager) => {
-            const updated: { dispatch_id: number }[] = await manager.query(
+            // TypeORM answers an UPDATE ... RETURNING with `[rows, affectedCount]`, not with the rows.
+            const [updated]: [{ dispatch_id: number }[], number] = await manager.query(
                 `UPDATE dispatches
                     SET promise_notified_at = COALESCE(promise_notified_at, NOW()), updated_at = NOW()
                   WHERE dispatch_id = $1 AND route_batch_id = $2 AND version = $3

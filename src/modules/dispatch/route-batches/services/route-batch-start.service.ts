@@ -241,7 +241,8 @@ export class RouteBatchStartService {
       );
 
     const startedAt = new Date();
-    const updatedBatch: { updated_at: Date }[] = await manager.query(
+    // TypeORM answers an UPDATE ... RETURNING with `[rows, affectedCount]`, not with the rows.
+    const [updatedBatch]: [{ updated_at: Date }[], number] = await manager.query(
       `UPDATE route_batches SET status = $2, updated_at = $3
         WHERE route_batch_id = $1 AND status = $4 RETURNING updated_at`,
       [
@@ -259,7 +260,7 @@ export class RouteBatchStartService {
 
     const dispatchEvents: DispatchStatusChangedEvent[] = [];
     for (const dispatch of departingDispatches) {
-      const updated: { dispatch_id: number }[] = await manager.query(
+      const [updated]: [{ dispatch_id: number }[], number] = await manager.query(
         `UPDATE dispatches SET dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $2), updated_at = $3
           WHERE dispatch_id = $1 AND route_batch_id = $4
             AND dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $5)

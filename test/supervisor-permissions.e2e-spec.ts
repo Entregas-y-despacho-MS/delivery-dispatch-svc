@@ -7,8 +7,7 @@
 //   - lo reservado responde 403 INSUFFICIENT_PERMISSIONS.
 //
 // Las escrituras permitidas se prueban con un id inexistente y un cuerpo vacío, así que no modifican
-// datos. Los endpoints que traerán ST-60.1, ST-61.1, ST-62.1, ST-63.1, y ST-64.1 se agregan
-// a esta matriz cuando existan (ver «Pendiente» en el README del back).
+// datos. Un endpoint nuevo del Supervisor se agrega aquí y a la tabla del README del back.
 //
 // Levanta el AppModule real contra una base real. El Supervisor se crea por DataSource, inicia sesión
 // de verdad y se borra en afterAll (seguro de re-correr contra una base compartida).
@@ -53,6 +52,10 @@ const ALLOWED_LISTS: Route[] = [
     { method: 'get', path: '/settings/alert-thresholds' },
     // ST-61.1: KPIs de flota (Supervisor y Coordinador leen).
     { method: 'get', path: '/fleet/kpis?period=week' },
+    // ST-60.1: posiciones en vivo de la flota (Supervisor y Coordinador leen).
+    { method: 'get', path: '/fleet/live-positions' },
+    // ST-241.3: panel «Excluidos por cotejo» (Supervisor y Coordinador leen).
+    { method: 'get', path: '/route-batches/cotejo-exclusions' },
     // ST-81.2: la lista de órdenes de recojo es de lectura para el Supervisor.
     { method: 'get', path: '/pickup-orders' },
 ];
@@ -79,6 +82,11 @@ const ALLOWED_PASS: Route[] = [
     { method: 'delete', path: `/vehicles/${NO_ID}` },
     { method: 'post', path: '/vehicle-maintenances', body: {} },
     { method: 'patch', path: `/vehicle-maintenances/${NO_ID}/status`, body: {} },
+    // ST-62.1: cambiar el estado operativo de un vehículo (Supervisor y Coordinador).
+    { method: 'patch', path: `/vehicles/${NO_ID}/status`, body: {} },
+    // ST-63.1: reasignar paradas entre lotes en ejecución y listar los lotes destino.
+    { method: 'get', path: `/route-batches/${NO_ID}/reassignment-targets` },
+    { method: 'post', path: `/route-batches/${NO_ID}/reassign`, body: {} },
     { method: 'post', path: '/vehicle-incident-types', body: {} },
     { method: 'put', path: `/vehicle-incident-types/${NO_ID}`, body: {} },
 ];
@@ -98,6 +106,10 @@ const COORDINATOR_ONLY: Route[] = [
     { method: 'post', path: '/pickup-orders', body: {} },
     { method: 'patch', path: `/pickup-orders/${NO_ID}/cancel`, body: {} },
     { method: 'post', path: `/dispatches/change-requests/${NO_ID}/tracking-link`, body: {} },
+    // ST-241.3: marcar resuelta una exclusión por cotejo es solo del Coordinador.
+    { method: 'post', path: `/dispatches/${NO_ID}/cotejo-resolved`, body: {} },
+    // ST-54.2: el reporte de cumplimiento (SLA) es solo del Coordinador.
+    { method: 'get', path: '/reports/sla' },
     { method: 'post', path: '/planning/generate', body: {} },
     { method: 'post', path: '/planning/cutoff', body: {} },
     { method: 'get', path: '/service-levels' },

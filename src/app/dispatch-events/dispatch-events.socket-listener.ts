@@ -17,6 +17,16 @@ import { OPERATIONAL_ALERT_RAISED_EVENT, type OperationalAlertRaisedEvent } from
 const ROLE_ROOMS = ['coordinators', 'supervisors'];
 const LOCATION_EMIT_THROTTLE_MS = 2000;
 
+/**
+ * Point time used to order points. The tracking endpoint tolerates a few minutes of device clock drift into the future,
+ * and a value that is not a date must not switch the ordering off, so both are pinned to "now": a skewed clock can never
+ * make every later, correct point look older than the last one.
+ */
+const orderingTime = (recordedAt: string): number => {
+    const parsed = Date.parse(recordedAt);
+    return Number.isFinite(parsed) ? Math.min(parsed, Date.now()) : Date.now();
+};
+
 type EnrichedLocationPayload = DispatchLocationUpdatedEvent & { driverId: number; vehicleId: number | null; routeBatchId: number | null };
 
 @Injectable()
@@ -31,6 +41,7 @@ export class DispatchEventsSocketListener implements OnModuleDestroy {
     // per-instance is enough here — it only throttles a redraw rate, a missed window after a restart
     // is harmless.
     private readonly lastLocationEmitAt = new Map<number, number>();
+    private readonly lastLocationRecordedAt = new Map<number, number>();
     private readonly pendingLocation = new Map<number, { payload: EnrichedLocationPayload; timer: NodeJS.Timeout }>();
 
     constructor(
@@ -120,9 +131,22 @@ export class DispatchEventsSocketListener implements OnModuleDestroy {
             routeBatchId: target.route_batch_id,
         };
 
+        // The lookup above is async, so two points of one driver can get here in the opposite order they were
+        // reported. A point older than the one already on the board is dropped: the map must never step back.
+        const recordedAt = orderingTime(event.recordedAt);
+        const lastRecorded = this.lastLocationRecordedAt.get(driverId);
+        if (lastRecorded !== undefined && recordedAt < lastRecorded) return;
+
         const lastEmit = this.lastLocationEmitAt.get(driverId);
         const elapsed = lastEmit === undefined ? Infinity : Date.now() - lastEmit;
         if (elapsed >= LOCATION_EMIT_THROTTLE_MS) {
+            // The window is open: this point goes out now and supersedes whatever was waiting. If a late timer
+            // were left alive it would emit the older point right after this one and the map would step back.
+            const stale = this.pendingLocation.get(driverId);
+            if (stale) {
+                clearTimeout(stale.timer);
+                this.pendingLocation.delete(driverId);
+            }
             this.emitLocation(driverId, payload);
             return;
         }
@@ -131,7 +155,8 @@ export class DispatchEventsSocketListener implements OnModuleDestroy {
         // the timer already running will flush it, no new timer needed.
         const pending = this.pendingLocation.get(driverId);
         if (pending) {
-            pending.payload = payload;
+            // Never replace a newer pending point with an older one.
+            if (!(recordedAt < orderingTime(pending.payload.recordedAt))) pending.payload = payload;
             return;
         }
         const timer = setTimeout(() => {
@@ -144,6 +169,7 @@ export class DispatchEventsSocketListener implements OnModuleDestroy {
 
     private emitLocation(driverId: number, payload: EnrichedLocationPayload): void {
         this.lastLocationEmitAt.set(driverId, Date.now());
+        this.lastLocationRecordedAt.set(driverId, orderingTime(payload.recordedAt));
         this.socket.emitToRoom('dispatch-board', DISPATCH_LOCATION_UPDATED_EVENT, payload);
     }
 
@@ -151,6 +177,8 @@ export class DispatchEventsSocketListener implements OnModuleDestroy {
     onModuleDestroy(): void {
         for (const { timer } of this.pendingLocation.values()) clearTimeout(timer);
         this.pendingLocation.clear();
+        this.lastLocationEmitAt.clear();
+        this.lastLocationRecordedAt.clear();
     }
 
     private async forwardDispatchEvent(

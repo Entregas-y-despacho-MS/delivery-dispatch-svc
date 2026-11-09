@@ -4,7 +4,7 @@ import { RouteBatchApprovalConflictException } from '../exceptions/route-batch-a
 import { RouteBatchFinalApprovalService } from './route-batch-final-approval.service.js';
 import { RouteBatchResourcesService } from './route-batch-resources.service.js';
 
-function createHarness(options: { batchVersion?: number; batchStatus?: string; dispatches?: any[]; packageCount?: number } = {}) {
+function createHarness(options: { batchVersion?: number; batchStatus?: string; dispatches?: any[]; packageCount?: number; emptyUpdate?: 'batch' | 'dispatch' } = {}) {
   const batch = {
     id: 12,
     version: options.batchVersion ?? 4,
@@ -37,8 +37,8 @@ function createHarness(options: { batchVersion?: number; batchStatus?: string; d
       if (sql.includes('FROM vehicles v JOIN vehicle_statuses')) return [{ id: batch.vehicle_id }];
       if (sql.includes('FROM users u JOIN roles')) return [{ id: batch.proposed_driver_id }];
       if (sql.includes('route_batch_id <> $1')) return [];
-      if (sql.includes('UPDATE route_batches')) return [{ version: batch.version + 1 }];
-      if (sql.includes('UPDATE dispatches')) return [{ dispatch_id: dispatches[0]?.id }];
+      if (sql.includes('UPDATE route_batches')) return options.emptyUpdate === 'batch' ? [[], 0] : [[{ route_batch_id: batch.id }], 1];
+      if (sql.includes('UPDATE dispatches')) return options.emptyUpdate === 'dispatch' ? [[], 0] : [[{ dispatch_id: dispatches[0]?.id }], 1];
       return [];
     }),
   };
@@ -166,6 +166,26 @@ describe('RouteBatchFinalApprovalService', () => {
 
     await expect(service.approve(12, { version: 4, dispatches: [{ dispatchId: 77, version: 2 }, { dispatchId: 90, version: 1 }] }, 9))
       .rejects.toMatchObject({ response: { error: 'DISPATCH_PACKAGES_REQUIRED', message: expect.stringContaining('77') } });
+  });
+
+  it('answers ROUTE_BATCH_VERSION_CONFLICT and rolls back when the guarded batch UPDATE touches no row', async () => {
+    const { service, runner, events } = createHarness({ emptyUpdate: 'batch' });
+
+    await expect(service.approve(12, { version: 4, dispatches: [{ dispatchId: 77, version: 2 }] }, 9))
+      .rejects.toMatchObject({ response: { error: 'ROUTE_BATCH_VERSION_CONFLICT' } });
+
+    expect(runner.rollbackTransaction).toHaveBeenCalledOnce();
+    expect(events.emit).not.toHaveBeenCalled();
+  });
+
+  it('answers DISPATCH_VERSION_CONFLICT and rolls back when the guarded dispatch UPDATE touches no row', async () => {
+    const { service, runner, events } = createHarness({ emptyUpdate: 'dispatch' });
+
+    await expect(service.approve(12, { version: 4, dispatches: [{ dispatchId: 77, version: 2 }] }, 9))
+      .rejects.toMatchObject({ response: { error: 'DISPATCH_VERSION_CONFLICT' } });
+
+    expect(runner.rollbackTransaction).toHaveBeenCalledOnce();
+    expect(events.emit).not.toHaveBeenCalled();
   });
 
   it('rejects an unvalidated batch before changing assignments', async () => {
