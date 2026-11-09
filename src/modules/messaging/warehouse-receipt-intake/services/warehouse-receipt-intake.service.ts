@@ -191,11 +191,19 @@ export class WarehouseReceiptIntakeService {
         }
     }
 
-    /** Updates only notes/record_version/items of an already-`applied` receipt; never touches status or dispatch_id. */
+    /**
+     * Updates notes/result/received_at/record_version/items of an already-`applied` receipt. Never
+     * touches status, dispatch_id, reference_type or reference_id — the dispatch link and its status
+     * stay exactly as they are, even if the corrected `result` would otherwise imply a different
+     * dispatch status. Whether to transition the dispatch given this correction is a decision for a
+     * person acting on the `receipt_correction` attention event, never an automatic transition here.
+     */
     private async updateReceiptInformational(manager: EntityManager, data: InventoryReceiptConfirmedData): Promise<void> {
         await manager.query(
-            `UPDATE warehouse_receipts SET record_version = $2, notes = $3, updated_at = NOW() WHERE receipt_id = $1`,
-            [data.receiptId, data.recordVersion, data.notes ?? null],
+            `UPDATE warehouse_receipts
+                SET record_version = $2, notes = $3, result = $4, received_at = $5, updated_at = NOW()
+              WHERE receipt_id = $1`,
+            [data.receiptId, data.recordVersion, data.notes ?? null, data.result, new Date(data.receivedAt)],
         );
         await manager.query(`DELETE FROM warehouse_receipt_items WHERE receipt_id = $1`, [data.receiptId]);
         for (const item of data.items ?? []) {

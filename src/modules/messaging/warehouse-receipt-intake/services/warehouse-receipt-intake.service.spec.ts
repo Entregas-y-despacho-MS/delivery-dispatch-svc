@@ -74,13 +74,59 @@ describe('WarehouseReceiptIntakeService.apply', () => {
             .mockResolvedValueOnce([]) // UPDATE warehouse_receipts (informational)
             .mockResolvedValueOnce([]); // DELETE items
 
-        const result = await service.apply({ ...data, recordVersion: 2, notes: 'Corrección: faltaba 1 caja' }, { manager: { query } as unknown as EntityManager });
+        const result = await service.apply(
+            { ...data, recordVersion: 2, notes: 'Corrección: faltaba 1 caja', result: 'complete' },
+            { manager: { query } as unknown as EntityManager },
+        );
 
         expect(result).toEqual({ status: 'correction', dispatchId: 55 });
         expect(query).not.toHaveBeenCalledWith(expect.stringContaining('UPDATE dispatches'), expect.anything());
         expect(query).not.toHaveBeenCalledWith(expect.stringContaining('FROM dispatches'), expect.anything());
         const update = query.mock.calls.find(([sql]: [string]) => sql.includes('UPDATE warehouse_receipts'));
-        expect(update[1]).toEqual(['RCPT-1', 2, 'Corrección: faltaba 1 caja']);
+        expect(update[1]).toEqual(['RCPT-1', 2, 'Corrección: faltaba 1 caja', 'complete', new Date(data.receivedAt)]);
+    });
+
+    it('replaces the items of an already-applied receipt on a correction, delete before insert', async () => {
+        const { service } = build();
+        const query = vi.fn()
+            .mockResolvedValueOnce([{ record_version: 1, status: 'applied', dispatch_id: 55 }])
+            .mockResolvedValueOnce([]) // UPDATE warehouse_receipts
+            .mockResolvedValueOnce([]) // DELETE items
+            .mockResolvedValueOnce([]) // INSERT item 1
+            .mockResolvedValueOnce([]); // INSERT item 2
+
+        await service.apply({
+            ...data, recordVersion: 2, result: 'with_differences',
+            items: [
+                { packageId: 10, acceptedQuantity: 1, missingQuantity: 0, damagedQuantity: 0 },
+                { itemCode: 'SKU-1', acceptedQuantity: 2, missingQuantity: 1, damagedQuantity: 0 },
+            ],
+        }, { manager: { query } as unknown as EntityManager });
+
+        const calls = query.mock.calls;
+        const deleteIndex = calls.findIndex(([sql]: [string]) => sql.includes('DELETE FROM warehouse_receipt_items'));
+        const insertIndexes = calls
+            .map(([sql]: [string], i: number) => (sql.includes('INSERT INTO warehouse_receipt_items') ? i : -1))
+            .filter((i: number) => i !== -1);
+
+        expect(calls[deleteIndex][1]).toEqual(['RCPT-1']);
+        expect(insertIndexes).toHaveLength(2);
+        expect(insertIndexes.every((i: number) => i > deleteIndex)).toBe(true);
+        expect(calls[insertIndexes[0]][1]).toEqual(['RCPT-1', 10, null, 1, 0, 0, null]);
+        expect(calls[insertIndexes[1]][1]).toEqual(['RCPT-1', null, 'SKU-1', 2, 1, 0, null]);
+    });
+
+    it('a correction with no items just deletes the old ones, without inserting anything', async () => {
+        const { service } = build();
+        const query = vi.fn()
+            .mockResolvedValueOnce([{ record_version: 1, status: 'applied', dispatch_id: 55 }])
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([]);
+
+        await service.apply({ ...data, recordVersion: 2, items: undefined }, { manager: { query } as unknown as EntityManager });
+
+        expect(query).toHaveBeenCalledTimes(3);
+        expect(query.mock.calls[2][0]).toContain('DELETE FROM warehouse_receipt_items');
     });
 
     it('marks the receipt orphan when the reference matches no dispatch', async () => {
@@ -143,6 +189,39 @@ describe('WarehouseReceiptIntakeService.apply', () => {
             expect.objectContaining({ dispatchId: 55, detail: 'picked_up_in_transit -> returned_to_warehouse' }),
             { manager: expect.anything() },
         );
+        expect(batchClosing.closeIfComplete).not.toHaveBeenCalled();
+    });
+
+    it('does not affect the receipt when the batch cannot close yet', async () => {
+        const { service, batchClosing } = build();
+        const withBatch = { ...foundDispatch, route_batch_id: 7 };
+        const query = vi.fn()
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([withBatch])
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([{ version: 4 }]);
+        batchClosing.closeIfComplete.mockResolvedValue(false);
+
+        const result = await service.apply(data, { manager: { query } as unknown as EntityManager });
+
+        expect(result).toEqual({ status: 'applied', dispatchId: 55, newStatus: 'returned_to_warehouse' });
+        expect(batchClosing.closeIfComplete).toHaveBeenCalledWith(expect.anything(), 7, {
+            dispatchId: 55, dispatchStatus: 'returned_to_warehouse', cause: 'warehouse_receipt_confirmed',
+        });
+    });
+
+    it('never calls closeIfComplete when the dispatch has no batch', async () => {
+        const { service, batchClosing } = build();
+        const query = vi.fn()
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([foundDispatch]) // route_batch_id: null
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([{ version: 4 }]);
+
+        await service.apply(data, { manager: { query } as unknown as EntityManager });
+
         expect(batchClosing.closeIfComplete).not.toHaveBeenCalled();
     });
 
