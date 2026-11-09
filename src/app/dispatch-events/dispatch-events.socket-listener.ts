@@ -12,6 +12,7 @@ import { ROUTE_VEHICLE_CHANGED_EVENT, type RouteVehicleChangedEvent } from '../.
 import { DELIVERY_ZONE_CREATED_EVENT, type DeliveryZoneCreatedEvent } from '../../modules/catalog/delivery-zones/events/delivery-zone-created.event.js';
 import { DISPATCH_LOCATION_UPDATED_EVENT, type DispatchLocationUpdatedEvent } from '../tracking/events/dispatch-location-updated.event.js';
 import { ROUTE_BATCH_REASSIGNED_EVENT, type RouteBatchReassignedEvent } from '../../modules/dispatch/route-batches/events/route-batch-reassigned.event.js';
+import { OPERATIONAL_ALERT_RAISED_EVENT, type OperationalAlertRaisedEvent } from '../../modules/operational-alerts/events/operational-alert-raised.event.js';
 
 const ROLE_ROOMS = ['coordinators', 'supervisors'];
 const LOCATION_EMIT_THROTTLE_MS = 2000;
@@ -83,6 +84,17 @@ export class DispatchEventsSocketListener implements OnModuleDestroy {
     @OnEvent('dispatch.change_requires_attention', { async: true })
     async forwardChangeRequiresAttention(event: { dispatchId?: number }): Promise<void> {
         await this.forwardDispatchEvent('dispatch.change_requires_attention', event, 'coordinators');
+    }
+
+    /**
+     * ES-66, Escenario 1: `OperationalAlertsService.raise()` already resolved the subject's zone, so
+     * no DB lookup is needed here (unlike `forwardDispatchEvent`) — straight to its rooms, or every
+     * coordinator/supervisor when the alert has no zone (e.g. a driver with no assigned zone).
+     */
+    @OnEvent(OPERATIONAL_ALERT_RAISED_EVENT, { async: true })
+    forwardOperationalAlertRaised(event: OperationalAlertRaisedEvent): void {
+        const rooms = event.zoneId === null ? [...ROLE_ROOMS] : [`coordinator-zone:${event.zoneId}`, `supervisor-zone:${event.zoneId}`];
+        this.socket.emitToRooms(rooms, OPERATIONAL_ALERT_RAISED_EVENT, event);
     }
     /**
      * Enriches the point with driverId/vehicleId/routeBatchId (additive, ST-60.1 — GET /fleet/live-positions

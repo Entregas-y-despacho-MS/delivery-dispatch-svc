@@ -210,6 +210,26 @@ describe('DispatchEventsSocketListener', () => {
         );
     });
 
+    it('forwards an operational alert with a zone to that zone\'s coordinator/supervisor rooms only', () => {
+        const socket = { emitToRooms: vi.fn() };
+        const listener = new DispatchEventsSocketListener(socket as never, {} as never);
+        const event = { id: 1, kind: 'gps_stale', severity: 'warning', zoneId: 2, dispatchId: null, driverId: 7, detail: {} };
+
+        listener.forwardOperationalAlertRaised(event as never);
+
+        expect(socket.emitToRooms).toHaveBeenCalledWith(['coordinator-zone:2', 'supervisor-zone:2'], 'operational.alert_raised', event);
+    });
+
+    it('forwards an operational alert without a zone to every coordinator/supervisor', () => {
+        const socket = { emitToRooms: vi.fn() };
+        const listener = new DispatchEventsSocketListener(socket as never, {} as never);
+        const event = { id: 1, kind: 'driver_incidents', severity: 'warning', zoneId: null, dispatchId: null, driverId: 7, detail: {} };
+
+        listener.forwardOperationalAlertRaised(event as never);
+
+        expect(socket.emitToRooms).toHaveBeenCalledWith(['coordinators', 'supervisors'], 'operational.alert_raised', event);
+    });
+
     it('joins coordinators to every active zone and drivers only to zones on their active route today', async () => {
         const socket = { joinRoom: vi.fn() };
         const dataSource = { query: vi.fn()

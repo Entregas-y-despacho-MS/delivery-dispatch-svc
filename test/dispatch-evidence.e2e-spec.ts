@@ -130,6 +130,10 @@ describe('delivery evidence: signature, photo and OTP over HTTP + PostgreSQL (ST
 
     afterAll(async () => {
         if (db?.isInitialized) await withEventPurge(db, { dispatchRefs: [`${sourcePrefix}%`], routeBatchIds: batchIds, userNames: [`e2e_st313_%_${run}`] }, async (manager) => {
+            // See the same cleanup-ordering comment in dispatch-incidents.e2e-spec.ts: delete the
+            // alerts this file's incident(s) raised before nulling their dispatch_id by deleting the
+            // dispatches themselves, or several alerts can collapse onto the same subject mid-DELETE.
+            await manager.query('DELETE FROM operational_alerts WHERE dispatch_id = ANY($1::int[])', [dispatchIds]);
             await manager.query('DELETE FROM delivery_evidences WHERE dispatch_id=ANY($1::int[])', [dispatchIds]);
             await manager.query('DELETE FROM dispatch_incidents WHERE dispatch_id=ANY($1::int[])', [dispatchIds]);
             await manager.query('DELETE FROM dispatches WHERE source_order_ref LIKE $1', [`${sourcePrefix}%`]);

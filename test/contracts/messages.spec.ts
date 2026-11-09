@@ -308,6 +308,44 @@ describe('contratos de mensajes: reglas de negocio', () => {
       });
       expect(validate(topic, message)).toBe(false);
     });
+
+    describe('resultado de la recepción en Almacén (ST-240.3)', () => {
+      const purchaseWithReceipt = (change: (data: any) => void = () => {}) =>
+        mutated(topic, (m) => {
+          delete m.data.salesOrderId;
+          m.data.purchaseOrderId = 'PO-2026-000087';
+          m.data.status = 'incident';
+          m.data.result = 'with_differences';
+          m.data.items = [{ itemCode: 'SKU-1', acceptedQuantity: 8, missingQuantity: 2, damagedQuantity: 0, detail: 'Faltan 2' }];
+          change(m.data);
+        });
+
+      it('acepta result con ítems con diferencias, por itemCode o packageId', () => {
+        expect(validate(topic, purchaseWithReceipt())).toBe(true);
+        expect(validate(topic, purchaseWithReceipt((d) => {
+          d.items = [{ packageId: 41, acceptedQuantity: 0, missingQuantity: 0, damagedQuantity: 3 }];
+        }))).toBe(true);
+      });
+
+      it('acepta result sin ítems (recepción completa)', () => {
+        expect(validate(topic, purchaseWithReceipt((d) => {
+          d.status = 'delivered';
+          d.result = 'complete';
+          delete d.items;
+        }))).toBe(true);
+      });
+
+      it('rechaza items sin result, un result desconocido y un ítem sin identificar o con ambos identificadores', () => {
+        expect(validate(topic, purchaseWithReceipt((d) => { delete d.result; }))).toBe(false);
+        expect(validate(topic, purchaseWithReceipt((d) => { d.result = 'partial'; }))).toBe(false);
+        expect(validate(topic, purchaseWithReceipt((d) => { delete d.items[0].itemCode; }))).toBe(false);
+        expect(validate(topic, purchaseWithReceipt((d) => { d.items[0].packageId = 41; }))).toBe(false);
+      });
+
+      it('rechaza campos extra dentro de un ítem', () => {
+        expect(validate(topic, purchaseWithReceipt((d) => { d.items[0].supplierName = 'ACME'; }))).toBe(false);
+      });
+    });
   });
 
   it('dispatch.sync.requested limita los intentos a 3', () => {
