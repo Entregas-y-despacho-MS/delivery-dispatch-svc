@@ -23,6 +23,7 @@ describe('GET /dispatches/:id/detail (e2e, ST-56.2)', () => {
     const tag = 'e2e_dd_';
     const tokens: Record<string, string> = {};
     const refs: string[] = [];
+    const receiptIds: string[] = [];
     const batchIds: number[] = [];
     const vehicleIds: number[] = [];
     const files: string[] = [];
@@ -102,6 +103,8 @@ describe('GET /dispatches/:id/detail (e2e, ST-56.2)', () => {
         if (db) {
             await withEventPurge(db, { dispatchRefs: refs.map((ref) => `${ref}%`), routeBatchIds: batchIds, userNames: [`${tag}%_${run}`] }, async (manager) => {
                 const ids = `(SELECT dispatch_id FROM dispatches WHERE source_order_ref = ANY($1::text[]))`;
+                // Before the dispatches: ON DELETE SET NULL on an applied receipt would break its dispatch/status CHECK.
+                await manager.query(`DELETE FROM warehouse_receipts WHERE receipt_id = ANY($1::text[])`, [receiptIds]);
                 await manager.query(`DELETE FROM delivery_evidences WHERE dispatch_id IN ${ids}`, [refs]);
                 await manager.query(`DELETE FROM dispatch_incidents WHERE dispatch_id IN ${ids}`, [refs]);
                 await manager.query(`DELETE FROM dispatch_reschedules WHERE dispatch_id IN ${ids}`, [refs]);
@@ -259,6 +262,77 @@ describe('GET /dispatches/:id/detail (e2e, ST-56.2)', () => {
             const res = await detail(id);
             expect(res.status).toBe(200);
             expect(res.body).toMatchObject({ id, evidences: [], incidents: [], reschedules: [], timeline: [], packages: [], receiver: null, route: null, rating: null });
+        });
+    });
+
+    describe('recepción de Almacén (ST-240.6)', () => {
+        const insertReceipt = async (dispatchId: number | null, o: {
+            result: string; status?: 'applied' | 'orphan'; receivedAt?: string; version?: number; notes?: string | null;
+        }): Promise<string> => {
+            const receiptId = `${tag}rc_${run}_${receiptIds.length}`;
+            receiptIds.push(receiptId);
+            await db.query(
+                `INSERT INTO warehouse_receipts (receipt_id, dispatch_id, reference_type, reference_id, result, received_at, record_version, notes, status)
+                 VALUES ($1, $2, 'rma', $3, $4, $5, $6, $7, $8)`,
+                [receiptId, dispatchId, `RMA-${receiptId}`, o.result, o.receivedAt ?? '2040-01-02T15:00:00Z', o.version ?? 1, o.notes ?? null, o.status ?? 'applied'],
+            );
+            return receiptId;
+        };
+
+        it('sin recepción → receipt es null', async () => {
+            const id = await insertDispatch('picked_up_in_transit');
+            expect((await detail(id)).body.receipt).toBeNull();
+        });
+
+        it.each(['complete', 'with_differences', 'rejected'])('recepción %s con sus ítems, en el orden en que se guardaron', async (result) => {
+            const id = await insertDispatch('incident');
+            const [{ dispatch_package_id }] = await db.query(
+                `INSERT INTO dispatch_packages (dispatch_id, external_package_id, length_cm, width_cm, height_cm, gross_weight_kg)
+                 VALUES ($1, $2, 10, 10, 10, 1) RETURNING dispatch_package_id`,
+                [id, `DD-RPKG-${run}-${result}`],
+            );
+            const receiptId = await insertReceipt(id, { result, notes: 'Una caja llegó golpeada' });
+            await db.query(
+                `INSERT INTO warehouse_receipt_items (receipt_id, item_code, accepted_quantity, missing_quantity, damaged_quantity, detail)
+                 VALUES ($1, 'SKU-E2E', 2, 0, 1.5, 'Golpe en la esquina')`, [receiptId]);
+            await db.query(
+                `INSERT INTO warehouse_receipt_items (receipt_id, package_id, accepted_quantity, missing_quantity, damaged_quantity)
+                 VALUES ($1, $2, 1, 1, 0)`, [receiptId, dispatch_package_id]);
+
+            const res = await detail(id);
+
+            expect(res.status).toBe(200);
+            expect(res.body.receipt).toEqual({
+                result, receivedAt: '2040-01-02T15:00:00.000Z', notes: 'Una caja llegó golpeada',
+                items: [
+                    { itemCode: 'SKU-E2E', packageId: null, acceptedQuantity: 2, missingQuantity: 0, damagedQuantity: 1.5, detail: 'Golpe en la esquina' },
+                    { itemCode: null, packageId: dispatch_package_id, acceptedQuantity: 1, missingQuantity: 1, damagedQuantity: 0, detail: null },
+                ],
+            });
+            expect(Object.keys(res.body.receipt).sort()).toEqual(['items', 'notes', 'receivedAt', 'result']);
+        });
+
+        it('una recepción sin ítems devuelve items vacío y notes null', async () => {
+            const id = await insertDispatch('delivered');
+            await insertReceipt(id, { result: 'complete' });
+            expect((await detail(id, 'supervisor')).body.receipt).toMatchObject({ result: 'complete', notes: null, items: [] });
+        });
+
+        it('si hay más de una, muestra la más reciente; la recepción de otro despacho no se mezcla', async () => {
+            const id = await insertDispatch('incident');
+            const other = await insertDispatch('delivered');
+            await insertReceipt(id, { result: 'complete', receivedAt: '2040-01-02T10:00:00Z' });
+            await insertReceipt(id, { result: 'with_differences', receivedAt: '2040-01-02T16:00:00Z' });
+            await insertReceipt(other, { result: 'rejected' });
+
+            expect((await detail(id)).body.receipt).toMatchObject({ result: 'with_differences', receivedAt: '2040-01-02T16:00:00.000Z' });
+            expect((await detail(other)).body.receipt.result).toBe('rejected');
+        });
+
+        it('una recepción orphan no se expone (no tiene despacho)', async () => {
+            const id = await insertDispatch('picked_up_in_transit');
+            await insertReceipt(null, { result: 'complete', status: 'orphan' });
+            expect((await detail(id)).body.receipt).toBeNull();
         });
     });
 

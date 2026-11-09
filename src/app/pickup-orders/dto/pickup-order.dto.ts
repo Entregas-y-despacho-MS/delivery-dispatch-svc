@@ -67,4 +67,7 @@ export class PickupOrderDto {
 
     @ApiProperty({ type: String, format: 'date-time', example: '2026-11-06T15:00:00.000Z', description: 'When the order was created' })
     createdAt!: string;
+
+    @ApiProperty({ type: String, enum: ['complete', 'with_differences', 'rejected'], nullable: true, example: 'with_differences', description: 'Outcome of the warehouse receipt of the goods (the web shows Recibido, Con diferencias, Rechazado); `null` while the warehouse has not confirmed one' })
+    receiptResult!: 'complete' | 'with_differences' | 'rejected' | null;
 }

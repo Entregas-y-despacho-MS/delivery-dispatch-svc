@@ -231,6 +231,40 @@ export class DispatchDetailRatingDto {
     createdAt!: string;
 }
 
+export class DispatchDetailReceiptItemDto {
+    @ApiProperty({ type: String, nullable: true, example: 'SKU-100', description: 'Product code in the origin system (RMA or supplier pickup); `null` when the item is a tracked package' })
+    itemCode!: string | null;
+
+    @ApiProperty({ type: 'integer', nullable: true, example: 10, description: 'Id of the tracked package (delivery); `null` when the item is identified by `itemCode`' })
+    packageId!: number | null;
+
+    @ApiProperty({ type: 'number', format: 'double', minimum: 0, example: 2, description: 'Quantity accepted in good condition' })
+    acceptedQuantity!: number;
+
+    @ApiProperty({ type: 'number', format: 'double', minimum: 0, example: 0, description: 'Quantity declared missing' })
+    missingQuantity!: number;
+
+    @ApiProperty({ type: 'number', format: 'double', minimum: 0, example: 1, description: 'Quantity received damaged' })
+    damagedQuantity!: number;
+
+    @ApiProperty({ type: String, nullable: true, example: 'Box crushed on one side', description: 'Free-text detail of the difference; `null` if none' })
+    detail!: string | null;
+}
+
+export class DispatchDetailReceiptDto {
+    @ApiProperty({ type: String, enum: ['complete', 'with_differences', 'rejected'], example: 'with_differences', description: 'Outcome of the warehouse receipt (the web shows Recibido, Con diferencias, Rechazado)' })
+    result!: string;
+
+    @ApiProperty({ type: String, format: 'date-time', example: '2026-11-09T15:00:00.000Z', description: 'When the warehouse physically received the goods' })
+    receivedAt!: string;
+
+    @ApiProperty({ type: String, nullable: true, example: 'One box arrived damaged', description: 'Free-text notes of the warehouse; `null` if none' })
+    notes!: string | null;
+
+    @ApiProperty({ type: [DispatchDetailReceiptItemDto], description: 'Items of the receipt. Empty when the warehouse sent no detail' })
+    items!: DispatchDetailReceiptItemDto[];
+}
+
 export class DispatchDetailDto {
     @ApiProperty({ type: 'integer', example: 120, description: 'Id of the dispatch' })
     id!: number;
@@ -282,6 +316,9 @@ export class DispatchDetailDto {
 
     @NullableRef(DispatchDetailRatingDto, 'Customer opinion with stars, optional comment and date; `null` when the customer has not rated the delivery')
     rating!: DispatchDetailRatingDto | null;
+
+    @NullableRef(DispatchDetailReceiptDto, 'Warehouse receipt of the goods (RMA or supplier pickup); `null` while the dispatch has none. Orphan receipts are not exposed')
+    receipt!: DispatchDetailReceiptDto | null;
 
     @ApiProperty({ type: [DispatchDetailEventDto], description: 'Timeline, oldest first' })
     timeline!: DispatchDetailEventDto[];

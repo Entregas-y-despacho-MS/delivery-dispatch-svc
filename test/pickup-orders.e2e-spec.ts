@@ -24,6 +24,7 @@ describe('Órdenes de recojo (e2e, ST-81.2)', () => {
     const typeIds: Record<string, number> = {};
     const batchIds: number[] = [];
     const manualRefs: string[] = []; // `MANUAL-<código>` de lo que crea el POST: se borra por referencia exacta
+    const receiptIds: string[] = [];
     const userIds: Record<string, number> = {};
     const warehouse = { code: '', inactiveCode: '', id: 0 };
     const zoneIdRef = { id: 0 };
@@ -182,6 +183,8 @@ describe('Órdenes de recojo (e2e, ST-81.2)', () => {
                 routeBatchIds: batchIds,
                 userNames: [`e2e_pk_%_${run}`],
             }, async (manager) => {
+                // Before the dispatches: ON DELETE SET NULL on an applied receipt would break its dispatch/status CHECK.
+                await manager.query(`DELETE FROM warehouse_receipts WHERE receipt_id = ANY($1::text[])`, [receiptIds]);
                 await manager.query(`DELETE FROM outbound_messages WHERE payload->'data'->>'salesOrderId' LIKE $1`, [`${prefix}%`]);
                 await manager.query(`DELETE FROM dispatches WHERE source_order_ref LIKE $1 OR source_order_ref = ANY($2::text[])`, [`${prefix}%`, manualRefs]);
                 if (batchIds.length) await manager.query(`DELETE FROM route_batches WHERE route_batch_id = ANY($1::int[])`, [batchIds]);
@@ -516,6 +519,41 @@ describe('Órdenes de recojo (e2e, ST-81.2)', () => {
             const review = all.body.data.find((o: { id: number }) => o.id === rmaReview);
             expect(review).toMatchObject({ status: 'address_review', latitude: null, longitude: null });
             expect(all.body.data.find((o: { id: number }) => o.id === manualScheduled)).toMatchObject({ origin: 'manual' });
+        });
+
+        it('receiptResult: el de la recepción de cada recojo, null sin recepción o con una orphan (ST-240.6)', async () => {
+            const d = await isolatedDay();
+            const receipt = async (dispatchId: number | null, result: string, status: 'applied' | 'orphan' = 'applied', receivedAt = '2040-01-02T15:00:00Z') => {
+                const receiptId = `${prefix}-rc-${receiptIds.length}`;
+                receiptIds.push(receiptId);
+                await dataSource.query(
+                    `INSERT INTO warehouse_receipts (receipt_id, dispatch_id, reference_type, reference_id, result, received_at, record_version, status)
+                     VALUES ($1, $2, 'rma', $3, $4, $5, 1, $6)`, [receiptId, dispatchId, receiptId, result, receivedAt, status]);
+            };
+            const complete = await insert({ status: 'returned_to_warehouse', origin: 'rma', date: d });
+            const differences = await insert({ status: 'incident', origin: 'rma', date: d });
+            const rejected = await insert({ status: 'incident', origin: 'rma', date: d });
+            const latest = await insert({ status: 'incident', origin: 'rma', date: d });
+            const none = await insert({ status: 'picked_up_in_transit', origin: 'rma', date: d });
+            const orphanOnly = await insert({ status: 'picked_up_in_transit', origin: 'rma', date: d });
+            await receipt(complete, 'complete');
+            await receipt(differences, 'with_differences');
+            await receipt(rejected, 'rejected');
+            await receipt(latest, 'complete', 'applied', '2040-01-02T10:00:00Z');
+            await receipt(latest, 'rejected', 'applied', '2040-01-02T18:00:00Z');
+            await receipt(null, 'complete', 'orphan');
+
+            const res = await list(`from=${d}&to=${d}`);
+
+            expect(res.status, JSON.stringify(res.body)).toBe(200);
+            const resultOf = (id: number) => res.body.data.find((o: { id: number }) => o.id === id).receiptResult;
+            expect(res.body.meta.total).toBe(6); // two receipts on one order must not duplicate its row
+            expect(resultOf(complete)).toBe('complete');
+            expect(resultOf(differences)).toBe('with_differences');
+            expect(resultOf(rejected)).toBe('rejected');
+            expect(resultOf(latest)).toBe('rejected');
+            expect(resultOf(none)).toBeNull();
+            expect(resultOf(orphanOnly)).toBeNull();
         });
 
         it('el supervisor ve lo mismo que el coordinador', async () => {
