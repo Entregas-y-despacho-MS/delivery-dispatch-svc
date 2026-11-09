@@ -26,6 +26,7 @@ describe('Órdenes de recojo (e2e, ST-81.2)', () => {
     const manualRefs: string[] = []; // `MANUAL-<código>` de lo que crea el POST: se borra por referencia exacta
     const userIds: Record<string, number> = {};
     const warehouse = { code: '', inactiveCode: '', id: 0 };
+    const zoneIdRef = { id: 0 };
 
     const run = Date.now().toString(36).toUpperCase();
     const prefix = `PK${run}`;
@@ -162,6 +163,16 @@ describe('Órdenes de recojo (e2e, ST-81.2)', () => {
             [warehouse.code, `${prefix} Almacén`, warehouse.inactiveCode, `${prefix} Almacén inactivo`],
         );
         warehouse.id = rows.find((r: { code: string }) => r.code === warehouse.code).warehouse_id;
+
+        // Covers (-16.5421, -68.0802), the point every fixture in this suite marks on the map — a manual
+        // pickup now needs a matching zone to start in pickup_scheduled instead of address_review.
+        const [{ delivery_zone_id: zoneId }] = await dataSource.query(
+            `INSERT INTO delivery_zones (code, name, estimated_time_min, boundary)
+             VALUES ($1, $2, 30, polygon '((-68.20,-16.60),(-68.00,-16.60),(-68.00,-16.40),(-68.20,-16.40))')
+             RETURNING delivery_zone_id`,
+            [`PK${run}`.slice(0, 20), `${prefix} Zona`],
+        );
+        zoneIdRef.id = zoneId;
     });
 
     afterAll(async () => {
@@ -175,6 +186,7 @@ describe('Órdenes de recojo (e2e, ST-81.2)', () => {
                 await manager.query(`DELETE FROM dispatches WHERE source_order_ref LIKE $1 OR source_order_ref = ANY($2::text[])`, [`${prefix}%`, manualRefs]);
                 if (batchIds.length) await manager.query(`DELETE FROM route_batches WHERE route_batch_id = ANY($1::int[])`, [batchIds]);
                 await manager.query(`DELETE FROM warehouses WHERE name LIKE $1`, [`${prefix}%`]);
+                if (zoneIdRef.id) await manager.query(`DELETE FROM delivery_zones WHERE delivery_zone_id = $1`, [zoneIdRef.id]);
                 await manager.query(`DELETE FROM users WHERE username LIKE $1`, [`e2e_pk_%_${run}`]);
             });
         }
@@ -358,6 +370,38 @@ describe('Órdenes de recojo (e2e, ST-81.2)', () => {
         it('in_planning, última parada de un lote provisional: el lote queda cancelado', async () => {
             const batchId = await newBatch('provisional', { version: 1 });
             const id = await insert({ status: 'in_planning', batchId, sequence: 1 });
+
+            const res = await cancel(id);
+
+            expect(res.status).toBe(200);
+            expect(await batchRow(batchId)).toMatchObject({ status: 'cancelled', version: 2 });
+        });
+
+        it('pickup_scheduled en un lote provisional con otras paradas (ST-81.3): sale del lote igual que in_planning', async () => {
+            // El generador deja un recojo en pickup_scheduled dentro del lote, no en in_planning (D-56):
+            // anularlo debe sacarlo del lote igual que a una entrega, no dejarlo huérfano con su route_batch_id.
+            const batchId = await newBatch('provisional', { version: 3 });
+            const first = await insert({ status: 'in_planning', batchId, sequence: 1, type: 'delivery' });
+            const id = await insert({ status: 'pickup_scheduled', batchId, sequence: 2 });
+            const last = await insert({ status: 'in_planning', batchId, sequence: 3, type: 'delivery' });
+            const before = await dispatchRow(id);
+
+            const res = await cancel(id);
+
+            expect(res.status, JSON.stringify(res.body)).toBe(200);
+            expect(res.body).toMatchObject({ status: 'cancelled', previousStatus: 'pickup_scheduled', routeBatchId: null, routeBatchClosed: false });
+            const after = await dispatchRow(id);
+            expect(after).toMatchObject({ status: 'cancelled', route_batch_id: null, sequence_order: null, version: before.version + 1 });
+            expect(after.closed_at).not.toBeNull();
+            expect(await batchRow(batchId)).toMatchObject({ status: 'provisional', version: 4 });
+            expect((await dispatchRow(first)).sequence_order).toBe(1);
+            expect((await dispatchRow(last)).sequence_order).toBe(2);
+            expect((await cancelEvents(id))[0].metadata).toMatchObject({ previousStatus: 'pickup_scheduled', routeBatchId: null, fromBatchId: batchId, version: after.version });
+        });
+
+        it('pickup_scheduled, única parada de un lote provisional: el lote queda cancelado', async () => {
+            const batchId = await newBatch('provisional', { version: 1 });
+            const id = await insert({ status: 'pickup_scheduled', batchId, sequence: 1 });
 
             const res = await cancel(id);
 

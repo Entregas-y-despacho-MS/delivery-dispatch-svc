@@ -51,11 +51,15 @@ function minuteOf(instant: Date): number {
     return toLocalMoment(instant).minuteOfDay;
 }
 
-/** The slot promised to the customer is a fixed window: it never moves (D-11). */
+/**
+ * The slot promised to the customer is a fixed window: it never moves (D-11). A customer pickup's
+ * `scheduled_window_*` is never a promise (it never goes through notification/firming, ST-81.3) —
+ * only the planner's own estimate of where it lands in the route — so it stays flexible here too.
+ */
 function toSimStop(stop: CutoffStop): SimStop {
     return {
         id: stop.dispatch.dispatchId,
-        fixedWindow: stop.window
+        fixedWindow: stop.window && stop.dispatch.status !== 'pickup_scheduled'
             ? { startMinute: minuteOf(stop.window.start), endMinute: minuteOf(stop.window.end) }
             : null,
     };
@@ -82,7 +86,7 @@ function sequence(stops: CutoffStop[], params: SimParams): Sequenced {
 }
 
 function windowStart(stop: CutoffStop): number {
-    return stop.window ? minuteOf(stop.window.start) : Number.MAX_SAFE_INTEGER;
+    return stop.window && stop.dispatch.status !== 'pickup_scheduled' ? minuteOf(stop.window.start) : Number.MAX_SAFE_INTEGER;
 }
 
 function fits(stops: CutoffStop[], vehicle: PlanVehicle): boolean {

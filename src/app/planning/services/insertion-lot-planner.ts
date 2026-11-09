@@ -288,7 +288,9 @@ export class InsertionLotPlanner extends LotPlanner {
                     item.pointer++;
                     if (item.pointer < item.dates.length) {
                         active.push(item);
-                    } else if (dispatch.status === 'rescheduled') {
+                    } else if (dispatch.status === 'rescheduled' || dispatch.fixedDate !== null) {
+                        // Pinned to its one date (a reschedule's or a pickup's preferred one): exhausting
+                        // it means no vehicle fit that day, not that a whole range of candidate dates ran out.
                         unplanned.push({
                             dispatchId: dispatch.dispatchId,
                             reason: 'no_vehicle_available',
@@ -313,7 +315,10 @@ export class InsertionLotPlanner extends LotPlanner {
         const { now, settings } = input;
         const waiting: Waiting[] = [];
         input.dispatches.forEach((dispatch, order) => {
-            if (dispatch.status === 'rescheduled') {
+            // A rescheduled delivery's committed date (even absent — 'no-agreed-date' below), or a pickup's
+            // own preferred one when it gave one — either way, an external commitment the generator
+            // must honor or flag, never silently substitute a date for. A pickup with none is flexible instead.
+            if (dispatch.status === 'rescheduled' || dispatch.fixedDate !== null) {
                 const date = dispatch.fixedDate;
                 const problem = date === null
                     ? 'no-agreed-date'

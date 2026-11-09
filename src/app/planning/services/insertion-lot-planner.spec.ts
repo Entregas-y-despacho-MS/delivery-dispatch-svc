@@ -102,6 +102,37 @@ describe('InsertionLotPlanner', () => {
             expect(proposal.batches).toEqual([]);
             expect(proposal.unplanned[0]).toMatchObject({ dispatchId: 1, reason: 'rescheduled_date_not_plannable' });
         });
+
+        it("fixes a customer pickup to its preferred day, same as a rescheduled delivery", async () => {
+            const { planner: p } = planner();
+            const proposal = await p.plan(planInput({
+                dispatches: [dispatch(1, { status: 'pickup_scheduled', fixedDate: '2026-10-27' })],
+            }));
+
+            expect(proposal.batches[0].shiftDate).toBe('2026-10-27');
+            // Unlike a reschedule, a pickup's own preferred date is not a re-entry into the plan.
+            expect(proposal.batches[0].rescheduledDispatchIds).toEqual([]);
+        });
+
+        it('alerts, never silently moves the date, when a pickup\'s preferred day has no vehicle available', async () => {
+            const { planner: p } = planner();
+            const proposal = await p.plan(planInput({
+                now: localInstant('2026-10-13', '16:00'),
+                dispatches: [dispatch(1, { status: 'pickup_scheduled', fixedDate: '2026-10-17' })], // a Saturday
+            }));
+
+            expect(proposal.batches).toEqual([]);
+            expect(proposal.unplanned[0]).toMatchObject({ dispatchId: 1, reason: 'rescheduled_date_not_plannable' });
+        });
+
+        it('plans an undated pickup like a plain pending delivery, free to land on D2', async () => {
+            const { planner: p } = planner();
+            const proposal = await p.plan(planInput({
+                dispatches: [dispatch(1, { status: 'pickup_scheduled', fixedDate: null })],
+            }));
+
+            expect(proposal.batches[0].shiftDate).toBe(WEDNESDAY);
+        });
     });
 
     describe('vehicles', () => {

@@ -43,8 +43,16 @@ const CANCELLABLE_BY_TYPE: Readonly<Record<string, readonly string[]>> = {
     warehouse_return_pickup: PICKUP_CANCELLABLE,
 };
 
-/** Cancellable states in which the dispatch is still part of a batch that is not on the street: it leaves the batch. */
-const LEAVES_BATCH_WHEN_CANCELLED: readonly string[] = [DispatchStatusEnum.IN_PLANNING, DispatchStatusEnum.SCHEDULED];
+/**
+ * Cancellable states in which the dispatch is still part of a batch that is not on the street: it leaves the batch.
+ * `pickup_scheduled` is here too (ST-81.3): a customer pickup the generator already placed in a provisional batch
+ * never moves past this status until the 2nd approval, so cancelling it from here must free its place too.
+ */
+const LEAVES_BATCH_WHEN_CANCELLED: readonly string[] = [
+    DispatchStatusEnum.IN_PLANNING,
+    DispatchStatusEnum.SCHEDULED,
+    DispatchStatusEnum.PICKUP_SCHEDULED,
+];
 
 /** `type` defaults to `delivery` (the original cancellation of ES-241). */
 export const isCancellableByCoordinator = (status: string, type: string = 'delivery'): boolean =>

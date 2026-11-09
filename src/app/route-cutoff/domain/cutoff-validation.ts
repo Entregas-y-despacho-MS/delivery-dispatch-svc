@@ -94,8 +94,13 @@ export interface BatchFacts {
     reoptimizationIncomplete: boolean;
 }
 
-/** The state a promised, not yet assigned order must be in at the cutoff. */
-const EXPECTED_STATUS = 'scheduled';
+/**
+ * The state a stop must still be in at the cutoff for its own kind: `scheduled` for a promised
+ * delivery, `pickup_scheduled` for a customer pickup (ST-81.3, never promised in the first place).
+ */
+function expectedStatus(stop: StopFacts): string {
+    return stop.dispatch.status === 'pickup_scheduled' ? 'pickup_scheduled' : 'scheduled';
+}
 
 export function validateCutoffBatch(facts: BatchFacts, params: SimParams): CutoffValidation {
     const failures: CutoffIssue[] = [];
@@ -120,7 +125,7 @@ export function validateCutoffBatch(facts: BatchFacts, params: SimParams): Cutof
             versions: stale.map((stop) => ({ dispatchId: stop.dispatchId, expected: stop.expectedVersion, current: stop.currentVersion })),
         });
     }
-    const moved = facts.stops.filter((stop) => stop.currentVersion !== null && stop.status !== EXPECTED_STATUS);
+    const moved = facts.stops.filter((stop) => stop.currentVersion !== null && stop.status !== expectedStatus(stop));
     if (moved.length > 0) {
         fail('dispatch_status_changed', ids(moved), {
             statuses: moved.map((stop) => ({ dispatchId: stop.dispatchId, status: stop.status })),
@@ -139,7 +144,8 @@ export function validateCutoffBatch(facts: BatchFacts, params: SimParams): Cutof
 
     const noDestination = facts.stops.filter((stop) => !stop.hasDestination);
     if (noDestination.length > 0) fail('destination_incomplete', ids(noDestination));
-    const noPackages = facts.stops.filter((stop) => stop.dispatch.packages.length === 0);
+    // A customer pickup never has dispatch_packages rows (only an estimated_boxes guess, ST-81.3).
+    const noPackages = facts.stops.filter((stop) => stop.dispatch.status !== 'pickup_scheduled' && stop.dispatch.packages.length === 0);
     if (noPackages.length > 0) fail('packages_missing', ids(noPackages));
 
     // Vehicle and capacity.
@@ -179,9 +185,10 @@ export function validateCutoffBatch(facts: BatchFacts, params: SimParams): Cutof
     }
 
     // Slots with margin: the promised window is fixed; the route is simulated in the order of the plan.
+    // A customer pickup's window is never a promise (ST-81.3) — it stays flexible here too.
     const simStops: SimStop[] = facts.stops.map((stop) => ({
         id: stop.dispatchId,
-        fixedWindow: stop.window
+        fixedWindow: stop.window && stop.dispatch.status !== 'pickup_scheduled'
             ? { startMinute: toLocalMoment(stop.window.start).minuteOfDay, endMinute: toLocalMoment(stop.window.end).minuteOfDay }
             : null,
     }));

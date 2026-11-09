@@ -25,6 +25,7 @@ interface DispatchRow {
     id: number;
     version: number;
     status: string;
+    type: string;
     contact_email: string | null;
     scheduled_window_start: Date | null;
     scheduled_window_end: Date | null;
@@ -32,6 +33,8 @@ interface DispatchRow {
     promise_notified_at: Date | null;
     promise_firmed_at: Date | null;
 }
+
+const PICKUP_TYPE = 'warehouse_return_pickup';
 
 interface ApprovalPlan {
     routeBatchId: number;
@@ -63,8 +66,9 @@ export class RouteBatchPromiseApprovalService {
     ): Promise<ApproveRouteBatchPromisesResponseDto> {
         const plan = await this.dataSource.transaction((manager) => this.commitApproval(manager, routeBatchId, dto, actorUserId));
         const updatedAt = new Date().toISOString();
-        for (const dispatch of plan.approved) this.emitStatusChanged(dispatch, DispatchStatusEnum.SCHEDULED, updatedAt);
-        for (const dispatch of plan.removed) this.emitStatusChanged(dispatch, DispatchStatusEnum.PENDING, updatedAt);
+        // A pickup's own status never changes here — nothing to announce for it.
+        for (const dispatch of plan.approved) if (dispatch.type !== PICKUP_TYPE) this.emitStatusChanged(dispatch, DispatchStatusEnum.SCHEDULED, updatedAt);
+        for (const dispatch of plan.removed) if (dispatch.type !== PICKUP_TYPE) this.emitStatusChanged(dispatch, DispatchStatusEnum.PENDING, updatedAt);
         const emailResults = await this.notifyCustomers(plan);
         return {
             routeBatchId,
@@ -109,11 +113,12 @@ export class RouteBatchPromiseApprovalService {
         }
 
         const dispatches: DispatchRow[] = await manager.query(
-            `SELECT d.dispatch_id AS id, d.version, s.name AS status, d.contact_email,
+            `SELECT d.dispatch_id AS id, d.version, s.name AS status, t.name AS type, d.contact_email,
                     d.scheduled_window_start, d.scheduled_window_end, d.tracking_token, d.promise_notified_at,
                     d.promise_firmed_at
                FROM dispatches d
                JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
+               JOIN dispatch_types t ON t.dispatch_type_id = d.dispatch_type_id
               WHERE d.route_batch_id = $1
               ORDER BY d.dispatch_id
               FOR UPDATE OF d`,
@@ -131,13 +136,20 @@ export class RouteBatchPromiseApprovalService {
             throw new RouteBatchApprovalConflictException('ROUTE_BATCH_HAS_NO_APPROVALS', 'At least one dispatch must remain in the batch.');
         }
         for (const dispatch of dispatches) {
-            if (dispatch.status !== DispatchStatusEnum.IN_PLANNING) {
+            // A delivery must be `in_planning`; a customer pickup, still `pickup_scheduled` — the
+            // generator never moves it out of that status while it sits in a provisional batch.
+            const stillPlanning = dispatch.type === PICKUP_TYPE
+                ? dispatch.status === DispatchStatusEnum.PICKUP_SCHEDULED
+                : dispatch.status === DispatchStatusEnum.IN_PLANNING;
+            if (!stillPlanning) {
                 throw new RouteBatchApprovalConflictException('DISPATCH_VERSION_CONFLICT', `Dispatch ${dispatch.id} is no longer in planning.`);
             }
         }
         for (const dispatch of removed) await this.removeDispatch(manager, routeBatchId, dispatch, actorUserId);
         await this.capacity.assertAssignable(routeBatchId, batch.vehicle_id, manager);
-        for (const dispatch of approved) await this.approveDispatch(manager, routeBatchId, dispatch, actorUserId);
+        // A pickup is shown in the plan but keeps its own status and tracking — it has no
+        // customer-facing promise to approve here; it moves on only at the final approval.
+        for (const dispatch of approved) if (dispatch.type !== PICKUP_TYPE) await this.approveDispatch(manager, routeBatchId, dispatch, actorUserId);
         // A dispatch that was already firm before leaving its previous route batch (coordinator
         // reschedule, ST-52.2) is re-entering the plan with a fixed date: the warehouse needs a new
         // preparation order for it, not just the usual promise notification (ST-241.2, D-47).
@@ -211,12 +223,14 @@ export class RouteBatchPromiseApprovalService {
     }
 
     private async removeDispatch(manager: EntityManager, routeBatchId: number, dispatch: DispatchRow, actorUserId: number): Promise<void> {
+        // A pickup never left `pickup_scheduled` to begin with — only clear its place in the batch.
+        const targetStatus = dispatch.type === PICKUP_TYPE ? DispatchStatusEnum.PICKUP_SCHEDULED : DispatchStatusEnum.PENDING;
         await manager.query(
             `UPDATE dispatches
                 SET dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $2),
                     route_batch_id = NULL, sequence_order = NULL, version = version + 1, updated_at = NOW()
               WHERE dispatch_id = $1`,
-            [dispatch.id, DispatchStatusEnum.PENDING],
+            [dispatch.id, targetStatus],
         );
         const metadata = JSON.stringify({ previousVersion: dispatch.version, version: dispatch.version + 1, previousRouteBatchId: routeBatchId });
         await manager.query(
@@ -234,7 +248,8 @@ export class RouteBatchPromiseApprovalService {
     private async notifyCustomers(plan: ApprovalPlan): Promise<PromiseEmailResultDto[]> {
         const results: PromiseEmailResultDto[] = [];
         for (const dispatch of plan.approved) {
-            if (!dispatch.contact_email) {
+            // A pickup has no delivery promise to notify — Almacén already told the customer the date.
+            if (dispatch.type === PICKUP_TYPE || !dispatch.contact_email) {
                 results.push({ dispatchId: dispatch.id, result: 'skipped' });
                 continue;
             }

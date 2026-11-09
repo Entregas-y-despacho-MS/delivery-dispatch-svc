@@ -135,6 +135,39 @@ describe('RouteBatchFinalApprovalService', () => {
     expect(events.emit).not.toHaveBeenCalled();
   });
 
+  it('accepts a pickup_scheduled customer pickup with no registered packages, moving it to assigned', async () => {
+    const pickup = {
+      id: 90, version: 1, status: 'pickup_scheduled', type: 'warehouse_return_pickup',
+      priority: 'normal', source_order_ref: 'MANUAL-DSP-90',
+      delivery_address: 'Customer home address', delivery_latitude: '-16.5', delivery_longitude: '-68.1',
+      scheduled_window_start: new Date('2026-10-20T13:00:00Z'), scheduled_window_end: new Date('2026-10-20T15:00:00Z'),
+    };
+    const { service, manager } = createHarness({ dispatches: [pickup], packageCount: 0 });
+
+    await expect(service.approve(12, { version: 4, dispatches: [{ dispatchId: 90, version: 1 }] }, 9))
+      .resolves.toMatchObject({ dispatchIds: [90] });
+
+    const update = manager.query.mock.calls.find(([sql]) => String(sql).includes('UPDATE dispatches'));
+    expect(update?.[1]).toEqual([90, 12, 1, 'assigned', 'pickup_scheduled']);
+  });
+
+  it('rejects a delivery with no registered packages, but a pickup alongside it in the same batch still passes', async () => {
+    const delivery = {
+      id: 77, version: 2, status: 'scheduled', type: 'delivery', priority: 'normal', source_order_ref: 'SO-77',
+      delivery_address: 'Test address', delivery_latitude: '-16.5', delivery_longitude: '-68.1',
+      scheduled_window_start: new Date('2026-10-20T13:00:00Z'), scheduled_window_end: new Date('2026-10-20T15:00:00Z'),
+    };
+    const pickup = {
+      id: 90, version: 1, status: 'pickup_scheduled', type: 'warehouse_return_pickup', priority: 'normal', source_order_ref: 'MANUAL-DSP-90',
+      delivery_address: 'Customer home address', delivery_latitude: '-16.5', delivery_longitude: '-68.1',
+      scheduled_window_start: new Date('2026-10-20T13:00:00Z'), scheduled_window_end: new Date('2026-10-20T15:00:00Z'),
+    };
+    const { service } = createHarness({ dispatches: [delivery, pickup], packageCount: 0 });
+
+    await expect(service.approve(12, { version: 4, dispatches: [{ dispatchId: 77, version: 2 }, { dispatchId: 90, version: 1 }] }, 9))
+      .rejects.toMatchObject({ response: { error: 'DISPATCH_PACKAGES_REQUIRED', message: expect.stringContaining('77') } });
+  });
+
   it('rejects an unvalidated batch before changing assignments', async () => {
     const { service, runner, manager, events } = createHarness({ batchStatus: 'provisional' });
 

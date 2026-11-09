@@ -15,6 +15,10 @@ interface WarehouseRow {
     warehouse_id: number;
 }
 
+interface ZoneRow {
+    id: number;
+}
+
 interface CreatedDispatch {
     dispatchId: number;
     status: 'pickup_scheduled' | 'address_review';
@@ -48,17 +52,18 @@ export class PickupOrderService {
             );
         }
 
-        const status: CreatedDispatch['status'] = data.pickupAddress.location ? 'pickup_scheduled' : 'address_review';
+        const zoneId = data.pickupAddress.location ? await this.zoneIdFor(data.pickupAddress.location, options) : null;
+        const status: CreatedDispatch['status'] = zoneId !== null ? 'pickup_scheduled' : 'address_review';
         const estimatedBoxes = data.packages?.length ?? null;
         const [created] = (await manager.query(
             `INSERT INTO dispatches (
                 dispatch_type_id, dispatch_status_id, source_order_ref, delivery_address, delivery_reference,
-                delivery_latitude, delivery_longitude, contact_name, contact_phone, contact_email,
-                return_reason, destination_warehouse_id, estimated_boxes, preferred_pickup_date, tracking_code
+                delivery_latitude, delivery_longitude, delivery_zone_id, contact_name, contact_phone, contact_email,
+                return_reason, destination_warehouse_id, estimated_boxes, preferred_pickup_date, tracking_code, shipment_ready
              ) VALUES (
                 (SELECT dispatch_type_id FROM dispatch_types WHERE name = 'warehouse_return_pickup'),
                 (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $1),
-                $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, next_tracking_code()
+                $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, next_tracking_code(), TRUE
              ) RETURNING dispatch_id`,
             [
                 status,
@@ -67,6 +72,7 @@ export class PickupOrderService {
                 data.pickupAddress.reference ?? null,
                 data.pickupAddress.location?.latitude ?? null,
                 data.pickupAddress.location?.longitude ?? null,
+                zoneId,
                 data.contact.name,
                 data.contact.phone,
                 data.contact.email ?? null,
@@ -105,11 +111,13 @@ export class PickupOrderService {
     }
 
     /**
-     * Registers a pickup by hand (ST-81.2) inside the caller's transaction. It always starts in `pickup_scheduled`
-     * (the form marks the point on the map, so the coordinates are required) and its `source_order_ref` is
-     * `MANUAL-<tracking code>`, which is how the origin is told apart from an RMA. The RMA the coordinator may mention
-     * goes only in the metadata of the `created_manually` event: as `source_order_ref` it would collide with the
-     * unique index when the message of that RMA arrives later.
+     * Registers a pickup by hand (ST-81.2) inside the caller's transaction. The form marks the point on the map, so
+     * the coordinates are always given, but that point may not fall inside any known delivery zone — same as a
+     * delivery (D-19), that case starts in `address_review` instead of `pickup_scheduled`, since the generator
+     * needs a zone to place it in a batch. Its `source_order_ref` is `MANUAL-<tracking code>`, which is
+     * how the origin is told apart from an RMA. The RMA the coordinator may mention goes only in the metadata of
+     * the `created_manually` event: as `source_order_ref` it would collide with the unique index when the message
+     * of that RMA arrives later.
      * Throws `WarehouseNotAvailableException` (422) before writing anything when the warehouse is not usable.
      */
     async createManual(input: ManualPickupInput, userId: number, options: TransactionOptions): Promise<ManualPickupCreated> {
@@ -117,26 +125,30 @@ export class PickupOrderService {
         const warehouseId = await this.warehouseIdByCode(input.warehouseCode, options);
         if (warehouseId === null) throw new WarehouseNotAvailableException(input.warehouseCode);
 
+        const zoneId = await this.zoneIdFor({ latitude: input.latitude, longitude: input.longitude }, options);
+        const status: ManualPickupCreated['status'] = zoneId !== null ? 'pickup_scheduled' : 'address_review';
         const [{ code: trackingCode }] = (await manager.query('SELECT next_tracking_code() AS code')) as { code: string }[];
         const sourceOrderRef = `${MANUAL_SOURCE_REF_PREFIX}${trackingCode}`;
         const [created] = (await manager.query(
             `INSERT INTO dispatches (
                 dispatch_type_id, dispatch_status_id, source_order_ref, tracking_code, delivery_address, delivery_reference,
-                delivery_latitude, delivery_longitude, contact_name, contact_phone, contact_email,
-                return_reason, package_contents, destination_warehouse_id, estimated_boxes, preferred_pickup_date
+                delivery_latitude, delivery_longitude, delivery_zone_id, contact_name, contact_phone, contact_email,
+                return_reason, package_contents, destination_warehouse_id, estimated_boxes, preferred_pickup_date, shipment_ready
              ) VALUES (
                 (SELECT dispatch_type_id FROM dispatch_types WHERE name = 'warehouse_return_pickup'),
-                (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = 'pickup_scheduled'),
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                ($14::date)::timestamp AT TIME ZONE 'America/La_Paz'
+                (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $1),
+                $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                ($16::date)::timestamp AT TIME ZONE 'America/La_Paz', TRUE
              ) RETURNING dispatch_id`,
             [
+                status,
                 sourceOrderRef,
                 trackingCode,
                 input.address,
                 input.reference ?? null,
                 input.latitude,
                 input.longitude,
+                zoneId,
                 input.contactName,
                 input.contactPhone,
                 input.contactEmail ?? null,
@@ -164,7 +176,19 @@ export class PickupOrderService {
             ],
         );
 
-        return { dispatchId, status: 'pickup_scheduled', trackingCode, sourceOrderRef };
+        return { dispatchId, status, trackingCode, sourceOrderRef };
+    }
+
+    /** Same zone-matching rule a delivery uses at creation (D-19): the point's polygon, or `null` if none contains it. */
+    private async zoneIdFor(location: { latitude: number; longitude: number }, options: TransactionOptions): Promise<number | null> {
+        const [zone] = (await this.manager(options).query(
+            `SELECT delivery_zone_id AS id FROM delivery_zones
+              WHERE deleted_at IS NULL AND boundary IS NOT NULL
+                AND boundary @> point($1::float8, $2::float8)
+              ORDER BY delivery_zone_id LIMIT 1`,
+            [location.longitude, location.latitude],
+        )) as ZoneRow[];
+        return zone?.id ?? null;
     }
 
     private async warehouseIdByCode(code: string, options: TransactionOptions): Promise<number | null> {

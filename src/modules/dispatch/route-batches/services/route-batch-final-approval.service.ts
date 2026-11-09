@@ -108,9 +108,13 @@ export class RouteBatchFinalApprovalService {
       throw new RouteBatchApprovalConflictException('ROUTE_BATCH_HAS_NO_APPROVALS', `Route batch ${routeBatchId} has no dispatches to assign.`);
     }
 
+    // A delivery must be `scheduled` (the first approval's promise); a customer pickup, still
+    // `pickup_scheduled` — the generator never moves it out of that status, and it has no promise step.
     const notReady = dispatches.filter((dispatch) =>
-      dispatch.type !== 'delivery' ||
-      dispatch.status !== DispatchStatusEnum.SCHEDULED ||
+      !(
+        (dispatch.type === 'delivery' && dispatch.status === DispatchStatusEnum.SCHEDULED) ||
+        (dispatch.type === 'warehouse_return_pickup' && dispatch.status === DispatchStatusEnum.PICKUP_SCHEDULED)
+      ) ||
       !dispatch.delivery_address?.trim() ||
       dispatch.delivery_latitude === null || dispatch.delivery_longitude === null ||
       !dispatch.scheduled_window_start || !dispatch.scheduled_window_end ||
@@ -119,7 +123,7 @@ export class RouteBatchFinalApprovalService {
     if (notReady.length > 0) {
       throw new RouteBatchApprovalConflictException(
         'DISPATCH_NOT_READY_FOR_FINAL_APPROVAL',
-        `Dispatches ${notReady.map(({ id }) => id).join(', ')} must be delivery orders with a complete destination and an unchanged, valid promise window. Pickup dispatches are not accepted.`,
+        `Dispatches ${notReady.map(({ id }) => id).join(', ')} must be a scheduled delivery order or a pickup_scheduled customer pickup, with a complete destination and an unchanged, valid promise window.`,
       );
     }
 
@@ -132,7 +136,13 @@ export class RouteBatchFinalApprovalService {
         ORDER BY d.dispatch_id`,
       [routeBatchId],
     );
-    const missingPackages = packageRows.filter(({ package_count }) => Number(package_count) === 0).map(({ dispatch_id }) => dispatch_id);
+    // A pickup has no registered packages yet (only an estimate, no itemized boxes); the
+    // capacity check already falls back to its estimated weight (calculateRouteCapacity), so this
+    // completeness rule stays delivery-only.
+    const deliveryIds = new Set(dispatches.filter(({ type }) => type === 'delivery').map(({ id }) => id));
+    const missingPackages = packageRows
+      .filter(({ dispatch_id, package_count }) => deliveryIds.has(dispatch_id) && Number(package_count) === 0)
+      .map(({ dispatch_id }) => dispatch_id);
     if (missingPackages.length > 0) {
       throw new RouteBatchApprovalConflictException('DISPATCH_PACKAGES_REQUIRED', `Dispatches ${missingPackages.join(', ')} have no registered packages.`);
     }
@@ -165,6 +175,7 @@ export class RouteBatchFinalApprovalService {
     const approvedVersion = batch.version + 1;
     const dispatchIds = dispatches.map(({ id }) => id);
     for (const dispatch of dispatches) {
+      const fromStatus = dispatch.type === 'warehouse_return_pickup' ? DispatchStatusEnum.PICKUP_SCHEDULED : DispatchStatusEnum.SCHEDULED;
       const updated: { dispatch_id: number }[] = await manager.query(
         `UPDATE dispatches
             SET dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $4),
@@ -172,7 +183,7 @@ export class RouteBatchFinalApprovalService {
           WHERE dispatch_id = $1 AND route_batch_id = $2 AND version = $3
             AND dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $5)
           RETURNING dispatch_id`,
-        [dispatch.id, batch.id, dispatch.version, DispatchStatusEnum.ASSIGNED, DispatchStatusEnum.SCHEDULED],
+        [dispatch.id, batch.id, dispatch.version, DispatchStatusEnum.ASSIGNED, fromStatus],
       );
       if (updated.length === 0) {
         throw new RouteBatchApprovalConflictException('DISPATCH_VERSION_CONFLICT', `Dispatch ${dispatch.id} changed during final approval.`);

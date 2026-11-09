@@ -361,6 +361,66 @@ describe('Route cutoff (e2e, ST-51.3)', () => {
         expect(reasons.sort()).toEqual(['cutoff_no_promise', 'cutoff_window_open']);
     });
 
+    it('always lets a customer pickup through the cutoff, never releasing it like an order without promise', async () => {
+        const zone = await newZone();
+        const vehicle = await newVehicle(1000);
+        // No proposed driver: this batch's own fate at the cutoff is what the test cares about, and a driver
+        // reserved here would stay "occupied" for the rest of the file's shared pool (driver_missing is only
+        // a warning, never a reason to hide the batch from review — D-21).
+        const [{ route_batch_id: batchId }] = await dataSource.query(
+            `INSERT INTO route_batches (status, version, shift_date, delivery_zone_id, origin_warehouse_id, vehicle_id,
+                                        proposed_driver_id, reviewer_user_id)
+             VALUES ('provisional', 2, $1::date, $2, $3, $4, NULL, $5) RETURNING route_batch_id`,
+            [shiftDate, zone, warehouse.id, vehicle, coordinatorId],
+        );
+        const minute = 60_000;
+        const [{ dispatch_id: deliveryId }] = await dataSource.query(
+            `INSERT INTO dispatches (dispatch_type_id, dispatch_status_id, delivery_zone_id, origin_warehouse_id, source_order_ref,
+                                      delivery_address, delivery_latitude, delivery_longitude, estimated_weight_kg,
+                                      order_confirmed_at, shipment_ready, route_batch_id, sequence_order,
+                                      scheduled_window_start, scheduled_window_end, promise_notified_at,
+                                      promise_firmed_at, version)
+             VALUES ((SELECT dispatch_type_id FROM dispatch_types WHERE name = 'delivery'), $1, $2, $3, $4,
+                     'Dirección de prueba', $5, $6, 10, NOW(), TRUE, $7, 1, $8, $9, $10, $10, 1)
+             RETURNING dispatch_id`,
+            [statusId['scheduled'], zone, warehouse.id, `${refPrefix}${++seq}`, warehouse.lat - 0.01, warehouse.lon,
+             batchId, localInstant(shiftDate, '09:00'), localInstant(shiftDate, '11:00'), new Date(Date.now() - (windowMinutes + 120) * minute)],
+        );
+        await dataSource.query(
+            `INSERT INTO dispatch_packages (dispatch_id, external_package_id, length_cm, width_cm, height_cm, gross_weight_kg)
+             VALUES ($1, $2, 20, 20, 20, 10)`,
+            [deliveryId, `PKG-${deliveryId}`],
+        );
+        // A customer pickup never gets a promise (ST-81.3): no notified/firmed date, same as production.
+        const [{ dispatch_id: pickupId }] = await dataSource.query(
+            `INSERT INTO dispatches (dispatch_type_id, dispatch_status_id, delivery_zone_id, destination_warehouse_id, source_order_ref,
+                                      delivery_address, delivery_latitude, delivery_longitude, estimated_weight_kg, estimated_boxes,
+                                      order_confirmed_at, shipment_ready, route_batch_id, sequence_order, version)
+             VALUES ((SELECT dispatch_type_id FROM dispatch_types WHERE name = 'warehouse_return_pickup'), $1, $2, $3, $4,
+                     'Dirección de recojo', $5, $6, 5, 2, NOW(), TRUE, $7, 2, 1)
+             RETURNING dispatch_id`,
+            [statusId['pickup_scheduled'], zone, warehouse.id, `${refPrefix}${++seq}`, warehouse.lat - 0.02, warehouse.lon, batchId],
+        );
+        scope.dispatchIds.add(deliveryId);
+        scope.dispatchIds.add(pickupId);
+        scope.batchIds.add(batchId);
+
+        const res = await cutoff();
+
+        expect(res.status).toBe(200);
+        expect(res.body.summary.pendingFinalReviewBatchIds).toContain(batchId);
+        expect(res.body.summary.releasedDispatchIds).not.toContain(pickupId);
+
+        expect(await dispatchRow(pickupId)).toMatchObject({ status: 'pickup_scheduled', route_batch_id: batchId, sequence_order: 2 });
+        expect((await dispatchRow(deliveryId)).status).toBe('scheduled');
+        expect((await batchRow(batchId)).status).toBe('pending_final_review');
+
+        const pickupEvents = (await dataSource.query(
+            `SELECT event_type, reason FROM dispatch_events WHERE dispatch_id = $1`, [pickupId],
+        )) as Array<{ event_type: string; reason: string | null }>;
+        expect(pickupEvents.find((e) => e.reason === 'cutoff_no_promise')).toBeUndefined();
+    });
+
     it('divides a batch that no longer fits its vehicle into a new batch with a free one', async () => {
         const zone = await newZone();
         const small = await newVehicle(100);

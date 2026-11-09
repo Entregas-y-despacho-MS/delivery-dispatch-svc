@@ -19,7 +19,7 @@ export interface StopOptions {
     km?: number;
     kg?: number;
     window?: [string, string];
-    status?: 'in_planning' | 'scheduled';
+    status?: 'in_planning' | 'scheduled' | 'pickup_scheduled';
     firmed?: boolean;
     notifiedAt?: Date | null;
     sequence?: number;
@@ -29,14 +29,15 @@ export interface StopOptions {
 /** A promised stop by default: `scheduled`, notified long ago (window closed), with its slot. */
 export function stop(id: number, options: StopOptions = {}): CutoffStop {
     const { km = id, kg = 10, window = ['09:00', '11:00'], status = 'scheduled', firmed = false } = options;
+    const noPromise = status === 'in_planning' || status === 'pickup_scheduled';
     const notifiedAt = options.notifiedAt === undefined ? NOTIFIED_LONG_AGO : options.notifiedAt;
     return {
         dispatch: dispatch(id, { km, estimatedWeightKg: kg, status }),
         sequence: options.sequence ?? id,
         version: options.version ?? 1,
-        promiseNotifiedAt: status === 'in_planning' ? null : notifiedAt,
+        promiseNotifiedAt: noPromise ? null : notifiedAt,
         promiseFirmedAt: firmed ? NOTIFIED_LONG_AGO : null,
-        window: status === 'in_planning'
+        window: noPromise
             ? null
             : { start: localInstant(SHIFT_DATE, window[0]), end: localInstant(SHIFT_DATE, window[1]) },
     };

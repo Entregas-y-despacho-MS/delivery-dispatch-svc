@@ -137,6 +137,45 @@ describe('POST /route-batches/:id/approve-final (e2e)', () => {
     });
   });
 
+  it('accepts a pickup_scheduled customer pickup with no registered packages, moving it to assigned', async () => {
+    const [{ vehicle_status_id: activeVehicleStatusId }] = await db.query(`SELECT vehicle_status_id FROM vehicle_statuses WHERE name = 'active'`);
+    const [{ dispatch_type_id: pickupTypeId }] = await db.query(`SELECT dispatch_type_id FROM dispatch_types WHERE name = 'warehouse_return_pickup'`);
+    const [{ dispatch_status_id: pickupScheduledId }] = await db.query(`SELECT dispatch_status_id FROM dispatch_statuses WHERE name = 'pickup_scheduled'`);
+    const [{ vehicle_id: vehicleId }] = await db.query(
+      `INSERT INTO vehicles (vehicle_status_id, type, model, plate, capacity_kg, capacity_m3)
+       VALUES ($1, 'van', 'ST512 e2e pickup', $2, 100, 10) RETURNING vehicle_id`,
+      [activeVehicleStatusId, `SP${run.slice(-5)}${vehicleIds.length}`],
+    );
+    vehicleIds.push(Number(vehicleId));
+    const shiftDate = `2026-10-${String(20 + fixtureCount++).padStart(2, '0')}`;
+    const [{ route_batch_id: routeBatchId }] = await db.query(
+      `INSERT INTO route_batches (status, version, proposed_driver_id, vehicle_id, shift_date)
+       VALUES ('pending_final_review', 4, $1, $2, $3) RETURNING route_batch_id`,
+      [driverId, vehicleId, shiftDate],
+    );
+    batchIds.push(Number(routeBatchId));
+    const sourceOrderRef = `ST512-${run}-${sourceRefs.length}`;
+    sourceRefs.push(sourceOrderRef);
+    const [{ dispatch_id: dispatchId }] = await db.query(
+      `INSERT INTO dispatches (dispatch_type_id, dispatch_status_id, route_batch_id, sequence_order,
+          source_order_ref, delivery_address, delivery_latitude, delivery_longitude, scheduled_window_start, scheduled_window_end)
+       VALUES ($1, $2, $3, 1, $4, 'Customer home address', -16.5, -68.1, '2026-10-20T13:00:00Z', '2026-10-20T15:00:00Z')
+       RETURNING dispatch_id`,
+      [pickupTypeId, pickupScheduledId, routeBatchId, sourceOrderRef],
+    );
+    // No dispatch_packages row for this pickup — only its estimate, never registered boxes.
+
+    const response = await http().post(api(`/route-batches/${routeBatchId}/approve-final`))
+      .set('Authorization', auth.authorization).send(requestBody(Number(dispatchId)));
+
+    expect(response.status).toBe(200);
+    const dispatchRows = await db.query(
+      `SELECT s.name AS status, d.version FROM dispatches d JOIN dispatch_statuses s USING (dispatch_status_id) WHERE d.dispatch_id = $1`,
+      [dispatchId],
+    );
+    expect(dispatchRows[0]).toMatchObject({ status: 'assigned', version: 1 });
+  });
+
   it('rejects a load above capacity without changing the batch', async () => {
     const { routeBatchId, dispatchId } = await fixture({ capacityKg: 1 });
     const response = await http().post(api(`/route-batches/${routeBatchId}/approve-final`))
