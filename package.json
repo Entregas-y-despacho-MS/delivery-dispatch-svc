@@ -29,6 +29,7 @@
     "simulate:marketplace": "tsx scripts/simulator/simulate.ts marketplace",
     "simulate:inventory": "tsx scripts/simulator/simulate.ts inventory",
     "simulate:procurement": "tsx scripts/simulator/simulate.ts procurement",
+    "simulate:demo-returns": "tsx scripts/simulator/simulate.ts demo-returns",
     "simulate:listen": "tsx scripts/simulator/listen.ts",
     "pubsub:publish-grupo-h:simulate": "node scripts/pubsub/publish-grupo-h-and-simulate.mjs"
   },

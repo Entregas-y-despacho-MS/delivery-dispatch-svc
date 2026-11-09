@@ -24,7 +24,9 @@ import {
  * `dispatch.sync.requested` and publish the complete record when Despachos asks for it.
  */
 const SYNC_TOPIC = 'dispatch.sync.requested';
-const SCRIPTS: SimulatorScript[] = ['marketplace', 'inventory', 'procurement'];
+const SCRIPTS: SimulatorScript[] = ['marketplace', 'inventory', 'procurement', 'demo-returns'];
+/** `simulate:demo-returns` gives a person time to pick the dispatch up before the warehouse confirms the receipt. */
+const DEFAULT_PAUSE_SECONDS: Partial<Record<SimulatorScript, number>> = { 'demo-returns': 30 };
 
 const USAGE = `Uso: npm run simulate:<origen> -- [opciones]
   --scenario <nombre>   escenario a ejecutar (sin opción: lista los disponibles)
@@ -32,6 +34,7 @@ const USAGE = `Uso: npm run simulate:<origen> -- [opciones]
   --as-is               publica el fixture tal cual: mismos ids y fechas (suele ser ignorado por deduplicación)
   --run-id <texto>      sufijo de los ids de la corrida (por defecto, aleatorio)
   --delay <ms>          espera entre mensajes (300 por defecto)
+  --pause <segundos>    espera antes de los mensajes que esperan al repartidor, p. ej. la recepción (0; 30 en demo-returns)
   --timeout <minutos>   espera máxima de la solicitud de sincronización (120 por defecto)`;
 
 const isWithheld = (step: BuiltStep): boolean => step.respondsTo !== undefined;
@@ -132,7 +135,7 @@ async function cleanup(subscription: Subscription): Promise<void> {
 
 async function runScenario(
     fixture: ScenarioFixture,
-    options: { runId?: string; asIs: boolean; delayMs: number; timeoutMinutes: number },
+    options: { runId?: string; asIs: boolean; delayMs: number; pauseSeconds: number; timeoutMinutes: number },
 ): Promise<boolean> {
     const scenario = buildScenario(fixture, { runId: options.runId, asIs: options.asIs });
     console.log(`\n▶ ${scenario.scenario} (corrida ${scenario.runId})`);
@@ -144,7 +147,13 @@ async function runScenario(
     // Subscribe before publishing anything so a fast `sync.requested` cannot be missed.
     const answered = withheld.length > 0 ? answerSyncRequests(scenario, withheld, options.timeoutMinutes) : null;
     for (const [index, step] of immediate.entries()) {
-        if (index > 0) await sleep(options.delayMs);
+        if (step.pauseBefore && options.pauseSeconds > 0) {
+            console.log(`
+  Pausa de ${options.pauseSeconds} s: lleva el despacho a picked_up_in_transit antes de que Almacén confirme la recepción.`);
+            await sleep(options.pauseSeconds * 1000);
+        } else if (index > 0) {
+            await sleep(options.delayMs);
+        }
         await publishStep(step);
     }
     const ok = answered === null ? true : await answered;
@@ -167,6 +176,7 @@ async function main(argv: string[]): Promise<number> {
             'as-is': { type: 'boolean', default: false },
             'run-id': { type: 'string' },
             delay: { type: 'string', default: '300' },
+            pause: { type: 'string' },
             timeout: { type: 'string', default: '120' },
             help: { type: 'boolean', default: false },
         },
@@ -181,8 +191,9 @@ async function main(argv: string[]): Promise<number> {
 
     const delayMs = Number(values.delay);
     const timeoutMinutes = Number(values.timeout);
-    if (!Number.isFinite(delayMs) || delayMs < 0 || !Number.isFinite(timeoutMinutes) || timeoutMinutes <= 0) {
-        console.error('--delay y --timeout deben ser números positivos.');
+    const pauseSeconds = Number(values.pause ?? DEFAULT_PAUSE_SECONDS[script] ?? 0);
+    if (!Number.isFinite(pauseSeconds) || pauseSeconds < 0 || !Number.isFinite(delayMs) || delayMs < 0 || !Number.isFinite(timeoutMinutes) || timeoutMinutes <= 0) {
+        console.error('--delay, --pause y --timeout deben ser números positivos.');
         return 2;
     }
 
@@ -202,6 +213,7 @@ async function main(argv: string[]): Promise<number> {
             runId: values['run-id'],
             asIs: values['as-is'],
             delayMs,
+            pauseSeconds,
             timeoutMinutes,
         });
         failed ||= !ok;

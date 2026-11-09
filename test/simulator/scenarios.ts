@@ -19,7 +19,8 @@ export const FIXTURES_DIR = resolve(import.meta.dirname, 'fixtures');
 
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 // `rmaId` first: an RMA may also carry the `salesOrderId` it comes from, but the RMA is what each run suffixes.
-const ORDER_ID_KEYS = ['rmaId', 'salesOrderId', 'purchaseOrderId'] as const;
+// `referenceId` is the RMA / purchase order a warehouse receipt confirms (ST-240.4): it must carry the same suffix.
+const ORDER_ID_KEYS = ['rmaId', 'salesOrderId', 'purchaseOrderId', 'referenceId'] as const;
 
 export function loadScenarios(dir: string = FIXTURES_DIR): ScenarioFixture[] {
     return readdirSync(dir)
@@ -64,6 +65,11 @@ function orderIdOf(message: Record<string, unknown>): string {
     return '';
 }
 
+function receiptIdOf(message: Record<string, unknown>): string {
+    const data = (message['data'] ?? {}) as Record<string, unknown>;
+    return typeof data['receiptId'] === 'string' ? data['receiptId'] : '';
+}
+
 /**
  * Turns a fixture into what a run publishes: fresh `messageId`s (the same fixed id keeps the same new
  * one, so a repeated step is still a redelivery), order ids suffixed with the run, and every date
@@ -75,6 +81,8 @@ export function buildScenario(fixture: ScenarioFixture, options: BuildOptions = 
     const deltaMs = (options.now ?? new Date()).getTime() - Date.parse(fixture.anchor);
 
     const orderIds = new Set(fixture.steps.map((step) => orderIdOf(step.message)).filter(Boolean));
+    // A receipt id is deduplicated like an order: a second run must not be ignored as «not newer».
+    const suffixed = new Set([...orderIds, ...fixture.steps.map((step) => receiptIdOf(step.message)).filter(Boolean)]);
     const messageIds = new Map<string, string>();
     const messageIdFor = (fixed: string): string => {
         let fresh = messageIds.get(fixed);
@@ -92,7 +100,7 @@ export function buildScenario(fixture: ScenarioFixture, options: BuildOptions = 
                 if (ISO_UTC.test(text)) return shiftDate(text, deltaMs);
                 // Substring, not equality: package ids embed the order id and must be unique per run too.
                 let result = text;
-                for (const orderId of orderIds) result = result.replaceAll(orderId, `${orderId}-${runId}`);
+                for (const id of suffixed) result = result.replaceAll(id, `${id}-${runId}`);
                 return result;
             }) as Record<string, unknown>;
             if (typeof envelope['messageId'] === 'string') {
@@ -105,6 +113,7 @@ export function buildScenario(fixture: ScenarioFixture, options: BuildOptions = 
             envelope,
             repeat: step.repeat ?? 1,
             respondsTo: step.respondsTo,
+            pauseBefore: step.pauseBefore === true,
             expectInvalid: step.expectInvalid === true,
             orderId: orderIdOf(envelope),
         };

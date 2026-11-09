@@ -21,6 +21,7 @@ import { TypeOrmShipmentBlocksReader } from '../../src/modules/messaging/shipmen
 import { ShipmentOrderConsumer } from '../../src/modules/messaging/shipment-intake/services/shipment-order-consumer.service.js';
 import { RmaPickupConsumer } from '../../src/modules/messaging/rma-pickup-intake/services/rma-pickup-consumer.service.js';
 import { ProcurementPickupConsumer } from '../../src/modules/messaging/procurement-pickup-intake/services/procurement-pickup-consumer.service.js';
+import { WarehouseReceiptConsumer } from '../../src/modules/messaging/warehouse-receipt-intake/services/warehouse-receipt-consumer.service.js';
 import { MessageValidator } from '../../src/plugins/messaging/envelope/message-validator.js';
 import type { ConsumeOutcome } from '../../src/plugins/messaging/message-consumer.js';
 import { MemoryInboundMessageLogAdapter } from '../../src/plugins/messaging/memory/memory-inbound-message-log.adapter.js';
@@ -28,6 +29,11 @@ import { MemoryInboundMessageRejectionAdapter } from '../../src/plugins/messagin
 import { MemoryInboundMessageTransactionAdapter } from '../../src/plugins/messaging/memory/memory-inbound-message-transaction.adapter.js';
 import { MemoryMessageBusAdapter } from '../../src/plugins/messaging/memory/memory-message-bus.adapter.js';
 import { MemoryPickupOrderService, MemoryRmaSyncStateAdapter } from './memory-rma-pickup.js';
+import {
+    createReceiptIntake,
+    MemoryWarehouseReceiptStore,
+    StoreTransaction,
+} from './memory-warehouse-receipt.js';
 import type { BuiltScenario, BuiltStep } from './scenario.types.js';
 
 const CONTRACTS_DIR = resolve(import.meta.dirname, '../../contracts/messages');
@@ -111,7 +117,8 @@ export interface PublishedOutcome {
 export async function createHarness() {
     const log = new MemoryInboundMessageLogAdapter();
     const rejection = new MemoryInboundMessageRejectionAdapter();
-    const bus = new MemoryMessageBusAdapter(MessageValidator.fromDirectory(CONTRACTS_DIR), log, rejection);
+    const validator = MessageValidator.fromDirectory(CONTRACTS_DIR);
+    const bus = new MemoryMessageBusAdapter(validator, log, rejection);
     const transaction = new MemoryInboundMessageTransactionAdapter(log);
 
     const syncStates = new MemoryOrderSyncStateAdapter();
@@ -139,6 +146,10 @@ export async function createHarness() {
     transaction.registerParticipant(rmaSyncStates);
     transaction.registerParticipant(rmaPickups);
 
+    // Almacén's receipt (ST-240.4) resolves the dispatches the RMA and procurement consumers created above.
+    const receipts = new MemoryWarehouseReceiptStore(rmaPickups, procurement);
+    transaction.registerParticipant(receipts);
+
     await new MarketplaceOrderConsumer(
         bus, transaction, marketplaceOrders, consolidator, dispatchChanges, events,
     ).onModuleInit();
@@ -153,6 +164,17 @@ export async function createHarness() {
             emitted.push({ event, payload });
         },
     } as never).onModuleInit();
+
+    await new WarehouseReceiptConsumer(
+        bus,
+        new StoreTransaction(transaction, receipts),
+        createReceiptIntake(receipts, validator),
+        {
+            emit: (event: string, payload: unknown) => {
+                emitted.push({ event, payload });
+            },
+        } as never,
+    ).onModuleInit();
 
     /** Publishes a step as the broker would (`repeat` times, same `messageId`). */
     const publish = async (step: BuiltStep): Promise<PublishedOutcome[]> => {
@@ -190,6 +212,8 @@ export async function createHarness() {
         procurement,
         /** Recojos domiciliarios created from `inventory.return.requested` (in-memory `PickupOrderService`). */
         rmaPickups,
+        /** Receipts, dispatch states and outbox of the warehouse-receipt circuit (ST-240.4). */
+        receipts,
         emitted,
         run,
         publish,
