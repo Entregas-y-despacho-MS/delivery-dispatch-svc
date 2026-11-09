@@ -19,7 +19,7 @@ function build(batch: { routeBatchId: number; status: string; shiftDate: string 
     const settingsService = { getString: vi.fn(async (key: string) => settings[key] ?? '') };
     const repository = { findBatch: vi.fn(async () => batch) };
     const notices = { sendDueNotices: vi.fn(async () => ({})) };
-    return { listener: new LateApprovalNoticeListener(settingsService as any, repository as any, notices as any), notices };
+    return { listener: new LateApprovalNoticeListener(settingsService as any, repository as any, notices as any), notices, settingsService, repository };
 }
 
 const confirmed = { routeBatchId: 11, status: 'confirmed', shiftDate: '2026-10-14' };
@@ -54,6 +54,16 @@ describe('LateApprovalNoticeListener', () => {
 
         await listener.handleRouteAssigned(EVENT, new Date());
 
+        expect(notices.sendDueNotices).not.toHaveBeenCalled();
+    });
+
+    it("skips the settings load and the batch query for a reassignment's own route.assigned (ES-63)", async () => {
+        const { listener, notices, settingsService, repository } = build(confirmed);
+
+        await listener.handleRouteAssigned({ ...EVENT, fromReassignment: true }, new Date());
+
+        expect(settingsService.getString).not.toHaveBeenCalled();
+        expect(repository.findBatch).not.toHaveBeenCalled();
         expect(notices.sendDueNotices).not.toHaveBeenCalled();
     });
 });

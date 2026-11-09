@@ -57,4 +57,31 @@ describe('RouteBatchesController.reassignReviewer', () => {
     expect(query.findAll).toHaveBeenCalledWith(params);
     expect(query.findOne).toHaveBeenCalledWith(5);
   });
+
+  it('delegates reassignment to its service with the batch id, the body and the actor from the token', async () => {
+    const reassignment = { reassign: vi.fn().mockResolvedValue({ fromBatchId: 10, toBatchId: 20, movedDispatchIds: [31], fromVersion: 6, toVersion: 3, fromBatchClosed: false }) };
+    const controller = new RouteBatchesController(
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+      reassignment as any, {} as any,
+    );
+    const dto = { dispatchIds: [31], targetBatchId: 20, reasonCode: 'DRIVER-BREAKDOWN', version: 5, targetVersion: 2 };
+
+    const result = await controller.reassign(10, dto, 9);
+
+    expect(reassignment.reassign).toHaveBeenCalledWith(10, dto, 9);
+    expect(result).toEqual({ fromBatchId: 10, toBatchId: 20, movedDispatchIds: [31], fromVersion: 6, toVersion: 3, fromBatchClosed: false });
+  });
+
+  it('delegates reassignment targets to its service with the batch id', async () => {
+    const targets = { findTargets: vi.fn().mockResolvedValue([{ routeBatchId: 20 }]) };
+    const controller = new RouteBatchesController(
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+      {} as any, targets as any,
+    );
+
+    const result = await controller.findReassignmentTargets(10);
+
+    expect(targets.findTargets).toHaveBeenCalledWith(10);
+    expect(result).toEqual([{ routeBatchId: 20 }]);
+  });
 });

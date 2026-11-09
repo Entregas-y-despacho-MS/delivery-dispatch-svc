@@ -26,6 +26,9 @@ export class LateApprovalNoticeListener {
 
     @OnEvent(ROUTE_ASSIGNED_EVENT, { async: true })
     async handleRouteAssigned(event: RouteAssignedEvent, now: Date = new Date()): Promise<void> {
+        // A reassignment's route.assigned is for a batch already in_execution, never confirmed — this
+        // would always end up a no-op below anyway, this just skips the settings load and the query to get there.
+        if (event.fromReassignment) return;
         try {
             const loaded = await loadFinalReviewSettings(this.settings);
             if (!loaded.ok) {

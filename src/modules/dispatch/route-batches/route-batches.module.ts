@@ -20,10 +20,13 @@ import { CotejoResolutionController } from './controllers/cotejo-resolution.cont
 import { PlanningAlertsService } from '../../../app/planning/services/planning-alerts.service.js';
 import { OutboundMessagesModule } from '../../messaging/outbound-messages/outbound-messages.module.js';
 import { PromiseFirmingModule } from '../../../app/promise-firming/promise-firming.module.js';
+import { DispatchRescheduleModule } from '../../../app/dispatch-reschedule/dispatch-reschedule.module.js';
+import { RouteBatchReassignmentService } from './services/route-batch-reassignment.service.js';
+import { ReassignmentTargetsService } from './services/reassignment-targets.service.js';
 
 // Reviewer assignment (ST-50.4, D-42). The batch planner (ST-50.2) calls RouteBatchReviewerService.assignReviewer.
 @Module({
-  imports: [TypeOrmModule.forFeature([RouteBatch, RouteBatchEvent]), OutboundMessagesModule, PromiseFirmingModule],
+  imports: [TypeOrmModule.forFeature([RouteBatch, RouteBatchEvent]), OutboundMessagesModule, PromiseFirmingModule, DispatchRescheduleModule],
   controllers: [RouteBatchesController, CotejoResolutionController],
   providers: [
     RouteBatchReviewerService,
@@ -42,6 +45,8 @@ import { PromiseFirmingModule } from '../../../app/promise-firming/promise-firmi
     // PlanningModule imports this module, so it cannot be imported back (cycle). The service has no state of its
     // own (DataSource + the global event emitter), so this module gets its own instance for the cotejo alert.
     PlanningAlertsService,
+    RouteBatchReassignmentService,
+    ReassignmentTargetsService,
   ],
   exports: [RouteBatchReviewerService, RouteCapacityService, RouteBatchResourcesService],
 })

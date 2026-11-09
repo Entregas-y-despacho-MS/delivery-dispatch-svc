@@ -11,6 +11,7 @@ import { ROUTE_ASSIGNED_EVENT, type RouteAssignedEvent } from '../../modules/dis
 import { ROUTE_VEHICLE_CHANGED_EVENT, type RouteVehicleChangedEvent } from '../../modules/dispatch/route-batches/events/route-vehicle-changed.event.js';
 import { DELIVERY_ZONE_CREATED_EVENT, type DeliveryZoneCreatedEvent } from '../../modules/catalog/delivery-zones/events/delivery-zone-created.event.js';
 import { DISPATCH_LOCATION_UPDATED_EVENT, type DispatchLocationUpdatedEvent } from '../tracking/events/dispatch-location-updated.event.js';
+import { ROUTE_BATCH_REASSIGNED_EVENT, type RouteBatchReassignedEvent } from '../../modules/dispatch/route-batches/events/route-batch-reassigned.event.js';
 import { OPERATIONAL_ALERT_RAISED_EVENT, type OperationalAlertRaisedEvent } from '../../modules/operational-alerts/events/operational-alert-raised.event.js';
 
 const ROLE_ROOMS = ['coordinators', 'supervisors'];
@@ -203,6 +204,13 @@ export class DispatchEventsSocketListener implements OnModuleDestroy {
             version: event.version,
             acceptanceRevoked: event.acceptanceRevoked,
         });
+    }
+
+    /** ES-63 — notifies the board and both drivers that stops moved between two in_execution route batches. */
+    @OnEvent(ROUTE_BATCH_REASSIGNED_EVENT, { async: true })
+    forwardBatchReassigned(event: RouteBatchReassignedEvent): void {
+        const rooms = [...ROLE_ROOMS, `driver:${event.fromDriverId}`, `driver:${event.toDriverId}`];
+        this.socket.emitToRooms([...new Set(rooms)], ROUTE_BATCH_REASSIGNED_EVENT, event);
     }
 
     @OnEvent('integration.message_rejected', { async: true })

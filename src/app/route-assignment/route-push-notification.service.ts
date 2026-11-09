@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PushTokensService } from '../../modules/auth/push-tokens/services/push-tokens.service.js';
 import type { RouteAssignedEvent } from '../../modules/dispatch/route-batches/events/route-assigned.event.js';
 import type { RouteVehicleChangedEvent } from '../../modules/dispatch/route-batches/events/route-vehicle-changed.event.js';
+import type { RouteBatchReassignedEvent } from '../../modules/dispatch/route-batches/events/route-batch-reassigned.event.js';
 import { PushPort, type PushMessage, type PushReceiptReference } from '../../plugins/push/push.port.js';
 import { sendWithPushRetry } from '../../plugins/push/push-retry.js';
 import { PushReceiptMonitor } from './push-receipt-monitor.js';
@@ -94,6 +95,46 @@ export class RoutePushNotificationService {
         } catch (error) {
             // This listener runs after commit: provider failures never undo a vehicle replacement.
             this.logger.error(`Vehicle change push notification failed: ${errorMessage(error)}`);
+        }
+    }
+
+    /** ES-63 — informs both drivers that stops moved from one in_execution route to another. */
+    async notifyReassigned(event: RouteBatchReassignedEvent): Promise<void> {
+        await this.notifyOneSide(event.fromDriverId, {
+            title: 'Paradas reasignadas',
+            body: `${event.dispatchIds.length} parada(s) de tu ruta #${event.fromBatchId} se movieron a otro repartidor.`,
+            data: { routeId: event.fromBatchId, dispatchIds: event.dispatchIds, direction: 'removed' as const },
+        }, 'Reassignment push notification (origin side) was not delivered');
+        await this.notifyOneSide(event.toDriverId, {
+            title: 'Nuevas paradas asignadas',
+            body: `${event.dispatchIds.length} parada(s) se agregaron a tu ruta #${event.toBatchId}${event.zoneName ? ` en ${event.zoneName}` : ''}.`,
+            data: { routeId: event.toBatchId, dispatchIds: event.dispatchIds, direction: 'added' as const },
+        }, 'Reassignment push notification (destination side) was not delivered');
+    }
+
+    private async notifyOneSide(driverId: number, message: Omit<PushMessage, 'to'>, warnPrefix: string): Promise<void> {
+        try {
+            const tokens = await this.pushTokens.findActiveByUserId(driverId);
+            if (tokens.length === 0) return;
+
+            const messages = tokens.map(({ token }) => ({ ...message, to: token }));
+            const outcomes = await sendWithPushRetry(this.provider, messages);
+            const receipts: PushReceiptReference[] = [];
+
+            for (const outcome of outcomes) {
+                if (outcome.status === 'accepted' && outcome.receiptId) {
+                    receipts.push({ token: outcome.token, receiptId: outcome.receiptId });
+                } else if (outcome.status === 'invalid-token') {
+                    await this.revokeInvalidToken(outcome.token);
+                } else if (outcome.status === 'permanent-error' || outcome.status === 'retryable-error') {
+                    this.logger.warn(`${warnPrefix} (${outcome.status}): ${outcome.error}`);
+                }
+            }
+
+            this.receipts.add(receipts);
+        } catch (error) {
+            // This listener runs after commit: provider failures never undo a reassignment.
+            this.logger.error(`${warnPrefix}: ${errorMessage(error)}`);
         }
     }
 
