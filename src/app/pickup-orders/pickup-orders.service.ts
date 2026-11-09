@@ -32,6 +32,7 @@ interface PickupOrderRow {
     warehouse_code: string | null;
     warehouse_name: string | null;
     created_at: Date;
+    receipt_result: 'complete' | 'with_differences' | 'rejected' | null;
 }
 
 /** Origin of an order, told from its `source_order_ref` (`MANUAL-` is reserved, ST-81.2 D2). */
@@ -43,7 +44,10 @@ export const PICKUP_ORDER_SELECT = `
            d.delivery_latitude AS latitude, d.delivery_longitude AS longitude, d.return_reason, d.package_contents,
            d.estimated_boxes,
            to_char(d.preferred_pickup_date AT TIME ZONE 'America/La_Paz', 'YYYY-MM-DD') AS preferred_pickup_date,
-           w.warehouse_id, w.code AS warehouse_code, w.name AS warehouse_name, d.created_at
+           w.warehouse_id, w.code AS warehouse_code, w.name AS warehouse_name, d.created_at,
+           (SELECT r.result FROM warehouse_receipts r
+             WHERE r.dispatch_id = d.dispatch_id AND r.status = 'applied'
+             ORDER BY r.received_at DESC, r.record_version DESC LIMIT 1) AS receipt_result
       FROM dispatches d
       JOIN dispatch_types dt ON dt.dispatch_type_id = d.dispatch_type_id
       JOIN dispatch_statuses ds ON ds.dispatch_status_id = d.dispatch_status_id
@@ -72,6 +76,7 @@ export function toPickupOrderDto(row: PickupOrderRow): PickupOrderDto {
             ? null
             : { id: row.warehouse_id, code: row.warehouse_code as string, name: row.warehouse_name as string },
         createdAt: new Date(row.created_at).toISOString(),
+        receiptResult: row.receipt_result ?? null,
     };
 }
 

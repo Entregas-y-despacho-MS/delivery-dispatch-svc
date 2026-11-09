@@ -125,6 +125,7 @@ src/
 | `npm run simulate:marketplace` | ERP simulator: scenarios of Marketplace (see «Simulador ERP») |
 | `npm run simulate:inventory` | ERP simulator: scenarios of Almacén |
 | `npm run simulate:procurement` | ERP simulator: scenarios of Compras |
+| `npm run simulate:demo-returns` | ERP simulator: RMA / pickup followed by Almacén's receipt (see «Demo de recepción») |
 | `npm run simulate:listen` | Simulated consumer: prints what Despachos publishes |
 
 ## Docker
@@ -257,11 +258,13 @@ Google Cloud real.
 | `npm run simulate:marketplace` | Lista los escenarios de Marketplace. |
 | `npm run simulate:marketplace -- --scenario <nombre>` | Publica el escenario. |
 | `npm run simulate:inventory` / `simulate:procurement` | Igual, para Almacén y Compras. |
+| `npm run simulate:demo-returns` | Igual, para la recepción de Almacén (`ES-240`); ver «Demo de recepción». |
 | `npm run simulate:listen` | Escucha los tópicos `dispatch.*` y escribe cada mensaje en consola. |
 
 Opciones de `simulate:*`: `--all` (todos los escenarios del origen que no esperan una solicitud),
 `--run-id <texto>` (sufijo de los ids; aleatorio por defecto), `--as-is` (fixture tal cual: mismos ids y
-fechas), `--delay <ms>` (espera entre mensajes, 300) y `--timeout <min>` (espera de la solicitud en los
+fechas), `--delay <ms>` (espera entre mensajes, 300), `--pause <s>` (espera antes de la recepción en los
+escenarios que la llevan: 0 por defecto, 30 en `simulate:demo-returns`) y `--timeout <min>` (espera de la solicitud en los
 escenarios de «mensaje perdido», 120).
 
 Opciones de `simulate:listen`: `--topic <tópico>` (repetible) y `--dead-letters`, que muestra además los
@@ -307,6 +310,14 @@ su descripción y el resultado esperado. En cada corrida el simulador:
 | procurement | `duplicate-pickup` | La segunda entrega se ignora. |
 | procurement | `invalid-pickup-window` | La ventana termina antes de empezar: dead-letter (`invalid_pickup_window`). |
 | procurement | `invalid-pickup` | Falta `supplier`: dead-letter por esquema. |
+| demo-returns | `receipt-rma-complete` | RMA + recepción completa. Con el recojo en `picked_up_in_transit`: pasa a `returned_to_warehouse` (cerrado); no se publica nada a Inventarios. |
+| demo-returns | `receipt-rma-damaged` | RMA + recepción con un equipo dañado: `incident` con la incidencia `INC-RECEIPT-DIFF`, `dispatch.transfer.status_changed` hacia Inventarios (`salesOrderId` = RMA) y `dispatch.incident_reported` en la web. |
+| demo-returns | `receipt-pickup-complete` | Recogida en proveedor + recepción completa: `delivered` y mensaje a Compras con `result complete` y sin ítems. |
+| demo-returns | `receipt-pickup-missing` | Recogida + recepción con faltantes: `incident`, mensaje a Compras con `result with_differences` y solo los ítems con diferencias. |
+| demo-returns | `receipt-unknown-reference` | Recepción de una orden de compra desconocida: recepción `orphan`, nada cambia y `dispatch.change_requires_attention` (`orphan_receipt`). |
+| demo-returns | `receipt-not-picked-up` | RMA + recepción antes de que se recoja (`pickup_scheduled`): `orphan`; el despacho no se mueve. |
+| demo-returns | `receipt-invalid` | Recepción sin `items`: dead-letter de `inventory.receipt.confirmed` (`schema_invalid`) y alerta. |
+| demo-returns | `receipt-duplicate` | RMA + la misma recepción entregada dos veces: la segunda se ignora (una recepción, un cambio de estado). |
 
 Para ver un dead-letter: `npm run simulate:listen -- --dead-letters` en otra terminal.
 
@@ -365,6 +376,22 @@ preferida dos días después. Qué debe observarse:
 
 Cada corrida usa un `runId` distinto, así que se puede repetir sin que la deduplicación la ignore.
 `--all` publica todos los escenarios de Almacén, los RMA incluidos.
+
+### Demo de recepción — `ES-240`
+Almacén confirma con `inventory.receipt.confirmed` lo que llegó a su bodega; Despachos cierra el traslado
+(`returned_to_warehouse` o `delivered`) o abre una incidencia. Solo se aplica sobre un despacho en
+`picked_up_in_transit`, y ese estado lo da el recojo real, así que el simulador **publica primero el RMA (o la
+solicitud de recogida) y espera `--pause` segundos** antes de la recepción: es el tiempo para llevar el despacho a
+`picked_up_in_transit` (con el repartidor, o en una base de pruebas con un `UPDATE` del estado).
+
+```bash
+npm run simulate:demo-returns -- --scenario receipt-rma-complete --pause 60
+npm run simulate:demo-returns -- --scenario receipt-pickup-missing --pause 60
+```
+
+Sin `--scenario` lista los ocho escenarios. Mientras corre, `npm run simulate:listen` muestra lo que Despachos
+publica (`dispatch.transfer.status_changed` hacia Compras o Inventarios, según el escenario). Con `--pause 0` la
+recepción llega con el despacho aún en `pickup_scheduled` y queda `orphan`, igual que `receipt-not-picked-up`.
 
 ### Pruebas
 `npm run test` incluye `test/simulator/`: valida cada fixture contra su esquema (`contracts/messages/`)

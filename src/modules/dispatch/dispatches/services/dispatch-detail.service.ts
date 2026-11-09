@@ -13,6 +13,7 @@ import type {
     DispatchDetailEventDto,
     DispatchDetailEvidenceDto,
     DispatchDetailRatingDto,
+    DispatchDetailReceiptDto,
     DispatchDetailUserDto,
 } from '../dto/dispatch-detail.dto.js';
 
@@ -30,6 +31,35 @@ interface DispatchRatingRow {
     comment: string | null;
     created_at: Date;
 }
+
+interface DispatchReceiptRow {
+    result: string;
+    received_at: Date;
+    notes: string | null;
+    items: {
+        itemCode: string | null; packageId: number | null;
+        acceptedQuantity: string | number; missingQuantity: string | number; damagedQuantity: string | number;
+        detail: string | null;
+    }[];
+}
+
+// One query for the receipt and its items (ST-240.6). Only an `applied` receipt belongs to a dispatch (an
+// `orphan` has no dispatch_id); if a correction ever left two, the latest one wins.
+export const RECEIPT_SQL = `
+    SELECT r.result, r.received_at, r.notes,
+           COALESCE((
+               SELECT json_agg(json_build_object(
+                          'itemCode', i.item_code, 'packageId', i.package_id,
+                          'acceptedQuantity', i.accepted_quantity, 'missingQuantity', i.missing_quantity,
+                          'damagedQuantity', i.damaged_quantity, 'detail', i.detail
+                      ) ORDER BY i.warehouse_receipt_item_id)
+                 FROM warehouse_receipt_items i
+                WHERE i.receipt_id = r.receipt_id
+           ), '[]'::json) AS items
+      FROM warehouse_receipts r
+     WHERE r.dispatch_id = $1 AND r.status = 'applied'
+     ORDER BY r.received_at DESC, r.record_version DESC
+     LIMIT 1`;
 
 /**
  * RF-A09 — unified 360° view of a dispatch. A fixed number of queries (the dispatch with its
@@ -58,12 +88,13 @@ export class DispatchDetailService {
         });
         if (!dispatch) throw new DispatchNotFoundException();
 
-        const [events, incidents, reschedules, evidences, ratingRows] = await Promise.all([
+        const [events, incidents, reschedules, evidences, ratingRows, receiptRows] = await Promise.all([
             this.events.find({ where: { dispatchId: id }, relations: { actorUser: true }, order: { createdAt: 'ASC', id: 'ASC' } }),
             this.incidents.find({ where: { dispatchId: id }, relations: { incidentReason: true }, order: { createdAt: 'ASC', id: 'ASC' } }),
             this.reschedules.find({ where: { dispatchId: id }, relations: { rescheduleReason: true, rescheduledByUser: true }, order: { createdAt: 'ASC', id: 'ASC' } }),
             this.evidences.find({ where: { dispatchId: id }, order: { createdAt: 'ASC', id: 'ASC' } }),
             this.dataSource.query('SELECT score, comment, created_at FROM dispatch_ratings WHERE dispatch_id = $1', [id]),
+            this.dataSource.query(RECEIPT_SQL, [id]),
         ]);
 
         const evidenceDtos = await Promise.all(evidences.map((e) => this.toEvidence(e)));
@@ -73,6 +104,17 @@ export class DispatchDetailService {
             score: Number(ratingRow.score),
             comment: ratingRow.comment,
             createdAt: new Date(ratingRow.created_at).toISOString(),
+        } : null;
+        const receiptRow = (receiptRows as DispatchReceiptRow[])[0];
+        const receipt: DispatchDetailReceiptDto | null = receiptRow ? {
+            result: receiptRow.result,
+            receivedAt: new Date(receiptRow.received_at).toISOString(),
+            notes: receiptRow.notes,
+            items: receiptRow.items.map((i) => ({
+                itemCode: i.itemCode, packageId: i.packageId,
+                acceptedQuantity: Number(i.acceptedQuantity), missingQuantity: Number(i.missingQuantity),
+                damagedQuantity: Number(i.damagedQuantity), detail: i.detail,
+            })),
         } : null;
 
         return {
@@ -109,6 +151,7 @@ export class DispatchDetailService {
             } : null,
             receiver: evidenceDtos.find((e) => e.type === 'signature' && e.receiverName) ?? null,
             rating,
+            receipt,
             timeline: events.map((e) => this.toEvent(e)),
             incidents: incidents.map((i) => ({
                 id: i.id, reasonCode: i.incidentReason.code, reasonName: i.incidentReason.name,

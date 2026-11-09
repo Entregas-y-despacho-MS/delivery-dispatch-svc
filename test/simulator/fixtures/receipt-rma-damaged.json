@@ -1,0 +1,82 @@
+{
+  "scenario": "receipt-rma-damaged",
+  "script": "demo-returns",
+  "description": "Devolución (RMA) recibida con una unidad dañada.",
+  "expected": "Con el recojo en picked_up_in_transit, el despacho pasa a incident con una incidencia receipt_difference (INC-RECEIPT-DIFF); se encola dispatch.transfer.status_changed hacia Inventarios con el RMA y el ítem dañado, y la web recibe dispatch.status_changed y dispatch.incident_reported.",
+  "anchor": "2026-11-09T12:00:00Z",
+  "steps": [
+    {
+      "label": "Almacén aprueba la devolución (RMA)",
+      "message": {
+        "messageId": "01930000-0000-7000-8000-000000000062",
+        "type": "inventory.return.requested",
+        "schemaVersion": 1,
+        "source": "inventory",
+        "occurredAt": "2026-11-09T12:00:00Z",
+        "data": {
+          "rmaId": "RMA-SIM-0102",
+          "salesOrderId": "SO-2026-000123",
+          "recordVersion": 1,
+          "updatedAt": "2026-11-09T12:00:00Z",
+          "approvedAt": "2026-11-09T11:58:30Z",
+          "warehouseId": "WH-LPZ-01",
+          "contact": {
+            "name": "María Fernández Quispe",
+            "phone": "+59171234567",
+            "email": "maria.fernandez@example.com"
+          },
+          "pickupAddress": {
+            "line": "Calle 21 de Calacoto 8790, casa 12",
+            "reference": "Condominio Las Palmas, segunda garita",
+            "location": {
+              "latitude": -16.5421,
+              "longitude": -68.0802
+            }
+          },
+          "returnReason": "Producto con falla de encendido dentro de garantía",
+          "packages": [
+            {
+              "packageId": "PKG-RMA-SIM-0102-1",
+              "lengthCm": 40,
+              "widthCm": 30,
+              "heightCm": 25,
+              "grossWeightKg": 6.4
+            }
+          ],
+          "preferredPickupDate": "2026-11-11T15:00:00Z"
+        }
+      }
+    },
+    {
+      "label": "Almacén confirma la recepción del RMA con un equipo dañado",
+      "pauseBefore": true,
+      "message": {
+        "messageId": "01930000-0000-7000-8000-000000000063",
+        "type": "inventory.receipt.confirmed",
+        "schemaVersion": 1,
+        "source": "inventory",
+        "occurredAt": "2026-11-09T12:45:00Z",
+        "data": {
+          "receiptId": "RCP-SIM-0102",
+          "recordVersion": 1,
+          "updatedAt": "2026-11-09T12:45:00Z",
+          "receivedAt": "2026-11-09T12:40:12Z",
+          "warehouseId": "WH-LPZ-01",
+          "referenceType": "rma",
+          "referenceId": "RMA-SIM-0102",
+          "result": "with_differences",
+          "items": [
+            {
+              "itemId": "SKU-LAP-14",
+              "expectedQuantity": 1,
+              "acceptedQuantity": 0,
+              "damagedQuantity": 1,
+              "notes": "Pantalla quebrada al recibirlo"
+            }
+          ],
+          "notes": "Daño no declarado por el cliente"
+        }
+      }
+    }
+  ]
+}

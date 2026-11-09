@@ -1,5 +1,5 @@
 /** Which `npm run simulate:*` command exposes a scenario. */
-export type SimulatorScript = 'marketplace' | 'inventory' | 'procurement';
+export type SimulatorScript = 'marketplace' | 'inventory' | 'procurement' | 'demo-returns';
 
 /** `entityType` of `dispatch.sync.requested`: it also tells which origin must answer. */
 export type SyncEntityType = 'sales_order' | 'shipment';
@@ -14,6 +14,11 @@ export interface ScenarioStep {
     repeat?: number;
     /** The message is withheld until `dispatch.sync.requested` of this `entityType` asks for the order. */
     respondsTo?: SyncEntityType;
+    /**
+     * The message waits for the configurable pause (`--pause`) before it is published, so a person can move the
+     * dispatch the previous steps created (e.g. to `picked_up_in_transit`) before the warehouse confirms it.
+     */
+    pauseBefore?: boolean;
     /** On purpose it does not meet its schema; `contracts:check` (ST-73.4) must expect the failure. */
     expectInvalid?: boolean;
 }
@@ -41,6 +46,7 @@ export interface BuiltStep {
     envelope: Record<string, unknown>;
     repeat: number;
     respondsTo?: SyncEntityType;
+    pauseBefore: boolean;
     expectInvalid: boolean;
     /** Order the message belongs to (`rmaId`, `salesOrderId` or `purchaseOrderId`, already suffixed with the run). */
     orderId: string;

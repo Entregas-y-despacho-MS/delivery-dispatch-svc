@@ -4,7 +4,7 @@ import { DispatchNotFoundException } from '../exceptions/index.js';
 
 const at = (iso: string) => new Date(iso);
 
-function build(overrides: { dispatch?: unknown; events?: unknown[]; evidences?: unknown[]; ratings?: unknown[] } = {}) {
+function build(overrides: { dispatch?: unknown; events?: unknown[]; evidences?: unknown[]; ratings?: unknown[]; receipts?: unknown[] } = {}) {
     const dispatch = overrides.dispatch === undefined ? {
         id: 5, trackingCode: 'T1', sourceOrderRef: 'SO-1', priority: 'normal', evidencePolicy: 'hand_delivery_standard',
         paymentStatusLabel: null, scheduledWindowStart: null, scheduledWindowEnd: null, createdAt: at('2026-10-18T10:00:00Z'),
@@ -20,7 +20,9 @@ function build(overrides: { dispatch?: unknown; events?: unknown[]; evidences?: 
     const reschedules = repo([]);
     const evidences = repo(overrides.evidences ?? []);
     const storage = { getAccessUrl: vi.fn().mockResolvedValue({ url: 'http://signed', expiresAt: at('2026-10-18T10:05:00Z') }) };
-    const dataSource = { query: vi.fn().mockResolvedValue(overrides.ratings ?? []) };
+    const dataSource = {
+        query: vi.fn(async (sql: string) => (sql.includes('warehouse_receipts') ? overrides.receipts ?? [] : overrides.ratings ?? [])),
+    };
     const service = new DispatchDetailService(dispatches as any, events as any, incidents as any, reschedules as any, evidences as any, dataSource as any, storage as any);
     return { service, storage, dispatches, events, incidents, reschedules, evidences, dataSource };
 }
@@ -48,6 +50,40 @@ describe('DispatchDetailService', () => {
     it('returns null rating when the customer has not rated the dispatch', async () => {
         const { service } = build();
         await expect(service.findDetail(5)).resolves.toMatchObject({ rating: null });
+    });
+
+    it('returns null receipt when the dispatch has no applied warehouse receipt', async () => {
+        const { service, dataSource } = build();
+
+        await expect(service.findDetail(5)).resolves.toMatchObject({ receipt: null });
+        expect(dataSource.query).toHaveBeenCalledWith(expect.stringContaining("r.status = 'applied'"), [5]);
+    });
+
+    it.each(['complete', 'with_differences', 'rejected'])('exposes a %s receipt with its items and numeric quantities', async (result) => {
+        const receivedAt = at('2026-11-09T15:00:00Z');
+        const { service } = build({ receipts: [{
+            result, received_at: receivedAt, notes: 'Caja golpeada',
+            items: [
+                { itemCode: 'SKU-1', packageId: null, acceptedQuantity: '2.00', missingQuantity: 0, damagedQuantity: '1.5', detail: 'Golpe' },
+                { itemCode: null, packageId: 10, acceptedQuantity: 1, missingQuantity: 0, damagedQuantity: 0, detail: null },
+            ],
+        }] });
+
+        const { receipt } = await service.findDetail(5);
+
+        expect(receipt).toEqual({
+            result, receivedAt: receivedAt.toISOString(), notes: 'Caja golpeada',
+            items: [
+                { itemCode: 'SKU-1', packageId: null, acceptedQuantity: 2, missingQuantity: 0, damagedQuantity: 1.5, detail: 'Golpe' },
+                { itemCode: null, packageId: 10, acceptedQuantity: 1, missingQuantity: 0, damagedQuantity: 0, detail: null },
+            ],
+        });
+    });
+
+    it('returns a receipt with no items when the warehouse sent no detail', async () => {
+        const { service } = build({ receipts: [{ result: 'complete', received_at: at('2026-11-09T15:00:00Z'), notes: null, items: [] }] });
+
+        await expect(service.findDetail(5)).resolves.toMatchObject({ receipt: { result: 'complete', notes: null, items: [] } });
     });
 
     it('exposes only whitelisted metadata keys of an event', async () => {
