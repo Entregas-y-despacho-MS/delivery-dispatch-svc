@@ -6,8 +6,7 @@ const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? val
 
 /**
  * `PATCH /pickup-orders/:id/cancel` (ST-81.2). Same fields as the cancellation of a delivery (`CancelDispatchDto`), but the
- * causal is trimmed, so a reason made only of spaces is refused. `CancelDispatchDto` is left as it was: the delivery
- * endpoint keeps its behavior.
+ * causal is trimmed, so a reason made only of spaces is refused. `CancelDispatchDto` trims it the same way.
  */
 export class CancelPickupOrderDto {
     @ApiProperty({

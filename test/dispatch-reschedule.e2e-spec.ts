@@ -662,6 +662,21 @@ describe('Reprogramación y devolución del coordinador (e2e, ST-52.2)', () => {
             expect((await dispatchRow(id)).status).toBe('assigned');
         });
 
+        it('una causal hecha solo de espacios → 400 sin cambiar nada; la causal se guarda sin espacios sobrantes', async () => {
+            const id = await newDispatch({ status: 'assigned' });
+
+            const blank = await post(id, 'cancel', { reason: '   ' });
+
+            expect(blank.status).toBe(400);
+            expect((await dispatchRow(id)).status).toBe('assigned');
+            expect(await cancelEvents(id)).toHaveLength(0);
+
+            const padded = await post(id, 'cancel', { reason: `  ${cancelBody.reason}  ` });
+
+            expect(padded.status).toBe(200);
+            expect((await cancelEvents(id))[0]).toMatchObject({ reason: cancelBody.reason });
+        });
+
         it('assigned en un lote en ejecución con otra parada abierta: queda cancelled con closed_at, conserva el lote, publica el mensaje y no cierra el lote', async () => {
             const batchId = await newBatch('in_execution', { version: 4 });
             await newDispatch({ status: 'out_for_delivery', batchId, sequence: 2 });

@@ -28,7 +28,7 @@ function setup(options?: {
             if (sql.includes('FROM dispatches d')) return row ? [row] : [];
             if (sql.includes('FROM dispatch_packages')) return options?.packages ?? basePackages;
             if (sql.includes('FROM dispatch_events')) return [{ last_version: String(options?.lastSentVersion ?? 0) }];
-            if (sql.includes('UPDATE dispatches')) return options?.updated ?? [{ dispatch_id: 21 }];
+            if (sql.includes('UPDATE dispatches')) return [options?.updated ?? [{ dispatch_id: 21 }], (options?.updated ?? [1]).length];
             return [];
         }),
     };

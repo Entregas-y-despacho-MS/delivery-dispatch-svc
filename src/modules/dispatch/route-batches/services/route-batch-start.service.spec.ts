@@ -56,6 +56,7 @@ function setup(
     cotejoEvents?: CotejoEvent[];
     packages?: { dispatch_id: number; external_package_id: string }[];
     outboxFailure?: Error;
+    emptyUpdate?: 'batch' | 'dispatch';
   } = {},
 ) {
   const state = {
@@ -109,8 +110,9 @@ function setup(
       }
       if (sql.includes('FROM dispatch_packages')) return state.packages;
       if (sql.includes('UPDATE route_batches'))
-        return [{ updated_at: savedAt }];
-      if (sql.includes('UPDATE dispatches')) return [{ updated_at: savedAt }];
+        return options.emptyUpdate === 'batch' ? [[], 0] : [[{ updated_at: savedAt }], 1];
+      if (sql.includes('UPDATE dispatches'))
+        return options.emptyUpdate === 'dispatch' ? [[], 0] : [[{ dispatch_id: 1 }], 1];
       return [];
     }),
   };
@@ -249,6 +251,28 @@ describe('RouteBatchStartService.start', () => {
         sql.includes('INSERT INTO route_batch_events'),
       )?.[1]?.[2],
     ).toContain('"dispatchIds":[22,21]');
+  });
+
+  it('answers ROUTE_BATCH_NOT_CONFIRMED and rolls back when the guarded batch UPDATE touches no row', async () => {
+    const ctx = setup({ emptyUpdate: 'batch' });
+
+    await expect(ctx.service.start(7, { eventId }, 9)).rejects.toMatchObject({
+      response: { error: 'ROUTE_BATCH_NOT_CONFIRMED' },
+    });
+
+    expect(ctx.runner.rollbackTransaction).toHaveBeenCalledOnce();
+    expect(ctx.events.emit).not.toHaveBeenCalled();
+  });
+
+  it('answers DISPATCH_NOT_ASSIGNED and rolls back when a departing dispatch UPDATE touches no row', async () => {
+    const ctx = setup({ emptyUpdate: 'dispatch' });
+
+    await expect(ctx.service.start(7, { eventId }, 9)).rejects.toMatchObject({
+      response: { error: 'DISPATCH_NOT_ASSIGNED' },
+    });
+
+    expect(ctx.runner.rollbackTransaction).toHaveBeenCalledOnce();
+    expect(ctx.events.emit).not.toHaveBeenCalled();
   });
 
   it('excludes a dispatch with a current cotejo failure and validates only departures', async () => {

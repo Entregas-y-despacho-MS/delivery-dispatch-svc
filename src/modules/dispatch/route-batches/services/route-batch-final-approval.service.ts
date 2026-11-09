@@ -162,7 +162,8 @@ export class RouteBatchFinalApprovalService {
     await this.resources.assertResourcesAvailable(manager, driverId, vehicleId, batch.shift_date, batch.id);
     await this.capacity.assertAssignable(batch.id, vehicleId, manager);
 
-    const updatedBatch: { route_batch_id: number }[] = await manager.query(
+    // TypeORM answers an UPDATE ... RETURNING with `[rows, affectedCount]`, not with the rows.
+    const [updatedBatch]: [{ route_batch_id: number }[], number] = await manager.query(
       `UPDATE route_batches
           SET status = $3, driver_id = $4, vehicle_id = $5, version = version + 1, updated_at = NOW()
         WHERE route_batch_id = $1 AND version = $2 AND status = $6
@@ -176,7 +177,7 @@ export class RouteBatchFinalApprovalService {
     const dispatchIds = dispatches.map(({ id }) => id);
     for (const dispatch of dispatches) {
       const fromStatus = dispatch.type === 'warehouse_return_pickup' ? DispatchStatusEnum.PICKUP_SCHEDULED : DispatchStatusEnum.SCHEDULED;
-      const updated: { dispatch_id: number }[] = await manager.query(
+      const [updated]: [{ dispatch_id: number }[], number] = await manager.query(
         `UPDATE dispatches
             SET dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $4),
                 version = version + 1, updated_at = NOW()

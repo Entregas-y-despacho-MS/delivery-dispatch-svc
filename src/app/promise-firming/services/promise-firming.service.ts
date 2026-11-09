@@ -149,7 +149,8 @@ export class PromiseFirmingService {
             return { outcome: 'incomplete', dispatchId, cause: missing };
         }
 
-        const updated: { dispatch_id: number }[] = await manager.query(
+        // TypeORM answers an UPDATE ... RETURNING with `[rows, affectedCount]`, not with the rows.
+        const [updated]: [{ dispatch_id: number }[], number] = await manager.query(
             `UPDATE dispatches
                 SET promise_firmed_at = $2, customer_confirmation = 'confirmed', updated_at = NOW()
               WHERE dispatch_id = $1 AND promise_firmed_at IS NULL

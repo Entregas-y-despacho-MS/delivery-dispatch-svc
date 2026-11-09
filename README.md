@@ -63,6 +63,11 @@ reservado). Debe coincidir con `PORTAL_ROUTES` del portal web (`config/portal-ro
 | Recojos | `POST /pickup-orders`, `PATCH /pickup-orders/:id/cancel` (desde ST-81.2) | **No**, solo Coordinador |
 | Flota | `/vehicles` (CRUD), `GET`, `POST` y `PATCH :id/status` de `/vehicle-maintenances`, `/vehicle-incident-types` (`GET`, `POST`, `PUT`) | Sí |
 | Flota | `GET /fleet/kpis?period=today\|week\|month` (desde ST-61.1) | Sí (también el Coordinador; el Repartidor recibe 403) |
+| Flota | `GET /fleet/live-positions` (ST-60.1), `PATCH /vehicles/:id/status` (ST-62.1) | Sí (también el Coordinador) |
+| Lotes de ruta | `GET :id/reassignment-targets` y `POST :id/reassign` (ST-63.1) | Sí (también el Coordinador) |
+| Lotes de ruta | `GET /route-batches/cotejo-exclusions` (ST-241.3) | Sí (también el Coordinador) |
+| Lotes de ruta | `POST /dispatches/:id/cotejo-resolved` (ST-241.3) | **No**, solo Coordinador |
+| Reportes | `GET /reports/sla` (ST-54.2) | **No**, solo Coordinador |
 | Catálogos | `GET /warehouses`, `GET /incident-reasons`, `GET /reschedule-reasons` | Sí (solo lectura) |
 | Catálogos | `POST` y `PUT` de `/incident-reasons` y `/reschedule-reasons` | **No**, solo Coordinador (desde ST-59.1) |
 | Catálogos | `/service-levels`, `/delivery-zones` | **No**, solo Coordinador |
@@ -75,17 +80,6 @@ reservado). Debe coincidir con `PORTAL_ROUTES` del portal web (`config/portal-ro
 
 Cualquier usuario autenticado, incluido el Supervisor, puede usar `POST /auth/logout`,
 `PATCH /auth/change-password` y `/auth/2fa/*` sobre su propia cuenta.
-
-### Pendiente: endpoints que aún no están en la matriz
-
-| Tarea | Endpoint | Permiso previsto |
-|---|---|---|
-| `ST-60.1` | `GET /fleet/live-positions` | Supervisor y Coordinador |
-| `ST-62.1` | `PATCH /vehicles/:id/status` | Supervisor y Coordinador |
-| `ST-63.1` | `POST /route-batches/:id/reassign` | Supervisor |
-
-Quien agregue uno de estos endpoints añade su fila a la tabla de arriba y su caso a
-`test/supervisor-permissions.e2e-spec.ts`.
 
 ## Push notifications
 
