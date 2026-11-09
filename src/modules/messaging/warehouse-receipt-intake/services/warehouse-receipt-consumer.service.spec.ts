@@ -93,6 +93,16 @@ describe('WarehouseReceiptConsumer', () => {
         }));
     });
 
+    it('emits dispatch.change_requires_attention with receipt_correction when a correction arrives on an already-applied receipt', async () => {
+        receipts.apply.mockResolvedValue({ status: 'correction', dispatchId: 55 });
+
+        await send();
+
+        expect(events.emit).toHaveBeenCalledWith(DISPATCH_CHANGE_REQUIRES_ATTENTION, expect.objectContaining({
+            dispatchId: 55, source: 'inventory', changeType: 'receipt_correction',
+        }));
+    });
+
     it('does not emit anything when the receipt was applied', async () => {
         receipts.apply.mockResolvedValue({ status: 'applied', dispatchId: 55, newStatus: 'returned_to_warehouse' });
 

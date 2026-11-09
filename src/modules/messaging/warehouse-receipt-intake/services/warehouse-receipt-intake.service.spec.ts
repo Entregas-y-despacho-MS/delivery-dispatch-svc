@@ -67,6 +67,22 @@ describe('WarehouseReceiptIntakeService.apply', () => {
         expect(resolve[0]).toMatch(/ORDER BY d\.dispatch_id\s+LIMIT 1/);
     });
 
+    it('never degrades an already-applied receipt to orphan on a correction: dispatch link and status stay untouched', async () => {
+        const { service } = build();
+        const query = vi.fn()
+            .mockResolvedValueOnce([{ record_version: 1, status: 'applied', dispatch_id: 55 }]) // existing: already applied
+            .mockResolvedValueOnce([]) // UPDATE warehouse_receipts (informational)
+            .mockResolvedValueOnce([]); // DELETE items
+
+        const result = await service.apply({ ...data, recordVersion: 2, notes: 'Corrección: faltaba 1 caja' }, { manager: { query } as unknown as EntityManager });
+
+        expect(result).toEqual({ status: 'correction', dispatchId: 55 });
+        expect(query).not.toHaveBeenCalledWith(expect.stringContaining('UPDATE dispatches'), expect.anything());
+        expect(query).not.toHaveBeenCalledWith(expect.stringContaining('FROM dispatches'), expect.anything());
+        const update = query.mock.calls.find(([sql]: [string]) => sql.includes('UPDATE warehouse_receipts'));
+        expect(update[1]).toEqual(['RCPT-1', 2, 'Corrección: faltaba 1 caja']);
+    });
+
     it('marks the receipt orphan when the reference matches no dispatch', async () => {
         const { service } = build();
         const query = vi.fn()
@@ -174,6 +190,26 @@ describe('WarehouseReceiptIntakeService.apply', () => {
         expect(dispatchIncidents.create).toHaveBeenCalledWith(expect.objectContaining({
             dispatchId: 55, incidentReasonId: 6, description: 'Falta una caja',
         }), expect.anything());
+    });
+
+    it('publishes the incident status to Compras for a supplier pickup (contract allows it, reportedStatus enum)', async () => {
+        const { service, statusPublication } = build();
+        const query = vi.fn()
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([foundDispatch])
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([{ version: 4 }])
+            .mockResolvedValueOnce([{ incident_reason_id: 6 }]);
+
+        await service.apply(
+            { ...data, referenceType: 'purchase_order', referenceId: 'PO-1', result: 'rejected' },
+            { manager: { query } as unknown as EntityManager },
+        );
+
+        expect(statusPublication.publishTransferUpdate).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+            dispatchId: 55, status: 'incident', previousStatus: 'picked_up_in_transit',
+        }));
     });
 
     it('opens an incident for rejected the same way as with_differences', async () => {

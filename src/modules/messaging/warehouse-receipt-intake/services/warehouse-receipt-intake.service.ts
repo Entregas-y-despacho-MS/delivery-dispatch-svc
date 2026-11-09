@@ -24,13 +24,19 @@ interface DispatchRow {
 export type ApplyReceiptResult =
     | { status: 'applied'; dispatchId: number; newStatus: string }
     | { status: 'orphan'; dispatchId: number | null; referenceId: string }
-    | { status: 'ignored' };
+    | { status: 'ignored' }
+    | { status: 'correction'; dispatchId: number };
 
 /**
  * Applies one `inventory.receipt.confirmed` message (ST-240.2, ES-240) inside the caller's
  * transaction: resolves the traslado it confirms, saves the receipt and its items, transitions the
  * dispatch (or leaves it untouched and marks the receipt `orphan`), and evaluates whether its batch
  * can close.
+ *
+ * Locks the dispatch row first, then `closeIfComplete` locks its route_batch — the opposite order of
+ * `DispatchStatusService` (batch, then dispatch). Deadlock risk is low (nothing else locks a single
+ * dispatch and then its batch for one of these route_batch_ids concurrently), but it is worth knowing
+ * if `closeIfComplete` is ever called from a second place in this same flow.
  */
 @Injectable()
 export class WarehouseReceiptIntakeService {
@@ -48,11 +54,20 @@ export class WarehouseReceiptIntakeService {
 
         // Idempotency by receiptId (Escenario 5): a repeat or out-of-order recordVersion is ignored
         // outright, before resolving or touching anything else.
-        const [existing]: { record_version: number }[] = await manager.query(
-            `SELECT record_version FROM warehouse_receipts WHERE receipt_id = $1`,
+        const [existing]: { record_version: number; status: string; dispatch_id: number | null }[] = await manager.query(
+            `SELECT record_version, status, dispatch_id FROM warehouse_receipts WHERE receipt_id = $1 FOR UPDATE`,
             [data.receiptId],
         );
         if (existing && data.recordVersion <= existing.record_version) return { status: 'ignored' };
+
+        // A correction (higher recordVersion) on a receipt that was already applied must never degrade
+        // it to orphan just because the dispatch has since moved past picked_up_in_transit — that move
+        // is exactly what applying it caused. Only the informational data is updated; the dispatch link
+        // and its status stay untouched, and the coordinator is told to review the correction by hand.
+        if (existing?.status === 'applied' && existing.dispatch_id !== null) {
+            await this.updateReceiptInformational(manager, data);
+            return { status: 'correction', dispatchId: existing.dispatch_id };
+        }
 
         const [found]: DispatchRow[] = await manager.query(
             `SELECT d.dispatch_id, s.name AS status, d.version, d.route_batch_id, d.tracking_code
@@ -164,6 +179,24 @@ export class WarehouseReceiptIntakeService {
                 new Date(data.receivedAt), data.recordVersion, data.notes ?? null, status],
         );
         // A correction (higher recordVersion for the same receiptId) replaces its own items outright.
+        await manager.query(`DELETE FROM warehouse_receipt_items WHERE receipt_id = $1`, [data.receiptId]);
+        for (const item of data.items ?? []) {
+            await manager.query(
+                `INSERT INTO warehouse_receipt_items
+                    (receipt_id, package_id, item_code, accepted_quantity, missing_quantity, damaged_quantity, detail)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                [data.receiptId, item.packageId ?? null, item.itemCode ?? null,
+                    item.acceptedQuantity, item.missingQuantity, item.damagedQuantity, item.detail ?? null],
+            );
+        }
+    }
+
+    /** Updates only notes/record_version/items of an already-`applied` receipt; never touches status or dispatch_id. */
+    private async updateReceiptInformational(manager: EntityManager, data: InventoryReceiptConfirmedData): Promise<void> {
+        await manager.query(
+            `UPDATE warehouse_receipts SET record_version = $2, notes = $3, updated_at = NOW() WHERE receipt_id = $1`,
+            [data.receiptId, data.recordVersion, data.notes ?? null],
+        );
         await manager.query(`DELETE FROM warehouse_receipt_items WHERE receipt_id = $1`, [data.receiptId]);
         for (const item of data.items ?? []) {
             await manager.query(

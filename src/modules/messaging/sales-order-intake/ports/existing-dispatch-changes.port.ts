@@ -12,11 +12,22 @@ export type ChangeSource = 'marketplace' | 'inventory' | 'procurement';
 export interface ChangeRequiresAttention {
   /** Present for an existing dispatch; absent while the sales order is still incomplete. */
   dispatchId?: number;
-  /** Present when attention is needed before a dispatch has been created, or when a reference never resolved to one at all (`orphan_receipt`). */
+  /**
+   * Present when attention is needed before a dispatch has been created, or when a reference never
+   * resolved to one at all (`orphan_receipt`). For `orphan_receipt` this is NOT a sales order id: it
+   * is the warehouse receipt's own `referenceId` (an `rmaId` or a purchase order id) — the field is
+   * reused as-is rather than adding a dedicated one, so a consumer of this event must not assume it
+   * is always a Marketplace sales order.
+   */
   salesOrderId?: string;
   source: ChangeSource;
-  /** `orphan_receipt` (ST-240.2): a warehouse receipt whose reference matched no dispatch, or whose dispatch was not `picked_up_in_transit`. */
-  changeType: 'order_changed' | 'order_cancelled' | 'incomplete_order' | 'orphan_receipt';
+  /**
+   * `orphan_receipt` (ST-240.2): a warehouse receipt whose reference matched no dispatch, or whose
+   * dispatch was not `picked_up_in_transit`. `receipt_correction` (ST-240.2): a later, higher-version
+   * message for a receipt already applied — the dispatch link and status were left untouched on
+   * purpose; only the receipt's own notes/items were updated. A coordinator should still look at it.
+   */
+  changeType: 'order_changed' | 'order_cancelled' | 'incomplete_order' | 'orphan_receipt' | 'receipt_correction';
   /** ISO-8601 UTC. */
   receivedAt: string;
 }

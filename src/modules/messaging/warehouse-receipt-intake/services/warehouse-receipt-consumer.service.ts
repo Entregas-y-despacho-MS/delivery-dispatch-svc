@@ -46,7 +46,10 @@ export class WarehouseReceiptConsumer implements OnModuleInit {
 
         if (outcome.status === 'orphan') {
             this.logger.debug(`Receipt ${data.receiptId} is orphan: reference ${outcome.referenceId} did not resolve.`);
-            this.emitOrphan(outcome.dispatchId, outcome.referenceId);
+            this.emitAttention(outcome.dispatchId, outcome.referenceId, 'orphan_receipt');
+        } else if (outcome.status === 'correction') {
+            this.logger.debug(`Receipt ${data.receiptId} is a correction on an already-applied receipt (dispatch ${outcome.dispatchId}): left status/dispatch link untouched.`);
+            this.emitAttention(outcome.dispatchId, data.referenceId, 'receipt_correction');
         } else {
             this.logger.debug(`Receipt ${data.receiptId} applied: dispatch ${outcome.dispatchId} -> ${outcome.newStatus}.`);
         }
@@ -54,13 +57,13 @@ export class WarehouseReceiptConsumer implements OnModuleInit {
         return result;
     }
 
-    private emitOrphan(dispatchId: number | null, referenceId: string): void {
+    private emitAttention(dispatchId: number | null, referenceId: string, changeType: 'orphan_receipt' | 'receipt_correction'): void {
         try {
             this.events.emit(DISPATCH_CHANGE_REQUIRES_ATTENTION, {
                 dispatchId: dispatchId ?? undefined,
                 salesOrderId: dispatchId === null ? referenceId : undefined,
                 source: 'inventory',
-                changeType: 'orphan_receipt',
+                changeType,
                 receivedAt: new Date().toISOString(),
             });
         } catch (error) {
