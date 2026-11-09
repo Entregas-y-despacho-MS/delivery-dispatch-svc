@@ -381,7 +381,7 @@ export class RouteBatchesController {
   @ApiOperation({
     summary: 'List the other in_execution route batches that can receive reassigned stops',
     description:
-      'ES-63 (RF-A16). The other route batches `in_execution` of the same shift day as this one, each with its driver, vehicle plate, zone, current `version` (use it as `targetVersion`) and the remaining weight/volume capacity of its vehicle. Use `routeBatchId` as `targetBatchId` in `POST /route-batches/:id/reassign`. Read only: it writes nothing. Requires coordinator or supervisor role, or root.',
+      'ES-63 (RF-A16). The other route batches `in_execution` of the same shift day as this one, each with its driver, vehicle plate, zone, current `version` (use it as `targetVersion`), the remaining weight/volume capacity of its vehicle, and its current package count (`packageCount` — informational: there is no configured package-count limit per vehicle, only weight/volume/dimensions). Use `routeBatchId` as `targetBatchId` in `POST /route-batches/:id/reassign`. Read only: it writes nothing. Requires coordinator or supervisor role, or root.',
   })
   @ApiIdParam('Route batch')
   @ApiOkResponse({ type: [ReassignmentTargetDto] })
@@ -417,7 +417,8 @@ export class RouteBatchesController {
   @ApiConflict(
     { code: 'ROUTE_BATCH_SAME_BATCH', message: 'The destination batch must be different from the origin batch.' },
     { code: 'ROUTE_BATCH_NOT_IN_EXECUTION', message: 'Both route batches must be in_execution to reassign stops between them.' },
-    { code: 'ROUTE_BATCH_VEHICLE_REQUIRED', message: 'Both route batches must have a driver, and the destination a vehicle, assigned.' },
+    { code: 'ROUTE_BATCH_DIFFERENT_SHIFT_DATE', message: 'Both route batches must be the same shift day.' },
+    { code: 'ROUTE_BATCH_VEHICLE_REQUIRED', message: 'Both route batches must have a driver and a vehicle assigned.' },
     { code: 'ROUTE_BATCH_VERSION_CONFLICT', message: 'The origin route batch changed. Reload it before reassigning.' },
     { code: 'DISPATCH_NOT_IN_BATCH', message: 'A dispatch does not belong to the origin route batch.' },
     { code: 'DISPATCH_NOT_OUT_FOR_DELIVERY', message: 'A dispatch is not out_for_delivery; it cannot be reassigned.' },

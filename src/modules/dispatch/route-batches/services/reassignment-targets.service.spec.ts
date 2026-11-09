@@ -15,7 +15,7 @@ describe('ReassignmentTargetsService.findTargets', () => {
         dataSource.query
             .mockResolvedValueOnce([{ shift_date: '2026-11-09' }])
             .mockResolvedValueOnce([
-                { route_batch_id: 20, version: 3, driver_id: 9, driver_full_name: 'Ana', vehicle_id: 7, vehicle_plate: 'XYZ-789', zone_id: 2, zone_name: 'Norte' },
+                { route_batch_id: 20, version: 3, driver_id: 9, driver_full_name: 'Ana', vehicle_id: 7, vehicle_plate: 'XYZ-789', zone_id: 2, zone_name: 'Norte', package_count: 8 },
             ]);
         capacity.report.mockResolvedValue({ weight: { remaining: 179.5 }, volume: { remaining: 0.4 } });
 
@@ -24,10 +24,11 @@ describe('ReassignmentTargetsService.findTargets', () => {
         expect(result).toEqual([{
             routeBatchId: 20, version: 3, driverId: 9, driverFullName: 'Ana',
             vehicleId: 7, vehiclePlate: 'XYZ-789', zoneId: 2, zoneName: 'Norte',
-            remainingWeightKg: 179.5, remainingVolumeM3: 0.4,
+            remainingWeightKg: 179.5, remainingVolumeM3: 0.4, packageCount: 8,
         }]);
         expect(capacity.report).toHaveBeenCalledWith(20, 7, undefined, { lock: false });
         expect(dataSource.query.mock.calls[1][0]).toContain(`rb.route_batch_id != $3`);
+        expect(dataSource.query.mock.calls[1][0]).toContain('package_count');
         expect(dataSource.query.mock.calls[1][1]).toEqual(['in_execution', '2026-11-09', 10]);
     });
 

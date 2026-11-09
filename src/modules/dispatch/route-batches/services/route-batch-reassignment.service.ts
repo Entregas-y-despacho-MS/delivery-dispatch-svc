@@ -13,6 +13,7 @@ import { RouteBatchReassignConflictException } from '../exceptions/route-batch-r
 import { ReassignRouteBatchDto } from '../dto/reassign-route-batch.dto.js';
 import { ReassignRouteBatchResponseDto } from '../dto/reassign-route-batch-response.dto.js';
 import { ROUTE_BATCH_REASSIGNED_EVENT, type RouteBatchReassignedEvent } from '../events/route-batch-reassigned.event.js';
+import { ROUTE_ASSIGNED_EVENT, type RouteAssignedEvent } from '../events/route-assigned.event.js';
 
 interface BatchRow {
     id: number;
@@ -20,6 +21,7 @@ interface BatchRow {
     version: number;
     driver_id: number | null;
     vehicle_id: number | null;
+    shift_date: string;
 }
 
 interface DispatchRow {
@@ -30,6 +32,11 @@ interface DispatchRow {
 
 interface ZoneRow {
     name: string | null;
+}
+
+interface BatchDispatchRow {
+    dispatch_id: number;
+    priority: string;
 }
 
 /**
@@ -52,7 +59,15 @@ export class RouteBatchReassignmentService {
     async reassign(originBatchId: number, dto: ReassignRouteBatchDto, actorUserId: number): Promise<ReassignRouteBatchResponseDto> {
         const result = await this.dataSource.transaction(async (manager) => this.apply(manager, originBatchId, dto, actorUserId));
 
+        // route.batch_reassigned carries the full reassignment context (both batches, the reason) for
+        // anything that wants it (push, a future alert). route.assigned is emitted too, once per side,
+        // with the exact shape the live board and its push listener already consume everywhere else
+        // (RouteBatchFinalApprovalService) — so a reassignment refreshes both rows on the board without
+        // the frontend needing to learn a new event name first (ST-63.3 can still move to the richer
+        // event later; until then this keeps the board correct).
         this.events.emit(ROUTE_BATCH_REASSIGNED_EVENT, result.event);
+        this.events.emit(ROUTE_ASSIGNED_EVENT, result.originAssigned);
+        this.events.emit(ROUTE_ASSIGNED_EVENT, result.targetAssigned);
         return result.response;
     }
 
@@ -61,13 +76,18 @@ export class RouteBatchReassignmentService {
         originBatchId: number,
         dto: ReassignRouteBatchDto,
         actorUserId: number,
-    ): Promise<{ response: ReassignRouteBatchResponseDto; event: RouteBatchReassignedEvent }> {
+    ): Promise<{
+        response: ReassignRouteBatchResponseDto;
+        event: RouteBatchReassignedEvent;
+        originAssigned: RouteAssignedEvent;
+        targetAssigned: RouteAssignedEvent;
+    }> {
         if (originBatchId === dto.targetBatchId) {
             throw new RouteBatchReassignConflictException('ROUTE_BATCH_SAME_BATCH', 'The destination batch must be different from the origin batch.');
         }
 
         const batches: BatchRow[] = await manager.query(
-            `SELECT route_batch_id AS id, status, version, driver_id, vehicle_id
+            `SELECT route_batch_id AS id, status, version, driver_id, vehicle_id, shift_date::text AS shift_date
                FROM route_batches WHERE route_batch_id = ANY($1::int[]) ORDER BY route_batch_id FOR UPDATE`,
             [[originBatchId, dto.targetBatchId]],
         );
@@ -77,8 +97,18 @@ export class RouteBatchReassignmentService {
         if (origin.status !== RouteBatchStatusEnum.IN_EXECUTION || target.status !== RouteBatchStatusEnum.IN_EXECUTION) {
             throw new RouteBatchReassignConflictException('ROUTE_BATCH_NOT_IN_EXECUTION', 'Both route batches must be in_execution to reassign stops between them.');
         }
-        if (target.vehicle_id === null || target.driver_id === null || origin.driver_id === null) {
-            throw new RouteBatchReassignConflictException('ROUTE_BATCH_VEHICLE_REQUIRED', 'Both route batches must have a driver, and the destination a vehicle, assigned.');
+        // Same check GET .../reassignment-targets already applies when listing candidates — enforced
+        // here too, so a direct POST cannot move a stop into a batch of a different shift day.
+        if (origin.shift_date !== target.shift_date) {
+            throw new RouteBatchReassignConflictException('ROUTE_BATCH_DIFFERENT_SHIFT_DATE', `Both route batches must be the same shift day (origin: ${origin.shift_date}, destination: ${target.shift_date}).`);
+        }
+        const missingResources: string[] = [];
+        if (origin.driver_id === null) missingResources.push('the origin batch has no driver');
+        if (origin.vehicle_id === null) missingResources.push('the origin batch has no vehicle');
+        if (target.driver_id === null) missingResources.push('the destination batch has no driver');
+        if (target.vehicle_id === null) missingResources.push('the destination batch has no vehicle');
+        if (missingResources.length > 0) {
+            throw new RouteBatchReassignConflictException('ROUTE_BATCH_VEHICLE_REQUIRED', `Both route batches must have a driver and a vehicle assigned: ${missingResources.join(', ')}.`);
         }
         if (origin.version !== dto.version) {
             throw new RouteBatchReassignConflictException('ROUTE_BATCH_VERSION_CONFLICT', 'The origin route batch changed. Reload it before reassigning.');
@@ -140,7 +170,7 @@ export class RouteBatchReassignmentService {
             );
         }
 
-        await this.capacity.assertAssignable(dto.targetBatchId, target.vehicle_id, manager);
+        await this.capacity.assertAssignable(dto.targetBatchId, target.vehicle_id!, manager);
 
         // TypeORM answers UPDATE ... RETURNING with [rows, affectedCount], not with the rows (see
         // route-batch-closing.service.ts) — the inner array is where the returned row actually is.
@@ -156,9 +186,21 @@ export class RouteBatchReassignmentService {
             );
         }
 
-        const [zoneRow]: ZoneRow[] = await manager.query(
-            `SELECT dz.name FROM route_batches rb LEFT JOIN delivery_zones dz ON dz.delivery_zone_id = rb.delivery_zone_id WHERE rb.route_batch_id = $1`,
-            [dto.targetBatchId],
+        const zones: (ZoneRow & { route_batch_id: number })[] = await manager.query(
+            `SELECT rb.route_batch_id, dz.name
+               FROM route_batches rb LEFT JOIN delivery_zones dz ON dz.delivery_zone_id = rb.delivery_zone_id
+              WHERE rb.route_batch_id = ANY($1::int[])`,
+            [[originBatchId, dto.targetBatchId]],
+        );
+        const zoneNameOf = (batchId: number): string | null => zones.find((zone) => zone.route_batch_id === batchId)?.name ?? null;
+
+        // Full current stop list of each batch, after the move — route.assigned is always a complete
+        // snapshot of a batch's dispatches (see RouteBatchFinalApprovalService), never just the delta.
+        const originDispatches: BatchDispatchRow[] = await manager.query(
+            `SELECT dispatch_id, priority FROM dispatches WHERE route_batch_id = $1 ORDER BY sequence_order`, [originBatchId],
+        );
+        const targetDispatches: BatchDispatchRow[] = await manager.query(
+            `SELECT dispatch_id, priority FROM dispatches WHERE route_batch_id = $1 ORDER BY sequence_order`, [dto.targetBatchId],
         );
 
         const response: ReassignRouteBatchResponseDto = {
@@ -177,8 +219,26 @@ export class RouteBatchReassignmentService {
             dispatchIds: dto.dispatchIds,
             fromVersion: locked.version,
             toVersion,
-            zoneName: zoneRow?.name ?? null,
+            zoneName: zoneNameOf(dto.targetBatchId),
         };
-        return { response, event };
+        const originAssigned: RouteAssignedEvent = {
+            routeId: originBatchId,
+            driverId: origin.driver_id!,
+            vehicleId: origin.vehicle_id!,
+            dispatchIds: originDispatches.map((row) => row.dispatch_id),
+            dispatches: originDispatches.map(({ dispatch_id, priority }) => ({ dispatchId: dispatch_id, priority })),
+            zoneName: zoneNameOf(originBatchId) ?? 'Zona sin especificar',
+            version: locked.version,
+        };
+        const targetAssigned: RouteAssignedEvent = {
+            routeId: dto.targetBatchId,
+            driverId: target.driver_id!,
+            vehicleId: target.vehicle_id!,
+            dispatchIds: targetDispatches.map((row) => row.dispatch_id),
+            dispatches: targetDispatches.map(({ dispatch_id, priority }) => ({ dispatchId: dispatch_id, priority })),
+            zoneName: zoneNameOf(dto.targetBatchId) ?? 'Zona sin especificar',
+            version: toVersion,
+        };
+        return { response, event, originAssigned, targetAssigned };
     }
 }

@@ -15,6 +15,7 @@ interface CandidateRow {
     vehicle_plate: string;
     zone_id: number | null;
     zone_name: string | null;
+    package_count: number;
 }
 
 /**
@@ -37,7 +38,10 @@ export class ReassignmentTargetsService {
 
         const candidates: CandidateRow[] = await this.dataSource.query(
             `SELECT rb.route_batch_id, rb.version, rb.driver_id, u.full_name AS driver_full_name,
-                    rb.vehicle_id, v.plate AS vehicle_plate, rb.delivery_zone_id AS zone_id, dz.name AS zone_name
+                    rb.vehicle_id, v.plate AS vehicle_plate, rb.delivery_zone_id AS zone_id, dz.name AS zone_name,
+                    (SELECT COUNT(*) FROM dispatch_packages p
+                       JOIN dispatches d ON d.dispatch_id = p.dispatch_id
+                      WHERE d.route_batch_id = rb.route_batch_id)::int AS package_count
                FROM route_batches rb
                JOIN users u ON u.user_id = rb.driver_id
                JOIN vehicles v ON v.vehicle_id = rb.vehicle_id
@@ -61,6 +65,7 @@ export class ReassignmentTargetsService {
                 zoneName: row.zone_name,
                 remainingWeightKg: report.weight.remaining,
                 remainingVolumeM3: report.volume.remaining,
+                packageCount: row.package_count,
             });
         }
         return targets;

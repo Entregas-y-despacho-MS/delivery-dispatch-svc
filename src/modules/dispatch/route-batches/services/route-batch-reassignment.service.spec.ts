@@ -6,9 +6,10 @@ import { DispatchNotFoundException } from '../../dispatches/exceptions/dispatch-
 import { RescheduleReasonInvalidException } from '../../../../app/dispatch-reschedule/exceptions/reschedule-reason-invalid.exception.js';
 import { RouteCapacityExceededException } from '../exceptions/route-capacity-exceeded.exception.js';
 import { ROUTE_BATCH_REASSIGNED_EVENT } from '../events/route-batch-reassigned.event.js';
+import { ROUTE_ASSIGNED_EVENT } from '../events/route-assigned.event.js';
 
-const ORIGIN = { id: 10, status: 'in_execution', version: 5, driver_id: 4, vehicle_id: 2 };
-const TARGET = { id: 20, status: 'in_execution', version: 3, driver_id: 9, vehicle_id: 7 };
+const ORIGIN = { id: 10, status: 'in_execution', version: 5, driver_id: 4, vehicle_id: 2, shift_date: '2026-11-09' };
+const TARGET = { id: 20, status: 'in_execution', version: 3, driver_id: 9, vehicle_id: 7, shift_date: '2026-11-09' };
 
 function build() {
     const query = vi.fn();
@@ -32,13 +33,15 @@ function mockHappyPath(query: ReturnType<typeof vi.fn>, batchExit: { lock: Retur
         .mockResolvedValueOnce([]) // 5. UPDATE dispatches (move) for 31
         .mockResolvedValueOnce([[{ version: 4 }], 1]) // 6. UPDATE route_batches RETURNING version (target)
         .mockResolvedValueOnce([]) // 7. INSERT route_batch_events (target) for 31
-        .mockResolvedValueOnce([{ name: 'Centro' }]); // 8. zone lookup
+        .mockResolvedValueOnce([{ route_batch_id: 10, name: 'Origen' }, { route_batch_id: 20, name: 'Centro' }]) // 8. zones for both batches
+        .mockResolvedValueOnce([]) // 9. origin's current dispatches (post move: empty, its only stop left)
+        .mockResolvedValueOnce([{ dispatch_id: 31, priority: 'normal' }]); // 10. target's current dispatches (post move)
     batchExit.lock.mockResolvedValue({ id: 10, status: 'in_execution', version: 5, stops: [{ dispatchId: 31, sequence: 1, windowStart: null }] });
     batchExit.leave.mockResolvedValue({ batchVersion: 6, closed: false });
 }
 
 describe('RouteBatchReassignmentService.reassign', () => {
-    it('moves the requested dispatches, appends them at the end of the target sequence, and emits the event', async () => {
+    it('moves the requested dispatches, appends them at the end of the target sequence, and emits the events', async () => {
         const { service, query, batchExit, capacity, events } = build();
         mockHappyPath(query, batchExit);
 
@@ -53,6 +56,36 @@ describe('RouteBatchReassignmentService.reassign', () => {
             fromBatchId: 10, toBatchId: 20, fromDriverId: 4, toDriverId: 9,
             dispatchIds: [31], fromVersion: 6, toVersion: 4, zoneName: 'Centro',
         });
+        // route.assigned is emitted once per side too, so the board and its push listener (which only
+        // know that event) refresh both rows without waiting for ST-63.3's own event.
+        expect(events.emit).toHaveBeenCalledWith(ROUTE_ASSIGNED_EVENT, {
+            routeId: 10, driverId: 4, vehicleId: 2, dispatchIds: [], dispatches: [], zoneName: 'Origen', version: 6,
+        });
+        expect(events.emit).toHaveBeenCalledWith(ROUTE_ASSIGNED_EVENT, {
+            routeId: 20, driverId: 9, vehicleId: 7, dispatchIds: [31], dispatches: [{ dispatchId: 31, priority: 'normal' }], zoneName: 'Centro', version: 4,
+        });
+    });
+
+    it('falls back to the default zone label on route.assigned when a batch has no zone', async () => {
+        const { service, query, batchExit, events } = build();
+        batchExit.lock.mockResolvedValue({ id: 10, status: 'in_execution', version: 5, stops: [{ dispatchId: 31, sequence: 1, windowStart: null }] });
+        batchExit.leave.mockResolvedValue({ batchVersion: 6, closed: false });
+        query
+            .mockResolvedValueOnce([ORIGIN, TARGET])
+            .mockResolvedValueOnce([{ reschedule_reason_id: 1 }])
+            .mockResolvedValueOnce([{ dispatch_id: 31, route_batch_id: 10, status: 'out_for_delivery' }])
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([[{ version: 4 }], 1])
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([]) // no zone rows at all for either batch
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([{ dispatch_id: 31, priority: 'normal' }]);
+
+        await service.reassign(10, dto, 9);
+
+        expect(events.emit).toHaveBeenCalledWith(ROUTE_ASSIGNED_EVENT, expect.objectContaining({ routeId: 10, zoneName: 'Zona sin especificar' }));
+        expect(events.emit).toHaveBeenCalledWith(ROUTE_ASSIGNED_EVENT, expect.objectContaining({ routeId: 20, zoneName: 'Zona sin especificar' }));
     });
 
     it('appends after the highest existing sequence_order of the target, not always at 1', async () => {
@@ -65,7 +98,9 @@ describe('RouteBatchReassignmentService.reassign', () => {
             .mockResolvedValueOnce([])
             .mockResolvedValueOnce([[{ version: 4 }], 1])
             .mockResolvedValueOnce([])
-            .mockResolvedValueOnce([{ name: 'Centro' }]);
+            .mockResolvedValueOnce([{ route_batch_id: 10, name: 'Origen' }, { route_batch_id: 20, name: 'Centro' }])
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([{ dispatch_id: 31, priority: 'normal' }]);
         batchExit.lock.mockResolvedValue({ id: 10, status: 'in_execution', version: 5, stops: [{ dispatchId: 31, sequence: 1, windowStart: null }] });
         batchExit.leave.mockResolvedValue({ batchVersion: 6, closed: false });
 
@@ -107,6 +142,20 @@ describe('RouteBatchReassignmentService.reassign', () => {
         query.mockResolvedValueOnce([ORIGIN, { ...TARGET, vehicle_id: null }]);
 
         await expect(service.reassign(10, dto, 9)).rejects.toThrow(RouteBatchReassignConflictException);
+    });
+
+    it('rejects when the origin has no vehicle or driver', async () => {
+        const { service, query } = build();
+        query.mockResolvedValueOnce([{ ...ORIGIN, vehicle_id: null }, TARGET]);
+
+        await expect(service.reassign(10, dto, 9)).rejects.toThrow(RouteBatchReassignConflictException);
+    });
+
+    it('rejects when the batches are not the same shift day', async () => {
+        const { service, query } = build();
+        query.mockResolvedValueOnce([ORIGIN, { ...TARGET, shift_date: '2026-11-10' }]);
+
+        await expect(service.reassign(10, dto, 9)).rejects.toMatchObject({ response: { error: 'ROUTE_BATCH_DIFFERENT_SHIFT_DATE' } });
     });
 
     it('409s on a stale origin version (Escenario 2)', async () => {
@@ -187,7 +236,9 @@ describe('RouteBatchReassignmentService.reassign', () => {
             .mockResolvedValueOnce([[{ version: 7 }], 1]) // route_batches update (+2)
             .mockResolvedValueOnce([]) // event 31
             .mockResolvedValueOnce([]) // event 32
-            .mockResolvedValueOnce([{ name: null }]);
+            .mockResolvedValueOnce([{ route_batch_id: 10, name: null }, { route_batch_id: 20, name: null }])
+            .mockResolvedValueOnce([]) // origin's current dispatches (post move: empty)
+            .mockResolvedValueOnce([{ dispatch_id: 31, priority: 'normal' }, { dispatch_id: 32, priority: 'urgent' }]); // target's current dispatches
         batchExit.lock.mockResolvedValue({ id: 10, status: 'in_execution', version: 5, stops: [{ dispatchId: 31, sequence: 1, windowStart: null }, { dispatchId: 32, sequence: 2, windowStart: null }] });
         batchExit.leave.mockResolvedValueOnce({ batchVersion: 6, closed: false }).mockResolvedValueOnce({ batchVersion: 7, closed: false });
 

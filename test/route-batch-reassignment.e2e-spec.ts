@@ -55,8 +55,11 @@ describe('POST /route-batches/:id/reassign (e2e, ST-63.1)', () => {
         return delivery_zone_id as number;
     };
 
-    const createBatch = async (driverId: number, vehicleId: number, zoneId: number | null): Promise<number> => {
-        const shiftDate = `2041-01-${String(nextShiftDay++).padStart(2, '0')}`;
+    // No default shift date: origin and target normally need the SAME one (a reassignment moves a
+    // stop between two routes of the same day) — nextShiftDate() gives the caller one to share
+    // between both createBatch() calls of a test, so two different tests never collide with each other.
+    const nextShiftDate = (): string => `2041-01-${String(nextShiftDay++).padStart(2, '0')}`;
+    const createBatch = async (driverId: number, vehicleId: number, zoneId: number | null, shiftDate: string): Promise<number> => {
         const [{ route_batch_id }] = await db.query(
             `INSERT INTO route_batches (status, shift_date, driver_id, vehicle_id, delivery_zone_id, version) VALUES ('in_execution', $1, $2, $3, $4, 0) RETURNING route_batch_id`,
             [shiftDate, driverId, vehicleId, zoneId],
@@ -154,8 +157,9 @@ describe('POST /route-batches/:id/reassign (e2e, ST-63.1)', () => {
         const vehicleA = await createVehicle();
         const vehicleB = await createVehicle();
         const zone = await createZone(`${tag}-Z1`, 'Zona Centro');
-        const originId = await createBatch(users.driver1, vehicleA, zone);
-        const targetId = await createBatch(users.driver2, vehicleB, zone);
+        const shiftDate = nextShiftDate();
+        const originId = await createBatch(users.driver1, vehicleA, zone, shiftDate);
+        const targetId = await createBatch(users.driver2, vehicleB, zone, shiftDate);
         const moving = await insertDispatch('out_for_delivery', originId, 1);
         const existingTargetStop = await insertDispatch('out_for_delivery', targetId, 1);
         void existingTargetStop;
@@ -188,8 +192,9 @@ describe('POST /route-batches/:id/reassign (e2e, ST-63.1)', () => {
     it('409s on a stale version and leaves everything untouched (Escenario 2)', async () => {
         const vehicleA = await createVehicle();
         const vehicleB = await createVehicle();
-        const originId = await createBatch(users.driver1, vehicleA, null);
-        const targetId = await createBatch(users.driver2, vehicleB, null);
+        const shiftDate = nextShiftDate();
+        const originId = await createBatch(users.driver1, vehicleA, null, shiftDate);
+        const targetId = await createBatch(users.driver2, vehicleB, null, shiftDate);
         const moving = await insertDispatch('out_for_delivery', originId, 1);
 
         const response = await reassign(originId, {
@@ -201,11 +206,27 @@ describe('POST /route-batches/:id/reassign (e2e, ST-63.1)', () => {
         expect(await dispatchRow(moving)).toMatchObject({ route_batch_id: originId, status: 'out_for_delivery' });
     });
 
+    it('409s when the two batches are not the same shift day, even if a direct POST skips the GET filter', async () => {
+        const vehicleA = await createVehicle();
+        const vehicleB = await createVehicle();
+        const originId = await createBatch(users.driver1, vehicleA, null, nextShiftDate());
+        const targetId = await createBatch(users.driver2, vehicleB, null, nextShiftDate());
+        const moving = await insertDispatch('out_for_delivery', originId, 1);
+
+        const response = await reassign(originId, {
+            dispatchIds: [moving], targetBatchId: targetId, reasonCode, version: 0, targetVersion: 0,
+        });
+
+        expect(response.status).toBe(409);
+        expect(response.body.error).toBe('ROUTE_BATCH_DIFFERENT_SHIFT_DATE');
+    });
+
     it('409s when the stop is not out_for_delivery (Escenario 3)', async () => {
         const vehicleA = await createVehicle();
         const vehicleB = await createVehicle();
-        const originId = await createBatch(users.driver1, vehicleA, null);
-        const targetId = await createBatch(users.driver2, vehicleB, null);
+        const shiftDate = nextShiftDate();
+        const originId = await createBatch(users.driver1, vehicleA, null, shiftDate);
+        const targetId = await createBatch(users.driver2, vehicleB, null, shiftDate);
         const moving = await insertDispatch('in_transit', originId, 1);
 
         const response = await reassign(originId, {
@@ -219,8 +240,9 @@ describe('POST /route-batches/:id/reassign (e2e, ST-63.1)', () => {
     it('409s when the destination has no capacity left and rolls back the whole move', async () => {
         const vehicleA = await createVehicle();
         const vehicleB = await createVehicle(5, 1); // tiny vehicle
-        const originId = await createBatch(users.driver1, vehicleA, null);
-        const targetId = await createBatch(users.driver2, vehicleB, null);
+        const shiftDate = nextShiftDate();
+        const originId = await createBatch(users.driver1, vehicleA, null, shiftDate);
+        const targetId = await createBatch(users.driver2, vehicleB, null, shiftDate);
         const moving = await insertDispatch('out_for_delivery', originId, 1);
         await addPackage(moving, 50); // way over the 5kg destination vehicle
 
@@ -238,9 +260,10 @@ describe('POST /route-batches/:id/reassign (e2e, ST-63.1)', () => {
         const vehicleA = await createVehicle();
         const vehicleB = await createVehicle();
         const vehicleC = await createVehicle();
-        const originId = await createBatch(users.driver1, vehicleA, null);
-        const targetId = await createBatch(users.driver2, vehicleB, null);
-        const elsewhere = await createBatch(users.driver3, vehicleC, null);
+        const shiftDate = nextShiftDate();
+        const originId = await createBatch(users.driver1, vehicleA, null, shiftDate);
+        const targetId = await createBatch(users.driver2, vehicleB, null, shiftDate);
+        const elsewhere = await createBatch(users.driver3, vehicleC, null, shiftDate);
         const foreignDispatch = await insertDispatch('out_for_delivery', elsewhere, 1);
 
         const response = await reassign(originId, {
@@ -254,8 +277,9 @@ describe('POST /route-batches/:id/reassign (e2e, ST-63.1)', () => {
     it('400s on an inactive/unknown reasonCode', async () => {
         const vehicleA = await createVehicle();
         const vehicleB = await createVehicle();
-        const originId = await createBatch(users.driver1, vehicleA, null);
-        const targetId = await createBatch(users.driver2, vehicleB, null);
+        const shiftDate = nextShiftDate();
+        const originId = await createBatch(users.driver1, vehicleA, null, shiftDate);
+        const targetId = await createBatch(users.driver2, vehicleB, null, shiftDate);
         const moving = await insertDispatch('out_for_delivery', originId, 1);
 
         const response = await reassign(originId, {
@@ -268,7 +292,7 @@ describe('POST /route-batches/:id/reassign (e2e, ST-63.1)', () => {
 
     it('a driver cannot reassign or list targets (403)', async () => {
         const vehicleA = await createVehicle();
-        const originId = await createBatch(users.driver1, vehicleA, null);
+        const originId = await createBatch(users.driver1, vehicleA, null, nextShiftDate());
 
         expect((await reassign(originId, { dispatchIds: [1], targetBatchId: originId, reasonCode, version: 0, targetVersion: 0 }, 'driver3')).status).toBe(403);
         expect((await targets(originId, 'driver3')).status).toBe(403);
@@ -278,10 +302,9 @@ describe('POST /route-batches/:id/reassign (e2e, ST-63.1)', () => {
         const vehicleA = await createVehicle(200, 20);
         const vehicleB = await createVehicle(100, 10);
         const zone = await createZone(`${tag}-Z2`, 'Zona Norte');
-        const originId = await createBatch(users.driver1, vehicleA, zone);
-        const targetId = await createBatch(users.driver2, vehicleB, zone);
-        // Same shift_date as originId, required for it to be a candidate — createBatch always advances the day, so force it manually.
-        await db.query(`UPDATE route_batches SET shift_date = (SELECT shift_date FROM route_batches WHERE route_batch_id = $1) WHERE route_batch_id = $2`, [originId, targetId]);
+        const shiftDate = nextShiftDate();
+        const originId = await createBatch(users.driver1, vehicleA, zone, shiftDate);
+        const targetId = await createBatch(users.driver2, vehicleB, zone, shiftDate);
         const existingStop = await insertDispatch('out_for_delivery', targetId, 1);
         await addPackage(existingStop, 20);
 
@@ -290,7 +313,7 @@ describe('POST /route-batches/:id/reassign (e2e, ST-63.1)', () => {
         expect(response.status).toBe(200);
         expect(response.body).toContainEqual(expect.objectContaining({
             routeBatchId: targetId, version: 0, driverId: users.driver2, vehicleId: vehicleB,
-            zoneId: zone, zoneName: 'Zona Norte', remainingWeightKg: 80,
+            zoneId: zone, zoneName: 'Zona Norte', remainingWeightKg: 80, packageCount: 1,
         }));
         expect(response.body.find((row: { routeBatchId: number }) => row.routeBatchId === originId)).toBeUndefined();
     });
