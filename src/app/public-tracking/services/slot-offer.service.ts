@@ -90,7 +90,7 @@ export class SlotOfferService {
         const range = offerDateRange(rules);
 
         const [batches, vehicles, warehouses] = await Promise.all([
-            this.planning.findOpenBatches(localDate(now), { zoneId: dispatch.zoneId, warehouseId: dispatch.warehouseId }),
+            this.planning.findOpenBatches(localDate(now), { zoneId: dispatch.zoneId ?? undefined, warehouseId: dispatch.warehouseId }),
             this.planning.findVehicles(),
             this.planning.findWarehouses(),
         ]);

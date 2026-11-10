@@ -14,6 +14,7 @@ import type {
     DispatchDetailEvidenceDto,
     DispatchDetailRatingDto,
     DispatchDetailReceiptDto,
+    DispatchDetailSupplierPickupDto,
     DispatchDetailUserDto,
 } from '../dto/dispatch-detail.dto.js';
 
@@ -41,6 +42,19 @@ interface DispatchReceiptRow {
         acceptedQuantity: string | number; missingQuantity: string | number; damagedQuantity: string | number;
         detail: string | null;
     }[];
+}
+
+interface SupplierPickupItemRow {
+    item_code: string;
+    description: string | null;
+    expected_quantity: string | number;
+    received_quantity: string | number | null;
+}
+
+interface SupplierPickupWarehouseRow {
+    warehouse_id: number;
+    code: string;
+    name: string;
 }
 
 // One query for the receipt and its items (ST-240.6). Only an `applied` receipt belongs to a dispatch (an
@@ -88,13 +102,31 @@ export class DispatchDetailService {
         });
         if (!dispatch) throw new DispatchNotFoundException();
 
-        const [events, incidents, reschedules, evidences, ratingRows, receiptRows] = await Promise.all([
+        const supplierPickupType = dispatch.dispatchType.name === 'supplier_pickup';
+        const [events, incidents, reschedules, evidences, ratingRows, receiptRows, supplierItems, supplierWarehouses] = await Promise.all([
             this.events.find({ where: { dispatchId: id }, relations: { actorUser: true }, order: { createdAt: 'ASC', id: 'ASC' } }),
             this.incidents.find({ where: { dispatchId: id }, relations: { incidentReason: true }, order: { createdAt: 'ASC', id: 'ASC' } }),
             this.reschedules.find({ where: { dispatchId: id }, relations: { rescheduleReason: true, rescheduledByUser: true }, order: { createdAt: 'ASC', id: 'ASC' } }),
             this.evidences.find({ where: { dispatchId: id }, order: { createdAt: 'ASC', id: 'ASC' } }),
-            this.dataSource.query('SELECT score, comment, created_at FROM dispatch_ratings WHERE dispatch_id = $1', [id]),
+            supplierPickupType
+                ? Promise.resolve([])
+                : this.dataSource.query('SELECT score, comment, created_at FROM dispatch_ratings WHERE dispatch_id = $1', [id]),
             this.dataSource.query(RECEIPT_SQL, [id]),
+            supplierPickupType
+                ? this.dataSource.query(
+                    `SELECT item_code, description, expected_quantity, received_quantity
+                       FROM dispatch_pickup_items
+                      WHERE dispatch_id = $1
+                      ORDER BY item_code`,
+                    [id],
+                )
+                : Promise.resolve([]),
+            supplierPickupType && dispatch.destinationWarehouseId !== null
+                ? this.dataSource.query(
+                    `SELECT warehouse_id, code, name FROM warehouses WHERE warehouse_id = $1 AND deleted_at IS NULL`,
+                    [dispatch.destinationWarehouseId],
+                )
+                : Promise.resolve([]),
         ]);
 
         const evidenceDtos = await Promise.all(evidences.map((e) => this.toEvidence(e)));
@@ -116,6 +148,27 @@ export class DispatchDetailService {
                 damagedQuantity: Number(i.damagedQuantity), detail: i.detail,
             })),
         } : null;
+        const warehouse = (supplierWarehouses as SupplierPickupWarehouseRow[])[0];
+        const supplierPickup: DispatchDetailSupplierPickupDto | null = supplierPickupType ? {
+            originAddress: dispatch.deliveryAddress,
+            originReference: dispatch.deliveryReference,
+            originLatitude: num(dispatch.deliveryLatitude),
+            originLongitude: num(dispatch.deliveryLongitude),
+            supplierContactName: dispatch.contactName,
+            supplierContactPhone: dispatch.contactPhone,
+            destinationWarehouse: warehouse
+                ? { id: warehouse.warehouse_id, code: warehouse.code, name: warehouse.name }
+                : null,
+            items: (supplierItems as SupplierPickupItemRow[]).map((item) => ({
+                itemCode: item.item_code,
+                description: item.description,
+                expectedQuantity: Number(item.expected_quantity),
+                receivedQuantity: item.received_quantity === null ? null : Number(item.received_quantity),
+            })),
+            estimatedPackages: dispatch.estimatedBoxes,
+            estimatedWeightKg: num(dispatch.estimatedWeightKg),
+            estimatedVolumeM3: num(dispatch.estimatedVolumeM3),
+        } : null;
 
         return {
             id: dispatch.id,
@@ -124,9 +177,9 @@ export class DispatchDetailService {
             type: { id: dispatch.dispatchType.id, name: dispatch.dispatchType.name },
             status: { id: dispatch.dispatchStatus.id, name: dispatch.dispatchStatus.name },
             priority: dispatch.priority,
-            serviceLevel: dispatch.serviceLevel ? { id: dispatch.serviceLevel.id, name: dispatch.serviceLevel.name } : null,
-            evidencePolicy: dispatch.evidencePolicy,
-            paymentStatusLabel: dispatch.paymentStatusLabel,
+            serviceLevel: !supplierPickupType && dispatch.serviceLevel ? { id: dispatch.serviceLevel.id, name: dispatch.serviceLevel.name } : null,
+            evidencePolicy: supplierPickupType ? null : dispatch.evidencePolicy,
+            paymentStatusLabel: supplierPickupType ? null : dispatch.paymentStatusLabel,
             scheduledWindowStart: iso(dispatch.scheduledWindowStart),
             scheduledWindowEnd: iso(dispatch.scheduledWindowEnd),
             createdAt: dispatch.createdAt.toISOString(),
@@ -150,8 +203,9 @@ export class DispatchDetailService {
                 vehicle: batch.vehicle ? { id: batch.vehicle.id, plate: batch.vehicle.plate, type: batch.vehicle.type, model: batch.vehicle.model } : null,
             } : null,
             receiver: evidenceDtos.find((e) => e.type === 'signature' && e.receiverName) ?? null,
-            rating,
+            rating: supplierPickupType ? null : rating,
             receipt,
+            supplierPickup,
             timeline: events.map((e) => this.toEvent(e)),
             incidents: incidents.map((i) => ({
                 id: i.id, reasonCode: i.incidentReason.code, reasonName: i.incidentReason.name,
