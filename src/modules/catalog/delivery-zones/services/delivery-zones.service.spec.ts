@@ -102,6 +102,33 @@ describe('DeliveryZonesService — integridad de datos (RF-A29)', () => {
 
             expect(rawRepo.findOne).toHaveBeenCalledTimes(2);
         });
+
+        it('update() reemplaza el límite cuando se envían coordenadas', async () => {
+            const { service, rawRepo } = buildService();
+            rawRepo.findOne.mockResolvedValueOnce(EXISTING_ZONE).mockResolvedValueOnce({ ...EXISTING_ZONE, boundary: BOUNDARY });
+
+            await service.update(DeliveryZoneDto, 1, { boundary: BOUNDARY } as any);
+
+            expect(rawRepo.update).toHaveBeenCalledWith(1, { boundary: BOUNDARY });
+        });
+
+        it('update() limpia el límite al enviar null', async () => {
+            const { service, rawRepo } = buildService();
+            rawRepo.findOne.mockResolvedValueOnce({ ...EXISTING_ZONE, boundary: BOUNDARY }).mockResolvedValueOnce({ ...EXISTING_ZONE, boundary: null });
+
+            await service.update(DeliveryZoneDto, 1, { boundary: null } as any);
+
+            expect(rawRepo.update).toHaveBeenCalledWith(1, { boundary: null });
+        });
+
+        it('update() conserva el límite si el campo se omite', async () => {
+            const { service, rawRepo } = buildService();
+            rawRepo.findOne.mockResolvedValueOnce({ ...EXISTING_ZONE, boundary: BOUNDARY }).mockResolvedValueOnce({ ...EXISTING_ZONE, name: 'Zona actualizada', boundary: BOUNDARY });
+
+            await service.update(DeliveryZoneDto, 1, { name: 'Zona actualizada' } as any);
+
+            expect(rawRepo.update).toHaveBeenCalledWith(1, { name: 'Zona actualizada' });
+        });
     });
 
     describe('remove()', () => {
