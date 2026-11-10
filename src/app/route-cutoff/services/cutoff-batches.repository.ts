@@ -20,11 +20,13 @@ interface StopRow {
     dispatch_version: number;
     sequence_order: number | null;
     status: string;
+    dispatch_type: string;
     priority: string;
     confirmed_at: Date;
     delivery_latitude: string | null;
     delivery_longitude: string | null;
     estimated_weight_kg: string | null;
+    estimated_volume_m3: string | null;
     scheduled_window_start: Date | null;
     scheduled_window_end: Date | null;
     promise_notified_at: Date | null;
@@ -106,15 +108,16 @@ export class CutoffBatchesRepository {
                     b.delivery_zone_id, z.code AS zone_code, z.name AS zone_name,
                     (z.deleted_at IS NOT NULL) AS zone_deleted, b.origin_warehouse_id,
                     b.vehicle_id, b.proposed_driver_id, b.reviewer_user_id,
-                    d.dispatch_id, d.version AS dispatch_version, d.sequence_order, s.name AS status, d.priority,
+                    d.dispatch_id, d.version AS dispatch_version, d.sequence_order, s.name AS status, t.name AS dispatch_type, d.priority,
                     COALESCE(d.order_confirmed_at, d.created_at) AS confirmed_at,
-                    d.delivery_latitude, d.delivery_longitude, d.estimated_weight_kg,
+                    d.delivery_latitude, d.delivery_longitude, d.estimated_weight_kg, d.estimated_volume_m3,
                     d.scheduled_window_start, d.scheduled_window_end,
                     d.promise_notified_at, d.promise_firmed_at
                FROM route_batches b
                JOIN delivery_zones z ON z.delivery_zone_id = b.delivery_zone_id
                JOIN dispatches d ON d.route_batch_id = b.route_batch_id
                JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
+               JOIN dispatch_types t ON t.dispatch_type_id = d.dispatch_type_id
               WHERE ${where}
               ORDER BY b.route_batch_id, d.sequence_order, d.dispatch_id`,
             params,
@@ -150,6 +153,7 @@ export class CutoffBatchesRepository {
             }
             const dispatch: PlanDispatch = {
                 dispatchId: row.dispatch_id,
+                dispatchType: row.dispatch_type,
                 zoneId: row.delivery_zone_id,
                 zoneCode: row.zone_code,
                 zoneName: row.zone_name,
@@ -163,6 +167,7 @@ export class CutoffBatchesRepository {
                 fixedDate: null,
                 agreedWindow: null,
                 estimatedWeightKg: row.estimated_weight_kg === null ? null : Number(row.estimated_weight_kg),
+                estimatedVolumeM3: row.estimated_volume_m3 === null ? null : Number(row.estimated_volume_m3),
                 packages: packages.get(row.dispatch_id) ?? [],
             };
             const stop: CutoffStop = {

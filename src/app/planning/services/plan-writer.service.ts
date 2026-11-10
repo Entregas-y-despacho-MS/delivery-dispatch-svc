@@ -290,8 +290,9 @@ export class PlanWriterService {
 
     /** A delivery moves to `in_planning`; a pickup keeps its current status. */
     private targetStatusFor(locked: LockedDispatch[], dispatchId: number): string {
-        const type = locked.find((row) => row.dispatch_id === dispatchId)?.type;
-        if (type === 'warehouse_return_pickup') return DispatchStatusEnum.PICKUP_SCHEDULED;
+        const dispatch = locked.find((row) => row.dispatch_id === dispatchId);
+        if (dispatch?.type === 'warehouse_return_pickup') return DispatchStatusEnum.PICKUP_SCHEDULED;
+        if (dispatch?.type === 'supplier_pickup') return DispatchStatusEnum.SCHEDULED;
         return DispatchStatusEnum.IN_PLANNING;
     }
 
@@ -313,7 +314,7 @@ export class PlanWriterService {
         // Captured from the full, unfiltered list: a pickup's own position still counts towards a
         // delivery's sequenceOrder below, even though the pickup itself gets no audit row for it.
         const sequenceOf = sequences ?? new Map(ids.map((dispatchId, index) => [dispatchId, index + 1]));
-        const deliveryIds = ids.filter((dispatchId) => typeByDispatch.get(dispatchId) !== 'warehouse_return_pickup');
+        const deliveryIds = ids.filter((dispatchId) => !['warehouse_return_pickup', 'supplier_pickup'].includes(typeByDispatch.get(dispatchId) ?? ''));
         const statusByDispatch = new Map(locked.map((row) => [row.dispatch_id, row.status]));
         const dispatchEvents = manager.getRepository(DispatchEvent);
         await dispatchEvents.save(deliveryIds.map((dispatchId) => dispatchEvents.create({
@@ -399,7 +400,8 @@ export class PlanWriterService {
 function plannableIds(locked: LockedDispatch[]): Set<number> {
     return new Set(
         locked
-            .filter((row) => (row.status === DispatchStatusEnum.PENDING || row.status === DispatchStatusEnum.RESCHEDULED || row.status === DispatchStatusEnum.PICKUP_SCHEDULED)
+            .filter((row) => (row.status === DispatchStatusEnum.PENDING || row.status === DispatchStatusEnum.RESCHEDULED || row.status === DispatchStatusEnum.PICKUP_SCHEDULED
+                || (row.type === 'supplier_pickup' && row.status === DispatchStatusEnum.SCHEDULED))
                 && row.route_batch_id === null && !row.reserved)
             .map((row) => row.dispatch_id),
     );

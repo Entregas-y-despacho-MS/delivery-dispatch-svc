@@ -16,6 +16,8 @@ export interface AgreedWindow {
  */
 export interface PlanDispatch {
     dispatchId: number;
+    /** Dispatch catalog type; supplier pickups are kept as standalone one-stop batches. */
+    dispatchType: string;
     zoneId: number;
     /** `delivery_zones.code`, for alerts a coordinator can read ("ZON-SUR"). */
     zoneCode: string;
@@ -24,6 +26,8 @@ export interface PlanDispatch {
     zoneDeleted: boolean;
     /** The hub the batch is tied to: a delivery's `origin_warehouse_id`, or a pickup's `destination_warehouse_id` — the vehicle starts and ends there either way. */
     warehouseId: number;
+    /** Supplier pickup only: vehicle selected and capacity-checked when its appointment was accepted. */
+    preferredVehicleId?: number | null;
     latitude: number;
     longitude: number;
     /** `urgent` only orders the queue (D-16). */
@@ -36,6 +40,7 @@ export interface PlanDispatch {
     /** `rescheduled` only: the window agreed with the customer, kept as it is. */
     agreedWindow: AgreedWindow | null;
     estimatedWeightKg: number | null;
+    estimatedVolumeM3?: number | null;
     packages: RouteCapacityPackage[];
 }
 

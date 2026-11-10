@@ -11,7 +11,7 @@ import type { CutoffEligibility, CutoffStop } from './cutoff-types.js';
 export function classifyStop(stop: CutoffStop, now: Date, windowMinutes: number): CutoffEligibility {
     if (stop.promiseFirmedAt) return 'firm';
     // A customer pickup never gets a promise (ST-81.3): it always enters, same as a firm delivery.
-    if (stop.dispatch.status === 'pickup_scheduled') return 'pickup';
+    if (stop.dispatch.status === 'pickup_scheduled' || stop.dispatch.dispatchType === 'supplier_pickup') return 'pickup';
     // Never approved: the customer was told nothing, so there is no promise to keep (§5.3).
     if (stop.dispatch.status !== 'scheduled') return 'no_promise';
     // Approved but no valid notice yet (the email bounced): the customer's clock never started.

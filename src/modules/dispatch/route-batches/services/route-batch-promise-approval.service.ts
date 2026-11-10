@@ -35,6 +35,7 @@ interface DispatchRow {
 }
 
 const PICKUP_TYPE = 'warehouse_return_pickup';
+const SUPPLIER_PICKUP_TYPE = 'supplier_pickup';
 
 interface ApprovalPlan {
     routeBatchId: number;
@@ -67,8 +68,8 @@ export class RouteBatchPromiseApprovalService {
         const plan = await this.dataSource.transaction((manager) => this.commitApproval(manager, routeBatchId, dto, actorUserId));
         const updatedAt = new Date().toISOString();
         // A pickup's own status never changes here — nothing to announce for it.
-        for (const dispatch of plan.approved) if (dispatch.type !== PICKUP_TYPE) this.emitStatusChanged(dispatch, DispatchStatusEnum.SCHEDULED, updatedAt);
-        for (const dispatch of plan.removed) if (dispatch.type !== PICKUP_TYPE) this.emitStatusChanged(dispatch, DispatchStatusEnum.PENDING, updatedAt);
+        for (const dispatch of plan.approved) if (dispatch.type !== PICKUP_TYPE && dispatch.type !== SUPPLIER_PICKUP_TYPE) this.emitStatusChanged(dispatch, DispatchStatusEnum.SCHEDULED, updatedAt);
+        for (const dispatch of plan.removed) if (dispatch.type !== PICKUP_TYPE && dispatch.type !== SUPPLIER_PICKUP_TYPE) this.emitStatusChanged(dispatch, DispatchStatusEnum.PENDING, updatedAt);
         const emailResults = await this.notifyCustomers(plan);
         return {
             routeBatchId,
@@ -140,6 +141,8 @@ export class RouteBatchPromiseApprovalService {
             // generator never moves it out of that status while it sits in a provisional batch.
             const stillPlanning = dispatch.type === PICKUP_TYPE
                 ? dispatch.status === DispatchStatusEnum.PICKUP_SCHEDULED
+                : dispatch.type === SUPPLIER_PICKUP_TYPE
+                    ? dispatch.status === DispatchStatusEnum.SCHEDULED
                 : dispatch.status === DispatchStatusEnum.IN_PLANNING;
             if (!stillPlanning) {
                 throw new RouteBatchApprovalConflictException('DISPATCH_VERSION_CONFLICT', `Dispatch ${dispatch.id} is no longer in planning.`);
@@ -149,7 +152,7 @@ export class RouteBatchPromiseApprovalService {
         await this.capacity.assertAssignable(routeBatchId, batch.vehicle_id, manager);
         // A pickup is shown in the plan but keeps its own status and tracking — it has no
         // customer-facing promise to approve here; it moves on only at the final approval.
-        for (const dispatch of approved) if (dispatch.type !== PICKUP_TYPE) await this.approveDispatch(manager, routeBatchId, dispatch, actorUserId);
+        for (const dispatch of approved) if (dispatch.type !== PICKUP_TYPE && dispatch.type !== SUPPLIER_PICKUP_TYPE) await this.approveDispatch(manager, routeBatchId, dispatch, actorUserId);
         // A dispatch that was already firm before leaving its previous route batch (coordinator
         // reschedule, ST-52.2) is re-entering the plan with a fixed date: the warehouse needs a new
         // preparation order for it, not just the usual promise notification (ST-241.2, D-47).
@@ -224,7 +227,8 @@ export class RouteBatchPromiseApprovalService {
 
     private async removeDispatch(manager: EntityManager, routeBatchId: number, dispatch: DispatchRow, actorUserId: number): Promise<void> {
         // A pickup never left `pickup_scheduled` to begin with — only clear its place in the batch.
-        const targetStatus = dispatch.type === PICKUP_TYPE ? DispatchStatusEnum.PICKUP_SCHEDULED : DispatchStatusEnum.PENDING;
+        const targetStatus = dispatch.type === PICKUP_TYPE ? DispatchStatusEnum.PICKUP_SCHEDULED
+            : dispatch.type === SUPPLIER_PICKUP_TYPE ? DispatchStatusEnum.SCHEDULED : DispatchStatusEnum.PENDING;
         await manager.query(
             `UPDATE dispatches
                 SET dispatch_status_id = (SELECT dispatch_status_id FROM dispatch_statuses WHERE name = $2),
@@ -249,7 +253,7 @@ export class RouteBatchPromiseApprovalService {
         const results: PromiseEmailResultDto[] = [];
         for (const dispatch of plan.approved) {
             // A pickup has no delivery promise to notify — Almacén already told the customer the date.
-            if (dispatch.type === PICKUP_TYPE || !dispatch.contact_email) {
+            if (dispatch.type === PICKUP_TYPE || dispatch.type === SUPPLIER_PICKUP_TYPE || !dispatch.contact_email) {
                 results.push({ dispatchId: dispatch.id, result: 'skipped' });
                 continue;
             }

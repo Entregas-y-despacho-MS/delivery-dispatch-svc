@@ -151,6 +151,12 @@ export class InsertionLotPlanner extends LotPlanner {
                 const opens = openStates.get(`${date}|${key}`) ?? [];
                 const stillWaiting: PlanDispatch[] = [];
                 for (const dispatch of pool) {
+                    // Procurement jobs are a dedicated run for one purchase order: never add them
+                    // to an already-open customer route (or another supplier's route).
+                    if (dispatch.dispatchType === 'supplier_pickup') {
+                        stillWaiting.push(dispatch);
+                        continue;
+                    }
                     let best: { state: OpenState; position: number; cost: number; simulation: SimResult } | null = null;
                     for (const state of opens) {
                         if (state.stops.length + 1 > maxStops) continue;
@@ -175,14 +181,17 @@ export class InsertionLotPlanner extends LotPlanner {
                 }
 
                 // 2. What is left: new batches with the vehicles that are free that day.
-                let freeVehicles = input.vehicles.filter((vehicle) => !usedVehicles.get(date)?.has(vehicle.vehicleId));
+                const allowedVehicles = first.dispatchType === 'supplier_pickup' && first.preferredVehicleId !== null && first.preferredVehicleId !== undefined
+                    ? input.vehicles.filter((vehicle) => vehicle.vehicleId === first.preferredVehicleId)
+                    : input.vehicles;
+                let freeVehicles = allowedVehicles.filter((vehicle) => !usedVehicles.get(date)?.has(vehicle.vehicleId));
                 const leftovers: { dispatch: PlanDispatch; failure: Failure }[] = [];
                 let round = 0;
 
                 while (pool.length > 0 && freeVehicles.length > 0) {
                     const globalIndex = [0, ...pool.map((dispatch) => matrix.indexOf.get(dispatch.dispatchId)!)];
                     const duration: DurationLookup = (from, to) => matrix.durations[globalIndex[from]][globalIndex[to]];
-                    const composition = composeBatches(pool, duration, freeVehicles, input.vehicles, maxStops);
+                    const composition = composeBatches(pool, duration, freeVehicles, allowedVehicles, maxStops);
 
                     for (const dispatch of composition.unfittable) {
                         unplanned.push({ dispatchId: dispatch.dispatchId, reason: 'no_vehicle_fits', detail: zoneDetail(dispatch) });
@@ -427,7 +436,8 @@ function zoneDetail(dispatch: { zoneId: number; zoneCode: string; zoneName: stri
 }
 
 function zoneKey(dispatch: PlanDispatch): string {
-    return `${dispatch.zoneId}:${dispatch.warehouseId}`;
+    const group = `${dispatch.zoneId}:${dispatch.warehouseId}`;
+    return dispatch.dispatchType === 'supplier_pickup' ? `${group}:supplier:${dispatch.dispatchId}` : group;
 }
 
 function minuteOfInstant(instant: Date): number {
