@@ -221,6 +221,33 @@ del emulador (`message.type`) para que el backend local lo procese. El envío a 
 la copia local, el mensaje de GCP ya quedó publicado. Repetir el comando genera un nuevo pedido cuando se usan los
 mensajes de ejemplo.
 
+#### Página local con formularios
+
+`npm run erp:publisher-ui` abre una página local con formularios separados para Marketplace y Almacén. Cada envío
+publica un sobre en el topic real de Grupo H y una copia al topic lógico correspondiente del emulador. La página
+consulta `inbound_messages` para confirmar si el backend local procesó o rechazó esa copia; también muestra el
+despacho si ya existe. Que Pub/Sub acepte un mensaje no significa que el backend lo haya procesado.
+
+Desde la raíz del workspace, con la base, el emulador y el backend ya levantados, ejecuta:
+
+```bash
+docker compose run --rm --no-deps -p 127.0.0.1:8090:8090 \
+  -v "/ruta/a/service-account.json:/run/gcp/service-account.json:ro" \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/run/gcp/service-account.json \
+  -e GROUP_H_GCP_PROJECT_ID=project-a96e5fe1-5ba6-4698-a85 \
+  -e GROUP_H_GCP_TOPIC=ucb-sis323-sub-h \
+  -e GROUP_H_PUBLISH_ENABLED=true \
+  -e LOCAL_PUBSUB_EMULATOR_HOST=pubsub-emulator:8085 \
+  -e ERP_PUBLISHER_UI_PORT=8090 \
+  delivery-dispatch-svc node scripts/pubsub/erp-publisher-ui.mjs
+```
+
+Abre `http://localhost:8090`. La casilla de confirmación de cada formulario evita publicar accidentalmente en el
+tópico compartido. Marketplace y Almacén deben usar el mismo ID de pedido. El primer mensaje puede quedar procesado
+sin crear todavía el despacho; este aparece cuando el backend procesa también el mensaje complementario. La cuenta
+de servicio solo necesita permiso de publicación para la parte de GCP; el backend local consume la copia del emulador.
+La página se niega a iniciar con `NODE_ENV=production`.
+
 ## Simulador ERP (ST-73.2)
 
 Permite probar la mensajería con el ERP sin Marketplace, Almacén ni Compras reales: publica en el
