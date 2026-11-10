@@ -65,7 +65,7 @@ export class DeliveryZonesController {
     @HttpCode(HttpStatus.CREATED)
     @ApiOperation({
         summary:     'Create a delivery zone',
-        description: 'Creates a delivery zone. All three fields are required: a unique `code` (409 DELIVERY_ZONE_CODE_ALREADY_EXISTS if another zone uses it), a `name` and the base `estimatedTimeMin` (a positive whole number of minutes). Requires coordinator role or root.',
+        description: 'Creates a delivery zone. Required fields: a unique `code` (409 DELIVERY_ZONE_CODE_ALREADY_EXISTS if another zone uses it), a `name` and the base `estimatedTimeMin` (a positive whole number of minutes). Optional `boundary` is a polygon array of [longitude, latitude] pairs used to match dispatch addresses; omit or send null for a zone without coverage. Requires coordinator role or root.',
     })
     @ApiBadRequests({ validation: true, example: ['Code is required.', 'Estimated time must be a positive number.'] })
     @ApiCreatedResponse({ type: DeliveryZoneDto })
@@ -79,7 +79,7 @@ export class DeliveryZonesController {
     @CoordinatorOnly()
     @ApiOperation({
         summary:     'Update a delivery zone',
-        description: 'Partially updates a delivery zone: only the fields sent are changed, and `null` is rejected. A changed `code` must not belong to another zone (409). Requires coordinator role or root.',
+        description: 'Partially updates a delivery zone: only the fields sent are changed. For `boundary`, send [longitude, latitude] pairs to replace it, omit it to keep the current polygon, or send null to remove coverage. A changed `code` must not belong to another zone (409). Requires coordinator role or root.',
     })
     @ApiIdParam('Delivery zone')
     @ApiBadRequests({ validation: true, example: ['Estimated time must be an integer.'], id: true })

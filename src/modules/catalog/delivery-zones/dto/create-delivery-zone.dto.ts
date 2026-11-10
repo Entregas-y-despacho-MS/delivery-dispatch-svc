@@ -1,5 +1,6 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsInt, IsNotEmpty, IsPositive, IsString, Max, MaxLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsInt, IsNotEmpty, IsPositive, IsString, Max, MaxLength, Validate } from 'class-validator';
+import { IsPolygonBoundaryConstraint, PolygonBoundary } from '../validators/polygon-boundary.validator.js';
 
 // Same 30-day ceiling as a service level target time: only there to reject absurd values.
 const MAX_ZONE_TIME_MIN = 43200;
@@ -22,4 +23,13 @@ export class CreateDeliveryZoneDto {
     @IsPositive({ message: 'Estimated time must be a positive number.' })
     @Max(MAX_ZONE_TIME_MIN, { message: `Estimated time must not exceed ${MAX_ZONE_TIME_MIN} minutes.` })
     estimatedTimeMin: number;
+
+    @ApiPropertyOptional({
+        type: 'array',
+        items: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2 },
+        example: [[-68.15, -16.5], [-68.1, -16.5], [-68.1, -16.45], [-68.15, -16.45]],
+        description: 'Optional coverage polygon as [longitude, latitude] coordinate pairs. Send null to create the zone without geographic coverage.',
+    })
+    @Validate(IsPolygonBoundaryConstraint)
+    boundary?: PolygonBoundary | null;
 }

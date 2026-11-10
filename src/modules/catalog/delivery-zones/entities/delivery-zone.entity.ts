@@ -1,5 +1,6 @@
 import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
 import { BaseEntitySoftDelete } from '../../../../database/entities/base.entity.js';
+import { PolygonBoundary, polygonBoundaryTransformer } from '../validators/polygon-boundary.validator.js';
 
 @Entity('delivery_zones')
 export class DeliveryZone extends BaseEntitySoftDelete {
@@ -14,4 +15,7 @@ export class DeliveryZone extends BaseEntitySoftDelete {
 
     @Column({ name: 'estimated_time_min', type: 'int' })
     estimatedTimeMin: number;
+
+    @Column({ name: 'boundary', type: 'polygon', nullable: true, transformer: polygonBoundaryTransformer })
+    boundary: PolygonBoundary | null;
 }
