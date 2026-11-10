@@ -65,6 +65,7 @@ export class DeliveryZonesService {
         zone.code              = dto.code;
         zone.name              = dto.name;
         zone.estimatedTimeMin  = dto.estimatedTimeMin;
+        zone.boundary          = dto.boundary ?? null;
 
         const saved = await this.saveHandlingDuplicate(() => repo.save(zone));
 
