@@ -17,14 +17,15 @@ async function reschedule(plain: object): Promise<string[]> {
 }
 
 describe('SchedulePickupDto', () => {
-    it('accepts only the vehicle, or the vehicle with a slot', async () => {
+    it('accepts an omitted vehicle for planner selection, or an optional vehicle with a slot', async () => {
+        expect(await schedule({})).toEqual([]);
         expect(await schedule({ vehicleId: 3 })).toEqual([]);
         expect(
             await schedule({ vehicleId: 3, windowStart: '2026-10-20T14:00:00Z', windowEnd: '2026-10-20T10:00:00-04:00' }),
         ).toEqual([]);
     });
 
-    it.each([undefined, 0, -1, 1.5, '3', 2147483648])('rejects vehicleId %j', async (vehicleId) => {
+    it.each([0, -1, 1.5, '3', 2147483648])('rejects vehicleId %j', async (vehicleId) => {
         expect(await schedule({ vehicleId })).toEqual(['vehicleId']);
     });
 
