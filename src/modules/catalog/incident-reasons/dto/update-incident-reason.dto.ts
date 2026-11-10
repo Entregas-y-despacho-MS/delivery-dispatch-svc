@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsNotEmpty, IsString, Matches, MaxLength } from 'class-validator';
+import { IsBoolean, IsIn, IsNotEmpty, IsString, Matches, MaxLength } from 'class-validator';
 import { OptionalNotNull } from '../../../../shared/validators/optional-not-null.validator.js';
 import { INCIDENT_REASON_CODE_PATTERN } from './incident-reason-code.js';
 
@@ -29,6 +29,11 @@ export class UpdateIncidentReasonDto {
     @OptionalNotNull()
     @IsBoolean({ message: 'Requires evidence must be true or false.' })
     requiresEvidence?: boolean;
+
+    @ApiPropertyOptional({ enum: ['low', 'high'], description: 'Incident criticality; null is rejected' })
+    @OptionalNotNull()
+    @IsIn(['low', 'high'])
+    criticality?: 'low' | 'high';
 
     @ApiPropertyOptional({ example: false, description: 'false disables the reason for new incidents; incidents already logged with it are not affected. true enables it again. null is rejected' })
     @OptionalNotNull()

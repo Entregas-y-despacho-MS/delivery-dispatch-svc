@@ -84,7 +84,7 @@ class FakeStore implements MemoryTransactionParticipant<State> {
                 s.dispatch.status = params[1] as string;
                 return [[{ version: s.dispatch.version, updated_at: new Date('2026-11-08T12:00:05Z') }], 1];
             }
-            if (sql.includes('FROM incident_reasons')) return [{ incident_reason_id: 6 }];
+            if (sql.includes('FROM incident_reasons')) return [{ incident_reason_id: 6, criticality: 'high' }];
             if (sql.includes('outboundRecordVersion')) {
                 const versions = s.events.map((e) => Number(e.metadata.outboundRecordVersion)).filter((v) => v > 0);
                 return [{ version: versions.length > 0 ? String(Math.max(...versions)) : null }];

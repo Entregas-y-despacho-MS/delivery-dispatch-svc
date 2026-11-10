@@ -130,10 +130,10 @@ describe('Motivos de incidencia (e2e, RF-A32)', () => {
             const res = await post(body);
 
             expect(res.status).toBe(201);
-            expect(res.body).toMatchObject({ code: body.code, name: body.name, requiresEvidence: true, active: true });
-            expect(Object.keys(res.body).sort()).toEqual(['active', 'code', 'createdAt', 'id', 'name', 'requiresEvidence']);
+            expect(res.body).toMatchObject({ code: body.code, name: body.name, requiresEvidence: true, active: true, criticality: 'low' });
+            expect(Object.keys(res.body).sort()).toEqual(['active', 'code', 'createdAt', 'criticality', 'id', 'name', 'requiresEvidence']);
             expect(await row(res.body.id)).toMatchObject({
-                code: body.code, name: body.name, requires_evidence: true, active: true, deleted_at: null,
+                code: body.code, name: body.name, requires_evidence: true, criticality: 'low', active: true, deleted_at: null,
             });
         });
 

@@ -15,7 +15,7 @@ import { IncidentCaptureTimeInvalidException, IncidentEvidenceRequiredException,
 interface DispatchIdentity { route_batch_id: number | null; }
 interface RouteIdentity { route_batch_id: number; driver_id: number | null; }
 interface DispatchRow { dispatch_id: number; route_batch_id: number | null; delivery_zone_id: number | null; status: string; }
-interface ReasonRow { incident_reason_id: number; code: string; name: string; active: boolean; requires_evidence: boolean; counts_as_attempt: boolean; }
+interface ReasonRow { incident_reason_id: number; code: string; name: string; active: boolean; requires_evidence: boolean; counts_as_attempt: boolean; criticality: 'low' | 'high'; }
 interface ExistingIncident { dispatch_id: number; reason_code: string; description: string | null; created_at: Date; metadata: Record<string, unknown> | null; }
 
 interface ReportOutcome { response: DispatchIncidentResponseDto; created: boolean; event?: Record<string, unknown>; }
@@ -87,7 +87,7 @@ export class DispatchIncidentsAppService {
         if (dispatch.status !== 'in_transit') throw new IncidentReportConflictException('DISPATCH_NOT_IN_TRANSIT', 'An incident can only be reported for an in-transit dispatch.');
 
         const [reason]: ReasonRow[] = await manager.query(
-            `SELECT incident_reason_id, code, name, active, requires_evidence, counts_as_attempt
+            `SELECT incident_reason_id, code, name, active, requires_evidence, counts_as_attempt, criticality
                FROM incident_reasons WHERE code = $1 AND active = TRUE AND deleted_at IS NULL`,
             [dto.reasonCode],
         );
@@ -143,7 +143,7 @@ export class DispatchIncidentsAppService {
             event: {
                 dispatchId, incidentId: dto.incidentId, reasonCode: reason.code,
                 reportedAt: reportedAt.toISOString(),
-                criticality: 'high',
+                criticality: reason.criticality,
             },
         };
     }
