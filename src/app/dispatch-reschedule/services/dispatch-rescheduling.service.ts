@@ -47,7 +47,7 @@ interface Applied {
  * After the commit `dispatch.status_changed` and `dispatch.rescheduled` (the notice to the customer, ES-40) are emitted.
  *
  * It does not firm the promise nor send a preparation order: a `rescheduled` dispatch has no batch and so no
- * departure date to put in it (see PENDIENTES.md).
+ * departure date to put in it.
  */
 @Injectable()
 export class DispatchReschedulingService {
