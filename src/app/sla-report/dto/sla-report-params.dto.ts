@@ -3,7 +3,7 @@ import { IsDateString, IsIn, Matches } from 'class-validator';
 import { SlaGroupBy } from '../domain/sla-group-by.js';
 
 /** The groupings `GET /reports/sla` accepts: `vehicle` belongs to the fleet KPIs (ST-61.1). */
-const REPORT_GROUPINGS = [SlaGroupBy.ZONE, SlaGroupBy.SERVICE_LEVEL, SlaGroupBy.DRIVER];
+const REPORT_GROUPINGS = [SlaGroupBy.ZONE, SlaGroupBy.SERVICE_LEVEL, SlaGroupBy.ZONE_SERVICE, SlaGroupBy.DRIVER];
 
 const DATE_MESSAGE = (name: string) => `The '${name}' parameter must be a valid date in YYYY-MM-DD format.`;
 
@@ -23,7 +23,7 @@ export class SlaReportParamsDto {
     @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: DATE_MESSAGE('to') })
     to!: string;
 
-    @ApiProperty({ enum: REPORT_GROUPINGS, description: 'How the dispatches are grouped: by delivery zone (`zone`), by service level (`service_level`) or by the driver of the route (`driver`)' })
-    @IsIn(REPORT_GROUPINGS, { message: "The 'groupBy' parameter must be one of: zone, service_level, driver." })
+    @ApiProperty({ enum: REPORT_GROUPINGS, description: 'How the dispatches are grouped: by zone (`zone`), service level (`service_level`), zone and service together (`zone_service`) or driver (`driver`)' })
+    @IsIn(REPORT_GROUPINGS, { message: "The 'groupBy' parameter must be one of: zone, service_level, zone_service, driver." })
     groupBy!: SlaGroupBy;
 }
