@@ -24,7 +24,7 @@ function setup(options: { existing?: unknown; reason?: unknown; evidence?: unkno
             if (sql.includes('FROM dispatch_incidents i')) return options.existing ? [options.existing] : [];
             if (sql.includes('FROM incident_reasons')) return [options.reason ?? {
                 incident_reason_id: 2, code: 'INC-CUST-ABSENT', name: 'Customer absent', active: true,
-                requires_evidence: true, counts_as_attempt: true,
+                requires_evidence: true, counts_as_attempt: true, criticality: 'high',
             }];
             if (sql.includes('FROM dispatch_statuses')) return [{ dispatch_status_id: 11 }];
             return [];

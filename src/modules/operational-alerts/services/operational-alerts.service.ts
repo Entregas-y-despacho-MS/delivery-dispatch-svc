@@ -10,7 +10,7 @@ import { OperationalAlert } from '../entities/operational-alert.entity.js';
 import { OperationalAlertDto } from '../dto/operational-alert.dto.js';
 import { FindAllOperationalAlertsParamsDto } from '../dto/find-all-operational-alerts-params.dto.js';
 import { OperationalAlertNotFoundException, OperationalAlertAlreadyAcknowledgedException } from '../exceptions/index.js';
-import { OPERATIONAL_ALERT_RAISED_EVENT } from '../events/operational-alert-raised.event.js';
+import { OPERATIONAL_ALERT_ACKNOWLEDGED_EVENT, OPERATIONAL_ALERT_RAISED_EVENT } from '../events/operational-alert-raised.event.js';
 
 export interface RaiseAlertParams {
     kind: OperationalAlertKindEnum;
@@ -120,7 +120,18 @@ export class OperationalAlertsService {
             .execute();
 
         if ((result.affected ?? 0) > 0) {
-            return (await this.repo.findOne({ dto: OperationalAlertDto, where: { id } }))!;
+            const alert = await this.repo.findOne({ dto: OperationalAlertDto, where: { id } });
+            if (!alert) throw new OperationalAlertNotFoundException();
+            try {
+                this.events.emit(OPERATIONAL_ALERT_ACKNOWLEDGED_EVENT, {
+                    id: alert.id, kind: alert.kind, severity: alert.severity, zoneId: alert.zoneId,
+                    dispatchId: alert.dispatchId, driverId: alert.driverId,
+                    acknowledgedBy: alert.acknowledgedBy, acknowledgedAt: alert.acknowledgedAt,
+                });
+            } catch (error) {
+                this.logger.error(`Alert ${id} was acknowledged but its broadcast could not be queued.`, error as Error);
+            }
+            return alert;
         }
 
         const existing = await this.rawRepo.existsBy({ id });

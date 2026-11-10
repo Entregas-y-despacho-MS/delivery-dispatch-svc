@@ -73,7 +73,7 @@ export class PickupOrdersController {
     @CoordinatorOnly()
     @ApiOperation({
         summary: 'Cancel a customer pickup order before the route starts (coordinator)',
-        description: 'Cancels a pickup order in `pickup_scheduled`, `address_review` (an RMA without coordinates, which has no other way out) or `in_planning`. Any other status answers 409. It is the same cancellation as `POST /dispatches/:id/cancel`, applied to the pickup type: `reason` (the causal) is required and is kept in the audit event; the order gets `closed_at` and `cancelled`; from `in_planning` it leaves its route batch (its `version` and the batch\'s go up, D-09, the sequence gap is closed while the batch is provisional, an emptied batch is cancelled and the capacity is free again). Unlike a delivery, the cancellation of a pickup order is **not** published to the ERP. A dispatch that is not a pickup order answers 409 `DISPATCH_TYPE_NOT_SUPPORTED` (cancel a delivery with `POST /dispatches/:id/cancel`). Requires coordinator role, or root.',
+        description: 'Cancels a pickup order only in `pickup_scheduled` or `in_planning`, following the ES-81 acceptance criteria. Any other status, including `address_review`, answers 409. It is the same cancellation as `POST /dispatches/:id/cancel`, applied to the pickup type: `reason` (the causal) is required and is kept in the audit event; the order gets `closed_at` and `cancelled`; from `in_planning` it leaves its route batch (its `version` and the batch\'s go up, D-09, the sequence gap is closed while the batch is provisional, an emptied batch is cancelled and the capacity is free again). Unlike a delivery, the cancellation of a pickup order is **not** published to the ERP. A dispatch that is not a pickup order answers 409 `DISPATCH_TYPE_NOT_SUPPORTED` (cancel a delivery with `POST /dispatches/:id/cancel`). Requires coordinator role, or root.',
     })
     @ApiIdParam('Pickup order')
     @ApiOkResponse({ type: CancelDispatchResultDto })
@@ -82,7 +82,7 @@ export class PickupOrdersController {
     @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
     @ApiNotFound({ code: 'DISPATCH_NOT_FOUND', message: 'Dispatch not found.' })
     @ApiConflict(
-        { code: 'DISPATCH_CANCEL_NOT_ALLOWED', message: 'A dispatch can only be cancelled by the coordinator before the route starts: pickup_scheduled, address_review or in_planning (current status: assigned).' },
+        { code: 'DISPATCH_CANCEL_NOT_ALLOWED', message: 'A dispatch can only be cancelled by the coordinator before the route starts: pickup_scheduled or in_planning (current status: assigned).' },
         { code: 'DISPATCH_TYPE_NOT_SUPPORTED', message: 'Only warehouse_return_pickup dispatches can be handled from here (type: delivery).' },
         { code: 'DISPATCH_CHANGED_CONCURRENTLY', message: 'The dispatch changed while the request was being processed (it moved to another route). Review its current state and try again.' },
     )
