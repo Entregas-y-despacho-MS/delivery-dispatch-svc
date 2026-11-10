@@ -31,7 +31,8 @@
     "simulate:procurement": "tsx scripts/simulator/simulate.ts procurement",
     "simulate:demo-returns": "tsx scripts/simulator/simulate.ts demo-returns",
     "simulate:listen": "tsx scripts/simulator/listen.ts",
-    "pubsub:publish-grupo-h:simulate": "node scripts/pubsub/publish-grupo-h-and-simulate.mjs"
+    "pubsub:publish-grupo-h:simulate": "node scripts/pubsub/publish-grupo-h-and-simulate.mjs",
+    "erp:publisher-ui": "node scripts/pubsub/erp-publisher-ui.mjs"
   },
   "dependencies": {
     "@google-cloud/pubsub": "^6.2.0",
