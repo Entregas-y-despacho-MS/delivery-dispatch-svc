@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsDateString, IsInt, IsOptional, Matches, Max, Min } from 'class-validator';
 import { INT4_MAX } from '../../../../shared/constants/int4.js';
 
@@ -7,14 +7,15 @@ export const UTC_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|
 export const UTC_DATE_TIME_MESSAGE = 'must be an ISO-8601 date and time with an offset, e.g. 2026-10-20T14:00:00Z.';
 
 export class SchedulePickupDto {
-    @ApiProperty({
+    @ApiPropertyOptional({
         type: 'integer', minimum: 1, maximum: INT4_MAX, example: 3,
-        description: 'Id of the vehicle that would do the pickup. The estimated weight and volume of the pickup are compared with its capacity; an estimate that exceeds it answers 409',
+        description: 'Optional vehicle preference for backward compatibility. When omitted, planning chooses a vehicle for the pickup route and checks the combined route capacity.',
     })
+    @IsOptional()
     @IsInt({ message: 'vehicleId must be an integer.' })
     @Min(1, { message: 'vehicleId must be at least 1.' })
     @Max(INT4_MAX, { message: `vehicleId must not be greater than ${INT4_MAX}.` })
-    vehicleId!: number;
+    vehicleId?: number;
 
     @ApiPropertyOptional({
         type: String, format: 'date-time', example: '2026-10-20T14:00:00Z',

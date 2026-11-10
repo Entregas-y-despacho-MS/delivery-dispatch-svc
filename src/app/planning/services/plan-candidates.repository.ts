@@ -16,10 +16,10 @@ interface CandidateRow {
     dispatch_id: number;
     dispatch_type: string;
     preferred_vehicle_id: number | null;
-    delivery_zone_id: number;
-    zone_code: string;
-    zone_name: string;
-    zone_deleted: boolean;
+    delivery_zone_id: number | null;
+    zone_code: string | null;
+    zone_name: string | null;
+    zone_deleted: boolean | null;
     /** A delivery's `origin_warehouse_id`, or a pickup's `destination_warehouse_id`. */
     warehouse_id: number;
     delivery_latitude: string;
@@ -103,9 +103,9 @@ export class PlanCandidatesRepository {
                FROM dispatches d
                JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
                JOIN dispatch_types t ON t.dispatch_type_id = d.dispatch_type_id
-               -- Not filtered by deleted_at: the promise runs from D0 and does not stop because the
-               -- catalog changed; a deleted zone is planned and warned about.
-               JOIN delivery_zones z ON z.delivery_zone_id = d.delivery_zone_id
+               -- Delivery zones qualify customer deliveries. Supplier pickup coordinates are their
+               -- own routing origin and never need to be inside customer-delivery coverage.
+          LEFT JOIN delivery_zones z ON z.delivery_zone_id = d.delivery_zone_id
           LEFT JOIN LATERAL (
                     SELECT r.new_window_start, r.new_window_end
                       FROM dispatch_reschedules r
@@ -128,7 +128,7 @@ export class PlanCandidatesRepository {
                     )
                 AND d.shipment_ready = TRUE
                 AND d.delivery_latitude IS NOT NULL AND d.delivery_longitude IS NOT NULL
-                AND d.delivery_zone_id IS NOT NULL
+                AND (t.name = 'supplier_pickup' OR d.delivery_zone_id IS NOT NULL)
                 AND COALESCE(d.origin_warehouse_id, d.destination_warehouse_id) IS NOT NULL
                 AND NOT EXISTS (
                     SELECT 1 FROM dispatch_reservations rv
@@ -145,9 +145,9 @@ export class PlanCandidatesRepository {
             dispatchType: row.dispatch_type,
             preferredVehicleId: row.preferred_vehicle_id,
             zoneId: row.delivery_zone_id,
-            zoneCode: row.zone_code,
-            zoneName: row.zone_name,
-            zoneDeleted: row.zone_deleted,
+            zoneCode: row.zone_code ?? 'PICKUP',
+            zoneName: row.zone_name ?? 'Recojos de proveedor',
+            zoneDeleted: row.zone_deleted ?? false,
             warehouseId: row.warehouse_id,
             latitude: Number(row.delivery_latitude),
             longitude: Number(row.delivery_longitude),
@@ -297,9 +297,9 @@ export class PlanCandidatesRepository {
                 dispatchType: row.dispatch_type,
                 preferredVehicleId: row.preferred_vehicle_id,
                 zoneId: row.delivery_zone_id,
-                zoneCode: row.zone_code,
-                zoneName: row.zone_name,
-                zoneDeleted: row.zone_deleted,
+                zoneCode: row.zone_code ?? '',
+                zoneName: row.zone_name ?? '',
+                zoneDeleted: row.zone_deleted ?? false,
                 warehouseId: row.warehouse_id,
                 latitude: Number(row.delivery_latitude),
                 longitude: Number(row.delivery_longitude),
@@ -374,8 +374,8 @@ export class PlanCandidatesRepository {
     }
 
     async findWarehouses(): Promise<PlanWarehouse[]> {
-        const rows: { warehouse_id: number; latitude: string; longitude: string }[] = await this.dataSource.query(
-            `SELECT warehouse_id, latitude, longitude
+        const rows: { warehouse_id: number; latitude: string; longitude: string; reception_end_time: string | null }[] = await this.dataSource.query(
+            `SELECT warehouse_id, latitude, longitude, reception_end_time
                FROM warehouses
               WHERE active = TRUE AND deleted_at IS NULL
               ORDER BY warehouse_id`,
@@ -384,6 +384,7 @@ export class PlanCandidatesRepository {
             warehouseId: row.warehouse_id,
             latitude: Number(row.latitude),
             longitude: Number(row.longitude),
+            receptionEndTime: row.reception_end_time,
         }));
     }
 

@@ -140,6 +140,7 @@ export class PublicTrackingService {
                 `SELECT d.dispatch_id, ds.name AS status, rb.driver_id
                    FROM dispatches d
                    JOIN dispatch_statuses ds ON ds.dispatch_status_id = d.dispatch_status_id
+                   JOIN dispatch_types dt ON dt.dispatch_type_id = d.dispatch_type_id AND dt.name = 'delivery'
                    LEFT JOIN route_batches rb ON rb.route_batch_id = d.route_batch_id
                   WHERE d.dispatch_id = $1
                     AND d.tracking_token = $2
@@ -225,6 +226,7 @@ export class PublicTrackingService {
                       WHERE r.dispatch_id = d.dispatch_id AND r.rescheduled_by_type = 'customer') AS reschedule_attempts
                FROM dispatches d
                JOIN dispatch_statuses ds ON ds.dispatch_status_id = d.dispatch_status_id
+               JOIN dispatch_types dt ON dt.dispatch_type_id = d.dispatch_type_id AND dt.name = 'delivery'
                LEFT JOIN route_batches rb ON rb.route_batch_id = d.route_batch_id
               WHERE d.tracking_token = $1
                 AND (d.tracking_token_expires_at IS NULL OR d.tracking_token_expires_at > $2)`,

@@ -30,14 +30,14 @@ export class PickupSchedulingController {
     @CoordinatorOnly()
     @ApiOperation({
         summary:     'Schedule a supplier pickup',
-        description: 'Agrees the date and time slot of a `supplier_pickup` dispatch and tells Compras (ERP-04). The dispatch must be `pending` and have its pickup address, destination warehouse and supplier schedule complete; a request in `address_review` or with missing data answers 409 `SUPPLIER_PICKUP_INCOMPLETE`. The service window is the intersection of the supplier schedule and the reception hours of the destination warehouse (the general delivery window of ES-57 when the catalog defines none), in America/La_Paz; with no common time still ahead it answers 409 `PICKUP_WINDOWS_DO_NOT_INTERSECT`. `windowStart` and `windowEnd` pick a slot inside that intersection; when omitted, the earliest slot ahead is taken. The estimated weight and volume of the pickup are compared with the capacity of `vehicleId`; exceeding it answers 409 `PICKUP_CAPACITY_EXCEEDED`. On success the dispatch becomes `scheduled`, the agreed slot replaces `scheduled_window_*` (the supplier schedule is kept in the event log), the transfer code is assigned if the dispatch had none, and the message `dispatch.pickup.scheduled` (date, slot and purchase order) is written to the outbox in the same transaction. Requires the coordinator role (or root).',
+        description: 'Agrees the date and time slot of a `supplier_pickup` dispatch and tells Compras (ERP-04). The dispatch must be `pending` and have its pickup address, destination warehouse and supplier schedule complete; a request in `address_review` or with missing data answers 409 `SUPPLIER_PICKUP_INCOMPLETE`. The service window is the intersection of the supplier schedule and the reception hours of the destination warehouse (the general delivery window of ES-57 when the catalog defines none), in America/La_Paz; with no common time still ahead it answers 409 `PICKUP_WINDOWS_DO_NOT_INTERSECT`. `windowStart` and `windowEnd` pick a slot inside that intersection; when omitted, the earliest slot ahead is taken. Vehicle selection is deferred to pickup-route planning. An optional `vehicleId` is accepted for backward compatibility and its capacity is checked for this individual pickup. On success the dispatch becomes `scheduled`, the agreed slot replaces `scheduled_window_*` (the supplier schedule is kept in the event log), the transfer code is assigned if the dispatch had none, and the message `dispatch.pickup.scheduled` (date, slot and purchase order) is written to the outbox in the same transaction. Requires the coordinator role (or root).',
     })
     @ApiIdParam('Dispatch')
     @ApiOkResponse({ type: PickupScheduleDto })
     @ApiBadRequests({
         validation: true, id: true,
         errors: [{ code: 'INVALID_PICKUP_WINDOW', message: 'windowStart and windowEnd must be sent together.' }],
-        example: ['vehicleId must be an integer.'],
+        example: ['vehicleId must be an integer when provided.'],
     })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })

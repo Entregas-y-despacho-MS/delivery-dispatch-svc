@@ -16,9 +16,9 @@ export interface AgreedWindow {
  */
 export interface PlanDispatch {
     dispatchId: number;
-    /** Dispatch catalog type; supplier pickups are kept as standalone one-stop batches. */
+    /** Dispatch catalog type; supplier pickups are planned only with other supplier pickups. */
     dispatchType: string;
-    zoneId: number;
+    zoneId: number | null;
     /** `delivery_zones.code`, for alerts a coordinator can read ("ZON-SUR"). */
     zoneCode: string;
     zoneName: string;
@@ -52,6 +52,8 @@ export interface PlanWarehouse {
     warehouseId: number;
     latitude: number;
     longitude: number;
+    /** Local receiving close time (`HH:mm:ss`), when configured. */
+    receptionEndTime?: string | null;
 }
 
 /** A batch that already exists and is not cancelled: it occupies its vehicle and its driver that day. */
@@ -113,7 +115,7 @@ export interface ProposedStop {
 
 export interface ProposedBatch {
     shiftDate: string;
-    zoneId: number;
+    zoneId: number | null;
     zoneCode: string;
     zoneName: string;
     warehouseId: number;
