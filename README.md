@@ -223,8 +223,9 @@ mensajes de ejemplo.
 
 #### Página local con formularios
 
-`npm run erp:publisher-ui` abre una página local con formularios separados para Marketplace y Almacén. Cada envío
-publica un sobre en el topic real de Grupo H y una copia al topic lógico correspondiente del emulador. La página
+`npm run erp:publisher-ui` abre una página local con formularios separados para Marketplace, Almacén y Compras.
+El formulario de Compras puede publicar solicitudes, actualizaciones y cancelaciones de recojos a proveedor.
+Cada envío publica un sobre en el topic real de Grupo H y una copia al topic lógico correspondiente del emulador. La página
 consulta `inbound_messages` para confirmar si el backend local procesó o rechazó esa copia; también muestra el
 despacho si ya existe. Que Pub/Sub acepte un mensaje no significa que el backend lo haya procesado.
 
@@ -243,9 +244,11 @@ docker compose run --rm --no-deps -p 127.0.0.1:8090:8090 \
 ```
 
 Abre `http://localhost:8090`. La casilla de confirmación de cada formulario evita publicar accidentalmente en el
-tópico compartido. Marketplace y Almacén deben usar el mismo ID de pedido. El primer mensaje puede quedar procesado
-sin crear todavía el despacho; este aparece cuando el backend procesa también el mensaje complementario. La cuenta
-de servicio solo necesita permiso de publicación para la parte de GCP; el backend local consume la copia del emulador.
+tópico compartido. Marketplace y Almacén deben usar el mismo ID de pedido; el backend crea la entrega cuando procesa
+ambos mensajes. Compras usa su propio ID de orden de compra; para actualizar o cancelar, usa el mismo ID después de
+que la solicitud inicial haya sido procesada. La solicitud de Compras crea un recojo `supplier_pickup`; esto no asigna
+por sí solo el recojo a una ruta o repartidor. La cuenta de servicio solo necesita permiso de publicación para la parte
+de GCP; el backend local consume la copia del emulador.
 La página se niega a iniciar con `NODE_ENV=production`.
 
 ## Simulador ERP (ST-73.2)

@@ -47,6 +47,7 @@ const db = new Pool({
 const TYPES = {
     marketplace: { type: 'marketplace.sales_order.confirmed', source: 'marketplace' },
     inventory: { type: 'inventory.shipment.ready', source: 'inventory' },
+    procurement: { type: 'procurement.pickup.requested', source: 'procurement' },
 };
 
 const page = String.raw`<!doctype html>
@@ -73,7 +74,7 @@ const page = String.raw`<!doctype html>
   </style>
 </head>
 <body><main class="wrap">
-  <header><div><h1>Prueba de pedidos · Grupo H</h1><p>Publica los mensajes de Marketplace y Almacén, y comprueba por separado su llegada al tópico y el procesamiento local.</p></div><span class="tag">Entorno local</span></header>
+  <header><div><h1>Prueba de pedidos · Grupo H</h1><p>Publica mensajes de Marketplace, Almacén y Compras; comprueba por separado su llegada al tópico y el procesamiento local.</p></div><span class="tag">Entorno local</span></header>
   <div class="notice"><strong>Publicación real en el tópico compartido.</strong> Al enviar, se publica en Google Cloud y también se copia al emulador local para que el backend de Docker la procese. Usa datos de prueba. La clave de servicio permanece en el servidor.</div>
   <section class="card"><div class="row"><label class="order">ID compartido del pedido<input id="salesOrderId" maxlength="90" required></label><button class="secondary" id="newOrder" type="button">Nuevo ID de pedido</button></div><p class="small">Usa el mismo ID en Marketplace y Almacén. Si envías solo uno, el backend lo registra y espera el mensaje complementario para crear el despacho.</p></section>
   <form class="card" id="marketplace"><h2>1. Marketplace · Pedido confirmado</h2><p>Envía los datos del cliente y de la dirección de entrega.</p>
@@ -104,7 +105,36 @@ const page = String.raw`<!doctype html>
     <label class="confirm"><input type="checkbox" required><span>Confirmo publicar este mensaje de Almacén en el tópico real del Grupo H y copiarlo al backend local.</span></label>
     <div class="actions"><button type="submit">Enviar mensaje de Almacén</button></div><div class="status" aria-live="polite"></div>
   </form>
-  <p class="small">La confirmación “procesado por backend” consulta el registro de entrada en la base local. Si se procesaron ambos mensajes, también se muestra el despacho creado y su estado de cobertura.</p>
+  <form class="card" id="procurement"><h2>3. Compras · Recojo en proveedor</h2><p>Envía una solicitud, actualización o cancelación de recojo vinculada a una orden de compra.</p>
+    <div class="grid">
+      <label>Acción<select name="action"><option value="requested">Solicitar recojo</option><option value="updated">Actualizar solicitud</option><option value="cancelled">Cancelar solicitud</option></select></label>
+      <label>ID de orden de compra<input name="purchaseOrderId" value="PO-WEB-PRUEBA-001" maxlength="90" required></label>
+      <label>ID del proveedor<input name="supplierId" value="SUP-PRUEBA-001" maxlength="100" required></label>
+      <label>Nombre del proveedor<input name="supplierName" value="Proveedor de prueba S.R.L." maxlength="150" required></label>
+      <label>Contacto<input name="contactName" value="Contacto de prueba" maxlength="150"></label>
+      <label>Teléfono del contacto<input name="contactPhone" value="+59170000000" maxlength="30"></label>
+      <label>Correo del contacto<input name="contactEmail" type="email" value="proveedor.prueba@example.com" maxlength="150"></label>
+      <label>ID del almacén destino<input name="warehouseId" value="WH-LPZ-01" maxlength="100" required></label>
+      <label class="wide">Dirección del proveedor<input name="address" value="Av. 20 de Octubre, cerca de Plaza San Pedro" maxlength="500" required></label>
+      <label class="wide">Referencia<input name="reference" value="Dirección de proveedor de prueba" maxlength="500"></label>
+      <label>Latitud<input name="latitude" type="number" step="0.000001" value="-16.5000" required></label>
+      <label>Longitud<input name="longitude" type="number" step="0.000001" value="-68.1300" required></label>
+      <label>Recojo desde<input name="startsAt" type="datetime-local" required></label>
+      <label>Recojo hasta<input name="endsAt" type="datetime-local" required></label>
+      <label>ID de producto<input name="productId" value="SKU-PRUEBA-001" maxlength="100" required></label>
+      <label>Descripción del producto<input name="productDescription" value="Producto de prueba" maxlength="300"></label>
+      <label>Cantidad<input name="quantity" type="number" min="1" step="1" value="2" required></label>
+      <label>Bultos estimados<input name="packages" type="number" min="1" step="1" value="1"></label>
+      <label>Peso estimado (kg)<input name="weightKg" type="number" min="0.01" step="0.01" value="6.4"></label>
+      <label>Volumen estimado (m³)<input name="volumeM3" type="number" min="0.01" step="0.01" value="0.03"></label>
+      <label class="wide">Condiciones especiales<input name="transportConditions" value="fragilidad" maxlength="100"></label>
+      <label class="wide" data-cancel-reason hidden>Motivo de cancelación<input name="reason" value="Cancelación de prueba" maxlength="300"></label>
+    </div>
+    <p class="small">Este envío confirma la solicitud en el backend. No significa que el recojo ya tenga ruta o repartidor asignados.</p>
+    <label class="confirm"><input type="checkbox" required><span>Confirmo publicar este evento de Compras en el tópico real del Grupo H y copiarlo al backend local.</span></label>
+    <div class="actions"><button type="submit">Enviar solicitud de Compras</button></div><div class="status" aria-live="polite"></div>
+  </form>
+  <p class="small">La confirmación “procesado por backend” consulta el registro de entrada en la base local. En pedidos de cliente se necesitan Marketplace y Almacén; una solicitud de Compras crea su propio despacho de recojo.</p>
 </main>
 <script>
   const idInput=document.querySelector('#salesOrderId');
@@ -114,6 +144,21 @@ const page = String.raw`<!doctype html>
   document.querySelector('#newOrder').addEventListener('click',()=>{idInput.value=makeId();localStorage.setItem('erp-publisher-order',idInput.value);});
   const localDateTime=()=>{const d=new Date(Date.now()+5*60000);d.setMinutes(d.getMinutes()-d.getTimezoneOffset());return d.toISOString().slice(0,16)};
   document.querySelector('[name="availableFrom"]').value=localDateTime();
+  const procurementForm=document.querySelector('#procurement');
+  const purchaseOrderInput=procurementForm.elements.purchaseOrderId;
+  const makePurchaseOrderId=()=>'PO-WEB-'+new Date().toISOString().replace(/[-:.TZ]/g,'').slice(0,14)+'-'+crypto.randomUUID().slice(0,6).toUpperCase();
+  purchaseOrderInput.value=localStorage.getItem('erp-publisher-purchase-order')||makePurchaseOrderId();
+  purchaseOrderInput.addEventListener('input',()=>localStorage.setItem('erp-publisher-purchase-order',purchaseOrderInput.value.trim()));
+  const versionKey=()=>'erp-publisher-procurement-version-'+purchaseOrderInput.value.trim();
+  const currentProcurementVersion=()=>Number(localStorage.getItem(versionKey())||0);
+  const localDateTimeAt=hours=>{const d=new Date(Date.now()+hours*3600000);d.setMinutes(d.getMinutes()-d.getTimezoneOffset());return d.toISOString().slice(0,16)};
+  procurementForm.elements.startsAt.value=localDateTimeAt(24);
+  procurementForm.elements.endsAt.value=localDateTimeAt(26);
+  procurementForm.elements.action.addEventListener('change',()=>{
+    const action=procurementForm.elements.action.value;
+    procurementForm.querySelector('[data-cancel-reason]').hidden=action!=='cancelled';
+    procurementForm.querySelector('button[type="submit"]').textContent=action==='cancelled'?'Enviar cancelación de Compras':action==='updated'?'Enviar actualización de Compras':'Enviar solicitud de Compras';
+  });
   const esc=(s)=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   function show(el,result){el.classList.add('show');const state=(ok,text)=>\`<div class="\${ok?'ok':'bad'}">\${ok?'✓':'✕'} \${esc(text)}</div>\`;let steps='';
     steps+=state(result.cloud?.ok, result.cloud?.ok?\`Google Cloud aceptó el mensaje · broker \${result.cloud.messageId}\`:\`Google Cloud: \${result.cloud?.error||'sin confirmación'}\`);
@@ -122,30 +167,51 @@ const page = String.raw`<!doctype html>
     const backendText=b.status==='processed'?'Backend procesó y registró el mensaje':b.status==='rejected'?\`Backend rechazó el mensaje\${b.error?': '+b.error:''}\`:b.status==='not_sent'?'Backend no lo pudo recibir: no se publicó en el emulador':'Copia enviada; backend todavía no confirma el procesamiento';
     steps+=\`<div class="\${backendClass}">\${b.status==='processed'?'✓':b.status==='rejected'?'✕':'…'} \${esc(backendText)}</div>\`;
     if(result.dispatch){steps+=\`<div class="ok">✓ Despacho #\${esc(result.dispatch.id)} creado · estado: \${esc(result.dispatch.status)} · zona: \${esc(result.dispatch.zoneName||'sin cobertura asignada')}</div>\`}
-    else if(b.status==='processed'){steps+='<div class="wait">El mensaje fue procesado. El despacho aparece cuando llega también el mensaje del otro formulario.</div>'}
+    else if(b.status==='processed'){steps+='<div class="wait">El backend procesó el mensaje; todavía no hay un despacho asociado a esta referencia.</div>'}
     if(result.messageId)steps+=\`<div class="small">ID del mensaje: \${esc(result.messageId)} · pedido: \${esc(result.salesOrderId)}</div>\`;
     if(result.error)steps+=\`<div class="bad">\${esc(result.error)}</div>\`;
     el.innerHTML=\`<h3>Resultado del envío</h3><div class="steps">\${steps}</div>\`;
   }
-  async function submit(form,event,source){event.preventDefault();if(!form.reportValidity())return;const button=form.querySelector('button[type="submit"]');const status=form.querySelector('.status');button.disabled=true;button.textContent='Enviando…';status.classList.add('show');status.innerHTML='<h3>Enviando y esperando confirmación del backend…</h3>';
-    const f=new FormData(form);const data={salesOrderId:idInput.value.trim()};
-    if(!data.salesOrderId){status.textContent='Ingresa el ID compartido del pedido.';button.disabled=false;return}
+  async function submit(form,event,source){event.preventDefault();if(!form.reportValidity())return;const button=form.querySelector('button[type="submit"]');const status=form.querySelector('.status');const originalText=button.textContent;button.disabled=true;button.textContent='Enviando…';status.classList.add('show');status.innerHTML='<h3>Enviando y esperando confirmación del backend…</h3>';
+    const f=new FormData(form);const data={};
+    if(source==='marketplace'||source==='inventory')data.salesOrderId=idInput.value.trim();
+    if(source==='procurement'){
+      data.purchaseOrderId=f.get('purchaseOrderId').trim();
+      const action=f.get('action');const lastVersion=currentProcurementVersion();
+      if(action!=='requested'&&lastVersion<1){status.textContent='Primero envía y procesa la solicitud inicial de esta orden de compra.';button.disabled=false;button.textContent=originalText;return}
+      if(action==='requested'&&lastVersion>0){status.textContent='Esta orden ya tiene mensajes enviados. Cambia el ID para iniciar otra orden de prueba.';button.disabled=false;button.textContent=originalText;return}
+      data.recordVersion=action==='requested'?1:lastVersion+1;
+    }
+    if((source==='marketplace'||source==='inventory')&&!data.salesOrderId){status.textContent='Ingresa el ID compartido del pedido.';button.disabled=false;button.textContent=originalText;return}
     if(source==='marketplace'){
       const now=new Date().toISOString();data.recordVersion=1;data.updatedAt=now;data.confirmedAt=now;
       data.recipient={name:f.get('name').trim(),phone:f.get('phone').trim()};if(f.get('email').trim())data.recipient.email=f.get('email').trim();
       data.deliveryAddress={line:f.get('address').trim()};if(f.get('reference').trim())data.deliveryAddress.reference=f.get('reference').trim();
       data.deliveryAddress.location={latitude:Number(f.get('latitude')),longitude:Number(f.get('longitude'))};data.priority=f.get('priority');
-    }else{
+    }else if(source==='inventory'){
       const now=new Date().toISOString();data.recordVersion=1;data.updatedAt=now;data.warehouseId=f.get('warehouseId').trim();data.availableFrom=new Date(f.get('availableFrom')).toISOString();
       data.packages=[{packageId:\`\${data.salesOrderId}-PKG-1\`,lengthCm:Number(f.get('lengthCm')),widthCm:Number(f.get('widthCm')),heightCm:Number(f.get('heightCm')),grossWeightKg:Number(f.get('grossWeightKg'))}];
       if(f.get('handlingCondition')!=='NONE')data.handlingConditions=[f.get('handlingCondition')];data.evidencePolicy='hand_delivery_standard';data.physicallyPacked=f.get('physicallyPacked')==='true';
+    }else{
+      const now=new Date().toISOString();const action=f.get('action');data.action=action;
+      if(action==='cancelled'){data.reason=f.get('reason').trim()}
+      else{
+        data.supplier={supplierId:f.get('supplierId').trim(),name:f.get('supplierName').trim()};
+        const contact={};if(f.get('contactName').trim())contact.name=f.get('contactName').trim();if(f.get('contactPhone').trim())contact.phone=f.get('contactPhone').trim();if(f.get('contactEmail').trim())contact.email=f.get('contactEmail').trim();if(Object.keys(contact).length)data.contact=contact;
+        data.pickupAddress={line:f.get('address').trim(),location:{latitude:Number(f.get('latitude')),longitude:Number(f.get('longitude'))}};if(f.get('reference').trim())data.pickupAddress.reference=f.get('reference').trim();
+        data.pickupWindow={startsAt:new Date(f.get('startsAt')).toISOString(),endsAt:new Date(f.get('endsAt')).toISOString()};data.warehouseId=f.get('warehouseId').trim();
+        data.products=[{productId:f.get('productId').trim(),quantity:Number(f.get('quantity'))}];if(f.get('productDescription').trim())data.products[0].description=f.get('productDescription').trim();
+        data.estimates={};if(f.get('packages'))data.estimates.packages=Number(f.get('packages'));if(f.get('weightKg'))data.estimates.weightKg=Number(f.get('weightKg'));if(f.get('volumeM3'))data.estimates.volumeM3=Number(f.get('volumeM3'));if(!Object.keys(data.estimates).length)delete data.estimates;
+        if(f.get('transportConditions').trim())data.transportConditions=[f.get('transportConditions').trim()];
+      }
     }
-    try{const response=await fetch('/api/publish',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({source,data})});const result=await response.json();show(status,result)}
+    try{const response=await fetch('/api/publish',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({source,data})});const result=await response.json();if(source==='procurement'&&result.cloud?.ok&&result.backend?.status==='processed')localStorage.setItem(versionKey(),String(data.recordVersion));show(status,result)}
     catch(error){status.innerHTML=\`<h3 class="bad">No se pudo contactar al publicador: \${esc(error.message)}</h3>\`}
-    finally{button.disabled=false;button.textContent=source==='marketplace'?'Enviar mensaje de Marketplace':'Enviar mensaje de Almacén'}
+    finally{button.disabled=false;button.textContent=source==='procurement'?(procurementForm.elements.action.value==='cancelled'?'Enviar cancelación de Compras':procurementForm.elements.action.value==='updated'?'Enviar actualización de Compras':'Enviar solicitud de Compras'):originalText}
   }
   document.querySelector('#marketplace').addEventListener('submit',e=>void submit(e.currentTarget,e,'marketplace'));
   document.querySelector('#inventory').addEventListener('submit',e=>void submit(e.currentTarget,e,'inventory'));
+  document.querySelector('#procurement').addEventListener('submit',e=>void submit(e.currentTarget,e,'procurement'));
 </script></body></html>`.replaceAll('\\${', '${').replaceAll('\\`', '`');
 
 function sendJson(response, status, payload) {
@@ -186,10 +252,13 @@ function numberInRange(value, name, min, max) {
 
 function buildEnvelope(source, rawData) {
     const definition = TYPES[source];
-    if (!definition) throw new Error('Selecciona Marketplace o Almacén.');
+    if (!definition) throw new Error('Selecciona Marketplace, Almacén o Compras.');
     if (!rawData || typeof rawData !== 'object' || Array.isArray(rawData)) throw new Error('Datos del mensaje inválidos.');
-    const salesOrderId = requiredText(rawData.salesOrderId, 'ID del pedido', 90);
+    const entityId = source === 'procurement'
+        ? requiredText(rawData.purchaseOrderId, 'ID de orden de compra', 90)
+        : requiredText(rawData.salesOrderId, 'ID del pedido', 90);
     const now = new Date().toISOString();
+    let type = definition.type;
     let data;
     if (source === 'marketplace') {
         const recipient = {
@@ -207,13 +276,13 @@ function buildEnvelope(source, rawData) {
             longitude: numberInRange(rawData.deliveryAddress?.location?.longitude, 'Longitud', -180, 180),
         };
         const priority = rawData.priority === 'urgent' ? 'urgent' : 'normal';
-        data = { salesOrderId, recordVersion: 1, updatedAt: now, confirmedAt: now, recipient, deliveryAddress: address, priority };
-    } else {
+        data = { salesOrderId: entityId, recordVersion: 1, updatedAt: now, confirmedAt: now, recipient, deliveryAddress: address, priority };
+    } else if (source === 'inventory') {
         if (!Array.isArray(rawData.packages) || rawData.packages.length !== 1) throw new Error('Ingresa un bulto de prueba.');
         const pkg = rawData.packages[0];
         const warehouseId = requiredText(rawData.warehouseId, 'ID de almacén', 100);
         const item = {
-            packageId: `${salesOrderId}-PKG-1`,
+            packageId: `${entityId}-PKG-1`,
             lengthCm: numberInRange(pkg.lengthCm, 'Largo', 0.1, 10_000),
             widthCm: numberInRange(pkg.widthCm, 'Ancho', 0.1, 10_000),
             heightCm: numberInRange(pkg.heightCm, 'Alto', 0.1, 10_000),
@@ -222,7 +291,7 @@ function buildEnvelope(source, rawData) {
         const availableFrom = rawData.availableFrom ? new Date(rawData.availableFrom) : new Date();
         if (Number.isNaN(availableFrom.getTime())) throw new Error('La fecha de disponibilidad no es válida.');
         data = {
-            salesOrderId, recordVersion: 1, updatedAt: now, warehouseId,
+            salesOrderId: entityId, recordVersion: 1, updatedAt: now, warehouseId,
             availableFrom: availableFrom.toISOString(), packages: [item],
             evidencePolicy: 'hand_delivery_standard',
             physicallyPacked: rawData.physicallyPacked === true,
@@ -230,11 +299,81 @@ function buildEnvelope(source, rawData) {
         if (Array.isArray(rawData.handlingConditions) && rawData.handlingConditions.length) {
             data.handlingConditions = rawData.handlingConditions;
         }
+    } else {
+        const action = rawData.action;
+        if (!['requested', 'updated', 'cancelled'].includes(action)) throw new Error('Selecciona solicitar, actualizar o cancelar.');
+        const recordVersion = numberInRange(rawData.recordVersion, 'Versión del mensaje', 1, 1_000_000);
+        if (!Number.isInteger(recordVersion) || (action === 'requested' && recordVersion !== 1)) throw new Error('La versión de la solicitud no es válida.');
+        if (action === 'cancelled') {
+            type = 'procurement.pickup.cancelled';
+            data = { purchaseOrderId: entityId, recordVersion, updatedAt: now, cancelledAt: now };
+            if (rawData.reason) data.reason = requiredText(rawData.reason, 'Motivo de cancelación', 300);
+        } else {
+            type = action === 'requested' ? 'procurement.pickup.requested' : 'procurement.pickup.updated';
+            const supplier = {
+                supplierId: requiredText(rawData.supplier?.supplierId, 'ID del proveedor', 100),
+                name: requiredText(rawData.supplier?.name, 'Nombre del proveedor', 150),
+            };
+            const contact = rawData.contact;
+            const pickupAddress = {
+                line: requiredText(rawData.pickupAddress?.line, 'Dirección del proveedor', 500),
+                location: {
+                    latitude: numberInRange(rawData.pickupAddress?.location?.latitude, 'Latitud', -90, 90),
+                    longitude: numberInRange(rawData.pickupAddress?.location?.longitude, 'Longitud', -180, 180),
+                },
+            };
+            if (rawData.pickupAddress?.reference) pickupAddress.reference = requiredText(rawData.pickupAddress.reference, 'Referencia', 500);
+            const pickupWindow = {
+                startsAt: validDateTime(rawData.pickupWindow?.startsAt, 'Inicio del recojo'),
+                endsAt: validDateTime(rawData.pickupWindow?.endsAt, 'Fin del recojo'),
+            };
+            if (Date.parse(pickupWindow.startsAt) <= Date.now()) throw new Error('El inicio del recojo debe estar en el futuro.');
+            if (Date.parse(pickupWindow.endsAt) <= Date.parse(pickupWindow.startsAt)) throw new Error('El fin del recojo debe ser posterior al inicio.');
+            if (!Array.isArray(rawData.products) || rawData.products.length !== 1) throw new Error('Ingresa un producto de prueba.');
+            const product = rawData.products[0];
+            const products = [{
+                productId: requiredText(product.productId, 'ID del producto', 100),
+                quantity: numberInRange(product.quantity, 'Cantidad', 1, 1_000_000),
+            }];
+            if (!Number.isInteger(products[0].quantity)) throw new Error('La cantidad debe ser un número entero.');
+            if (product.description) products[0].description = requiredText(product.description, 'Descripción del producto', 300);
+            data = {
+                purchaseOrderId: entityId, recordVersion, updatedAt: now, supplier, pickupAddress, pickupWindow,
+                warehouseId: requiredText(rawData.warehouseId, 'ID del almacén destino', 100), products,
+            };
+            if (action === 'requested') data.approvedAt = now;
+            if (contact && (contact.name || contact.phone || contact.email)) {
+                data.contact = {
+                    name: requiredText(contact.name, 'Nombre del contacto', 150),
+                    phone: requiredText(contact.phone, 'Teléfono del contacto', 30),
+                };
+                if (contact.email) {
+                    data.contact.email = requiredText(contact.email, 'Correo del contacto', 150);
+                    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.contact.email)) throw new Error('El correo del contacto no es válido.');
+                }
+            }
+            if (rawData.estimates) {
+                data.estimates = {};
+                if (rawData.estimates.packages !== undefined) data.estimates.packages = numberInRange(rawData.estimates.packages, 'Bultos estimados', 1, 1_000_000);
+                if (rawData.estimates.weightKg !== undefined) data.estimates.weightKg = numberInRange(rawData.estimates.weightKg, 'Peso estimado', 0.01, 100_000);
+                if (rawData.estimates.volumeM3 !== undefined) data.estimates.volumeM3 = numberInRange(rawData.estimates.volumeM3, 'Volumen estimado', 0.001, 1_000_000);
+                if (!Object.keys(data.estimates).length) delete data.estimates;
+            }
+            if (Array.isArray(rawData.transportConditions) && rawData.transportConditions.length) {
+                data.transportConditions = [...new Set(rawData.transportConditions.map((condition) => requiredText(condition, 'Condición de transporte', 100)))];
+            }
+        }
     }
-    return { messageId: uuidv7(), type: definition.type, schemaVersion: 1, source: definition.source, occurredAt: now, data };
+    return { messageId: uuidv7(), type, schemaVersion: 1, source: definition.source, occurredAt: now, data };
 }
 
-async function findBackendReceipt(messageId, salesOrderId) {
+function validDateTime(value, name) {
+    const date = new Date(value);
+    if (!value || Number.isNaN(date.getTime())) throw new Error(`${name} no es una fecha válida.`);
+    return date.toISOString();
+}
+
+async function findBackendReceipt(messageId, referenceId) {
     const [receiptResult, dispatchResult] = await Promise.all([
         db.query('SELECT status, type, error_detail FROM inbound_messages WHERE message_id = $1', [messageId]),
         db.query(
@@ -244,7 +383,7 @@ async function findBackendReceipt(messageId, salesOrderId) {
                LEFT JOIN delivery_zones z ON z.delivery_zone_id = d.delivery_zone_id
               WHERE d.source_order_ref = $1
               ORDER BY d.dispatch_id DESC LIMIT 1`,
-            [salesOrderId],
+            [referenceId],
         ),
     ]);
     const receipt = receiptResult.rows[0];
@@ -258,12 +397,12 @@ async function findBackendReceipt(messageId, salesOrderId) {
     };
 }
 
-async function waitForBackend(messageId, salesOrderId) {
+async function waitForBackend(messageId, referenceId) {
     const deadline = Date.now() + 25_000;
-    let state = await findBackendReceipt(messageId, salesOrderId);
+    let state = await findBackendReceipt(messageId, referenceId);
     while (state.backend.status === 'pending' && Date.now() < deadline) {
         await delay(500);
-        state = await findBackendReceipt(messageId, salesOrderId);
+        state = await findBackendReceipt(messageId, referenceId);
     }
     return state;
 }
@@ -295,7 +434,8 @@ const server = createServer(async (request, response) => {
 
     const result = {
         messageId: envelope.messageId,
-        salesOrderId: envelope.data.salesOrderId,
+        salesOrderId: envelope.data.salesOrderId ?? envelope.data.purchaseOrderId,
+        recordVersion: envelope.data.recordVersion,
         cloud: { ok: false },
         local: { ok: false, topic: envelope.type },
         backend: { status: 'not_sent' },
@@ -321,7 +461,7 @@ const server = createServer(async (request, response) => {
     }
 
     try {
-        const state = await waitForBackend(envelope.messageId, envelope.data.salesOrderId);
+        const state = await waitForBackend(envelope.messageId, envelope.data.salesOrderId ?? envelope.data.purchaseOrderId);
         result.backend = state.backend;
         result.dispatch = state.dispatch;
         sendJson(response, state.backend.status === 'rejected' ? 422 : 200, result);

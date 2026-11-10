@@ -109,7 +109,8 @@ export function reoptimizeCutoff(input: CutoffInput): CutoffPlan {
 
     const groups = new Map<string, CutoffBatch[]>();
     for (const batch of input.batches) {
-        const key = `${batch.shiftDate}|${batch.zoneId}|${batch.warehouseId}`;
+        const supplierDispatchId = batch.stops.find((stop) => stop.dispatch.dispatchType === 'supplier_pickup')?.dispatch.dispatchId;
+        const key = `${batch.shiftDate}|${batch.zoneId}|${batch.warehouseId}${supplierDispatchId === undefined ? '' : `|supplier:${supplierDispatchId}`}`;
         groups.set(key, [...(groups.get(key) ?? []), batch]);
     }
 

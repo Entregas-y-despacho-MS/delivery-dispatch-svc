@@ -17,6 +17,7 @@ interface VehicleRow extends VehicleCapacity {
 interface DispatchPackageRow {
   dispatch_id: number;
   estimated_weight_kg: string | null;
+  estimated_volume_m3: string | null;
   package_id: number | null;
   length_cm: string | null;
   width_cm: string | null;
@@ -57,7 +58,7 @@ export class RouteCapacityService {
     if (!vehicle) throw new VehicleNotFoundException();
 
     const rows: DispatchPackageRow[] = await executor.query(
-      `SELECT d.dispatch_id, d.estimated_weight_kg, p.dispatch_package_id AS package_id,
+      `SELECT d.dispatch_id, d.estimated_weight_kg, d.estimated_volume_m3, p.dispatch_package_id AS package_id,
                     p.length_cm, p.width_cm, p.height_cm, p.gross_weight_kg
                FROM dispatches d
           LEFT JOIN dispatch_packages p ON p.dispatch_id = d.dispatch_id
@@ -95,6 +96,7 @@ function groupDispatches(rows: DispatchPackageRow[]): RouteCapacityDispatch[] {
       dispatch = {
         dispatchId: row.dispatch_id,
         estimatedWeightKg: numberOrNull(row.estimated_weight_kg),
+        estimatedVolumeM3: numberOrNull(row.estimated_volume_m3),
         packages: [],
       };
       dispatches.set(row.dispatch_id, dispatch);

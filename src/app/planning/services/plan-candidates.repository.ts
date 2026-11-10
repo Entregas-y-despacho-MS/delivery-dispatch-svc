@@ -14,6 +14,8 @@ import type {
 
 interface CandidateRow {
     dispatch_id: number;
+    dispatch_type: string;
+    preferred_vehicle_id: number | null;
     delivery_zone_id: number;
     zone_code: string;
     zone_name: string;
@@ -24,13 +26,14 @@ interface CandidateRow {
     delivery_longitude: string;
     priority: string;
     confirmed_at: Date;
-    status: 'pending' | 'rescheduled' | 'pickup_scheduled';
+    status: 'pending' | 'rescheduled' | 'pickup_scheduled' | 'scheduled';
     estimated_weight_kg: string | null;
+    estimated_volume_m3: string | null;
     scheduled_window_start: Date | null;
     scheduled_window_end: Date | null;
     reschedule_window_start: Date | null;
     reschedule_window_end: Date | null;
-    /** `pickup_scheduled` only: the day the customer asked for, `YYYY-MM-DD`; `null` when it took none. */
+    /** Pinned service date: customer pickup preference or supplier's agreed appointment. */
     preferred_pickup_date: string | null;
 }
 
@@ -45,6 +48,7 @@ interface OpenStopRow {
     origin_warehouse_id: number;
     vehicle_id: number;
     dispatch_id: number;
+    dispatch_type: string;
     sequence_order: number | null;
     status: string;
     priority: string;
@@ -52,6 +56,7 @@ interface OpenStopRow {
     delivery_latitude: string | null;
     delivery_longitude: string | null;
     estimated_weight_kg: string | null;
+    estimated_volume_m3: string | null;
     scheduled_window_start: Date | null;
     scheduled_window_end: Date | null;
     promise_notified_at: Date | null;
@@ -72,8 +77,8 @@ export class PlanCandidatesRepository {
     constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
     /**
-     * Orders the generator may plan: deliveries `pending` or `rescheduled` without a batch, and
-     * customer pickups `pickup_scheduled` without one yet — both ready to ship, with a
+     * Orders the generator may plan: deliveries `pending` or `rescheduled` without a batch, customer
+     * pickups `pickup_scheduled`, and individually scheduled supplier pickups without a batch — with a
      * point on the map, a zone and a warehouse (a delivery's origin, a pickup's destination — the
      * hub the vehicle starts and ends at either way). Orders a coordinator is editing (active soft
      * reservation, ST-48.2) are left alone, and `address_review` is out by status (D-19).
@@ -81,16 +86,19 @@ export class PlanCandidatesRepository {
      */
     async findCandidates(): Promise<PlanDispatch[]> {
         const rows: CandidateRow[] = await this.dataSource.query(
-            `SELECT d.dispatch_id, d.delivery_zone_id, z.code AS zone_code, z.name AS zone_name,
+            `SELECT d.dispatch_id, t.name AS dispatch_type, pickup_vehicle.vehicle_id AS preferred_vehicle_id,
+                    d.delivery_zone_id, z.code AS zone_code, z.name AS zone_name,
                     (z.deleted_at IS NOT NULL) AS zone_deleted,
                     COALESCE(d.origin_warehouse_id, d.destination_warehouse_id) AS warehouse_id,
                     d.delivery_latitude, d.delivery_longitude, d.priority,
                     COALESCE(d.order_confirmed_at, d.created_at) AS confirmed_at,
-                    s.name AS status, d.estimated_weight_kg,
+                    s.name AS status, d.estimated_weight_kg, d.estimated_volume_m3,
                     d.scheduled_window_start, d.scheduled_window_end,
                     lr.new_window_start AS reschedule_window_start, lr.new_window_end AS reschedule_window_end,
                     CASE WHEN t.name = 'warehouse_return_pickup'
                          THEN to_char(d.preferred_pickup_date AT TIME ZONE 'America/La_Paz', 'YYYY-MM-DD')
+                         WHEN t.name = 'supplier_pickup' AND s.name = 'scheduled'
+                         THEN to_char(d.scheduled_window_start AT TIME ZONE 'America/La_Paz', 'YYYY-MM-DD')
                          ELSE NULL END AS preferred_pickup_date
                FROM dispatches d
                JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
@@ -105,9 +113,18 @@ export class PlanCandidatesRepository {
                      ORDER BY r.created_at DESC, r.dispatch_reschedule_id DESC
                      LIMIT 1
                     ) lr ON TRUE
+          LEFT JOIN LATERAL (
+                    SELECT NULLIF(e.metadata->>'vehicleId', '')::int AS vehicle_id
+                      FROM dispatch_events e
+                     WHERE e.dispatch_id = d.dispatch_id AND e.event_type = 'pickup_scheduled'
+                     ORDER BY e.created_at DESC, e.dispatch_event_id DESC
+                     LIMIT 1
+                    ) pickup_vehicle ON t.name = 'supplier_pickup'
               WHERE (
                         (t.name = 'delivery' AND (s.name = 'pending' OR (s.name = 'rescheduled' AND d.route_batch_id IS NULL)))
                         OR (t.name = 'warehouse_return_pickup' AND s.name = 'pickup_scheduled' AND d.route_batch_id IS NULL)
+                        OR (t.name = 'supplier_pickup' AND s.name = 'scheduled' AND d.route_batch_id IS NULL
+                            AND d.scheduled_window_start IS NOT NULL AND d.scheduled_window_end IS NOT NULL)
                     )
                 AND d.shipment_ready = TRUE
                 AND d.delivery_latitude IS NOT NULL AND d.delivery_longitude IS NOT NULL
@@ -125,6 +142,8 @@ export class PlanCandidatesRepository {
 
         return rows.map((row) => ({
             dispatchId: row.dispatch_id,
+            dispatchType: row.dispatch_type,
+            preferredVehicleId: row.preferred_vehicle_id,
             zoneId: row.delivery_zone_id,
             zoneCode: row.zone_code,
             zoneName: row.zone_name,
@@ -140,13 +159,14 @@ export class PlanCandidatesRepository {
                 : row.preferred_pickup_date,
             // The window agreed with the customer (the reschedule's, else the one the order has). A
             // pickup has none to keep: its window, like a plain pending delivery's, is computed fresh.
-            agreedWindow: row.status === 'rescheduled'
+            agreedWindow: row.dispatch_type === 'supplier_pickup' || row.status === 'rescheduled'
                 ? agreedWindow(
-                    row.reschedule_window_start ?? row.scheduled_window_start,
-                    row.reschedule_window_start ? row.reschedule_window_end : row.scheduled_window_end,
+                    row.dispatch_type === 'supplier_pickup' ? row.scheduled_window_start : row.reschedule_window_start ?? row.scheduled_window_start,
+                    row.dispatch_type === 'supplier_pickup' || !row.reschedule_window_start ? row.scheduled_window_end : row.reschedule_window_end,
                 )
                 : null,
             estimatedWeightKg: row.estimated_weight_kg === null ? null : Number(row.estimated_weight_kg),
+            estimatedVolumeM3: row.estimated_volume_m3 === null ? null : Number(row.estimated_volume_m3),
             packages: packagesByDispatch.get(row.dispatch_id) ?? [],
         }));
     }
@@ -166,14 +186,15 @@ export class PlanCandidatesRepository {
             `SELECT b.route_batch_id, b.version, b.shift_date::text AS shift_date, b.delivery_zone_id,
                     z.code AS zone_code, z.name AS zone_name, (z.deleted_at IS NOT NULL) AS zone_deleted,
                     b.origin_warehouse_id, b.vehicle_id,
-                    d.dispatch_id, d.sequence_order, s.name AS status, d.priority,
+                    d.dispatch_id, t.name AS dispatch_type, d.sequence_order, s.name AS status, d.priority,
                     COALESCE(d.order_confirmed_at, d.created_at) AS confirmed_at,
-                    d.delivery_latitude, d.delivery_longitude, d.estimated_weight_kg,
+                    d.delivery_latitude, d.delivery_longitude, d.estimated_weight_kg, d.estimated_volume_m3,
                     d.scheduled_window_start, d.scheduled_window_end, d.promise_notified_at
                FROM route_batches b
                JOIN delivery_zones z ON z.delivery_zone_id = b.delivery_zone_id
                JOIN dispatches d ON d.route_batch_id = b.route_batch_id
                JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
+               JOIN dispatch_types t ON t.dispatch_type_id = d.dispatch_type_id
               WHERE b.status = 'provisional' AND b.shift_date >= $1::date
                 AND b.vehicle_id IS NOT NULL AND b.origin_warehouse_id IS NOT NULL${narrowing}
               ORDER BY b.route_batch_id, d.sequence_order, d.dispatch_id`,
@@ -208,6 +229,7 @@ export class PlanCandidatesRepository {
             const stop: OpenBatchStop = {
                 dispatch: {
                     dispatchId: row.dispatch_id,
+                    dispatchType: row.dispatch_type,
                     zoneId: row.delivery_zone_id,
                     zoneCode: row.zone_code,
                     zoneName: row.zone_name,
@@ -221,6 +243,7 @@ export class PlanCandidatesRepository {
                     fixedDate: null,
                     agreedWindow: null,
                     estimatedWeightKg: row.estimated_weight_kg === null ? null : Number(row.estimated_weight_kg),
+                    estimatedVolumeM3: row.estimated_volume_m3 === null ? null : Number(row.estimated_volume_m3),
                     packages: packagesByDispatch.get(row.dispatch_id) ?? [],
                 },
                 sequence: row.sequence_order,
@@ -247,14 +270,15 @@ export class PlanCandidatesRepository {
             route_batch_id: number | null;
             shift_date: string | null;
         })[] = await this.dataSource.query(
-            `SELECT d.dispatch_id, d.delivery_zone_id, z.code AS zone_code, z.name AS zone_name,
+            `SELECT d.dispatch_id, t.name AS dispatch_type, NULL::int AS preferred_vehicle_id, d.delivery_zone_id, z.code AS zone_code, z.name AS zone_name,
                     (z.deleted_at IS NOT NULL) AS zone_deleted, d.origin_warehouse_id AS warehouse_id,
                     d.delivery_latitude, d.delivery_longitude, d.priority,
                     COALESCE(d.order_confirmed_at, d.created_at) AS confirmed_at,
-                    s.name AS status, d.estimated_weight_kg, d.scheduled_window_start, d.scheduled_window_end,
+                    s.name AS status, d.estimated_weight_kg, d.estimated_volume_m3, d.scheduled_window_start, d.scheduled_window_end,
                     d.route_batch_id, to_char(b.shift_date, 'YYYY-MM-DD') AS shift_date
                FROM dispatches d
                JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
+               JOIN dispatch_types t ON t.dispatch_type_id = d.dispatch_type_id
                JOIN delivery_zones z ON z.delivery_zone_id = d.delivery_zone_id
           LEFT JOIN route_batches b ON b.route_batch_id = d.route_batch_id
               WHERE d.dispatch_id = $1
@@ -270,6 +294,8 @@ export class PlanCandidatesRepository {
             shiftDate: row.shift_date,
             dispatch: {
                 dispatchId: row.dispatch_id,
+                dispatchType: row.dispatch_type,
+                preferredVehicleId: row.preferred_vehicle_id,
                 zoneId: row.delivery_zone_id,
                 zoneCode: row.zone_code,
                 zoneName: row.zone_name,
@@ -283,6 +309,7 @@ export class PlanCandidatesRepository {
                 fixedDate: null,
                 agreedWindow: null,
                 estimatedWeightKg: row.estimated_weight_kg === null ? null : Number(row.estimated_weight_kg),
+                estimatedVolumeM3: row.estimated_volume_m3 === null ? null : Number(row.estimated_volume_m3),
                 packages: packages.get(dispatchId) ?? [],
             },
         };
