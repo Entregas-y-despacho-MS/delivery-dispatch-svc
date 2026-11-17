@@ -103,7 +103,7 @@ describe('DispatchCancelService', () => {
     describe('recojo de cliente (warehouse_return_pickup)', () => {
         const pickup = { type: 'warehouse_return_pickup' };
 
-        it.each(['pickup_scheduled', 'address_review'])('%s sin lote: se cancela sin publicar al ERP y sin tocar ningún lote', async (status) => {
+        it.each(['pickup_scheduled'])('%s sin lote: se cancela sin publicar al ERP y sin tocar ningún lote', async (status) => {
             const { service, publication, batchExit, closing, events, dispatchEvents } = build({ status, type: pickup.type });
 
             const result = await service.cancel(5, dto, 7, pickup, NOW);
@@ -128,13 +128,13 @@ describe('DispatchCancelService', () => {
             expect(closing.closeIfComplete).not.toHaveBeenCalled();
         });
 
-        it.each(['pending', 'scheduled', 'assigned', 'in_transit', 'picked_up_in_transit', 'delivered', 'cancelled'])('%s → DISPATCH_CANCEL_NOT_ALLOWED sin escribir nada', async (status) => {
+        it.each(['address_review', 'pending', 'scheduled', 'assigned', 'in_transit', 'picked_up_in_transit', 'delivered', 'cancelled'])('%s → DISPATCH_CANCEL_NOT_ALLOWED sin escribir nada', async (status) => {
             const { service, publication, manager } = build({ status, type: pickup.type });
 
             const error = await service.cancel(5, dto, 7, pickup, NOW).catch((e: unknown) => e);
 
             expect(error).toBeInstanceOf(DispatchCancelNotAllowedException);
-            expect((error as DispatchCancelNotAllowedException).message).toContain('pickup_scheduled, address_review or in_planning');
+            expect((error as DispatchCancelNotAllowedException).message).toContain('pickup_scheduled or in_planning');
             expect(publication.publish).not.toHaveBeenCalled();
             expect(manager.query).not.toHaveBeenCalled();
         });

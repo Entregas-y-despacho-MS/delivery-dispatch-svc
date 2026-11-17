@@ -19,6 +19,10 @@ export class IncidentReasonDto {
     requiresEvidence!: boolean;
 
     @DtoField()
+    @ApiProperty({ enum: ['low', 'high'], description: 'Criticality of incidents reported with this reason' })
+    criticality!: 'low' | 'high';
+
+    @DtoField()
     @ApiProperty({ example: true, description: 'false = disabled: cannot be assigned to new incidents. Incidents already logged with it are not affected' })
     active!: boolean;
 

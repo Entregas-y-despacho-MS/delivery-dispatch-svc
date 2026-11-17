@@ -36,6 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Keep the opt-in manual publisher available for `docker compose run` without exposing it as an API.
 COPY --from=builder /app/scripts/pubsub/publish-grupo-h-and-simulate.mjs ./scripts/pubsub/
+COPY --from=builder /app/scripts/pubsub/erp-publisher-ui.mjs ./scripts/pubsub/
 
 RUN groupadd -r nestjs && useradd -rm -g nestjs nestjs
 RUN chown -R nestjs:nestjs /app

@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { SlaGroupBy } from '../domain/sla-group-by.js';
 
 export class SlaMetricsDto {
@@ -28,11 +28,20 @@ export class SlaMetricsDto {
 }
 
 export class SlaReportRowDto extends SlaMetricsDto {
-    @ApiProperty({ type: 'integer', nullable: true, minimum: 1, example: 3, description: 'ID of the zone, service level or driver (user) of the group. null for the dispatches that have none' })
+    @ApiProperty({ type: 'integer', nullable: true, minimum: 1, example: 3, description: 'ID of the zone, service level or driver; null in the combined zone/service view' })
     groupId!: number | null;
+
+    @ApiPropertyOptional({ type: String, description: 'Stable key for one zone/service pair' })
+    groupKey?: string;
 
     @ApiProperty({ type: String, nullable: true, example: 'Zona Sur', description: 'Name of the zone, service level or driver of the group. null for the dispatches that have none: the screen labels it' })
     groupName!: string | null;
+
+    @ApiPropertyOptional({ type: String, description: 'Zone name for the combined zone/service view' })
+    zoneName?: string;
+
+    @ApiPropertyOptional({ type: String, description: 'Service-level name for the combined zone/service view' })
+    serviceLevelName?: string;
 }
 
 export class SlaReportDto {
@@ -42,7 +51,7 @@ export class SlaReportDto {
     @ApiProperty({ type: String, format: 'date', example: '2026-10-31', description: 'Last Bolivia day of the range, inclusive (YYYY-MM-DD)' })
     to!: string;
 
-    @ApiProperty({ enum: [SlaGroupBy.ZONE, SlaGroupBy.SERVICE_LEVEL, SlaGroupBy.DRIVER], example: 'zone', description: 'Grouping of `rows`' })
+    @ApiProperty({ enum: [SlaGroupBy.ZONE, SlaGroupBy.SERVICE_LEVEL, SlaGroupBy.ZONE_SERVICE, SlaGroupBy.DRIVER], example: 'zone', description: 'Grouping of `rows`' })
     groupBy!: SlaGroupBy;
 
     @ApiProperty({ type: SlaMetricsDto, description: 'The figures of all the rows together, computed from their real sums (not an average of the group averages). With `service_level` the levels that are no longer active are not in the rows, so they are not in the totals either' })

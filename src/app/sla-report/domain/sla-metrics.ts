@@ -8,6 +8,9 @@ import type { SlaGroupBy } from './sla-group-by.js';
 export interface SlaGroupSums {
     groupId: number | null;
     groupName: string | null;
+    groupKey?: string;
+    zoneName?: string;
+    serviceLevelName?: string;
     closedCount: number;
     deliveredCount: number;
     onTimeCount: number;
@@ -73,7 +76,7 @@ function compareRows(a: SlaReportRowDto, b: SlaReportRowDto): number {
 
 export function buildSlaReport(from: string, to: string, groupBy: SlaGroupBy, groups: readonly SlaGroupSums[]): SlaReportDto {
     const rows = groups
-        .map((group): SlaReportRowDto => ({ groupId: group.groupId, groupName: group.groupName, ...toMetrics(group) }))
+        .map((group): SlaReportRowDto => ({ groupId: group.groupId, groupName: group.groupName, ...(group.groupKey !== undefined ? { groupKey: group.groupKey } : {}), ...(group.zoneName !== undefined ? { zoneName: group.zoneName } : {}), ...(group.serviceLevelName !== undefined ? { serviceLevelName: group.serviceLevelName } : {}), ...toMetrics(group) }))
         .sort(compareRows);
     return { from, to, groupBy, totals: toMetrics(sumGroups(groups)), rows };
 }
@@ -102,7 +105,10 @@ function isRow(value: unknown): value is SlaReportRowDto {
     if (!isMetrics(value)) return false;
     const row = value as unknown as Record<string, unknown>;
     return (row.groupId === null || (typeof row.groupId === 'number' && Number.isInteger(row.groupId) && row.groupId >= 1))
-        && (row.groupName === null || typeof row.groupName === 'string');
+        && (row.groupName === null || typeof row.groupName === 'string')
+        && (row.groupKey === undefined || typeof row.groupKey === 'string')
+        && (row.zoneName === undefined || typeof row.zoneName === 'string')
+        && (row.serviceLevelName === undefined || typeof row.serviceLevelName === 'string');
 }
 
 /**

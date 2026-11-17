@@ -6,7 +6,7 @@
  *   start_k    = max(arrival_k, slot start)                 (waits if it arrives early)
  *   feasible_k ⇔ arrival_k ≤ slot end                       ("arrival plus margin does not pass the slot")
  *   departure_k = start_k + stop_service_minutes
- *   route ok   ⇔ every stop feasible ∧ last departure ≤ afternoon_window_end   (the way back is not counted)
+ *   route ok   ⇔ every stop feasible ∧ route end (and, when requested, return to depot) ≤ route_end
  *
  * The route leaves the depot at `routeStartMinute` (morning_window_start). A stop that was already
  * notified to the customer has a fixed window that never moves (D-10); any other stop takes the first
@@ -31,6 +31,10 @@ export interface SimParams {
     serviceMinutes: number;
     marginPct: number;
     travelSeconds: TravelSeconds;
+    /** Supplier pickup routes must return to the receiving warehouse before it closes. */
+    returnToDepot?: boolean;
+    /** Driving seconds from a stop back to the depot, present only for pickup-route matrices. */
+    returnToDepotSeconds?: (from: number) => number | null;
 }
 
 export interface SimStopResult {
@@ -48,7 +52,7 @@ export type SimFailure = 'no_route' | 'late_for_window' | 'no_slot' | 'route_too
 export interface SimResult {
     feasible: boolean;
     stops: SimStopResult[];
-    /** Minute the last stop is left, or the start when there are no stops. */
+    /** Minute the last stop is left, or the return to depot completes when requested. */
     endMinute: number;
     failedStopId: number | null;
     failure: SimFailure | null;
@@ -85,6 +89,12 @@ export function simulateRoute(stops: SimStop[], params: SimParams): SimResult {
             window,
             fixed: stop.fixedWindow !== null,
         });
+    }
+
+    if (params.returnToDepot && previous !== null) {
+        const seconds = params.returnToDepotSeconds?.(previous) ?? null;
+        if (seconds === null) return fail(results, clock, previous, 'no_route');
+        clock += (seconds / 60) * (1 + params.marginPct / 100);
     }
 
     if (clock > params.routeEndMinute) {

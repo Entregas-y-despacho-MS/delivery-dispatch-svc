@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsNotEmpty, IsString, Matches, MaxLength } from 'class-validator';
+import { IsBoolean, IsIn, IsNotEmpty, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 import { INCIDENT_REASON_CODE_PATTERN } from './incident-reason-code.js';
 
 // The code is looked up by exact value (unique index), so it is normalized the same way a plate is
@@ -27,4 +27,9 @@ export class CreateIncidentReasonDto {
     @ApiProperty({ example: true, description: 'Whether logging an incident with this reason requires a photo of evidence. Required — the coordinator must decide it explicitly for every reason' })
     @IsBoolean({ message: 'Requires evidence must be true or false.' })
     requiresEvidence: boolean;
+
+    @ApiProperty({ enum: ['low', 'high'], default: 'low', description: 'Criticality of incidents reported with this reason; only high-criticality reasons raise an ES-66 critical alert' })
+    @IsOptional()
+    @IsIn(['low', 'high'])
+    criticality?: 'low' | 'high';
 }

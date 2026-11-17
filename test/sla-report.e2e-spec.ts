@@ -275,8 +275,8 @@ describe('GET /reports/sla (e2e, ST-54.2)', () => {
         it.each([
             ['a missing `from`', { to: '2031-03-31', groupBy: 'zone' }, "The 'from' parameter must be a valid date in YYYY-MM-DD format."],
             ['a missing `to`', { from: '2031-03-01', groupBy: 'zone' }, "The 'to' parameter must be a valid date in YYYY-MM-DD format."],
-            ['a missing `groupBy`', { from: '2031-03-01', to: '2031-03-31' }, "The 'groupBy' parameter must be one of: zone, service_level, driver."],
-            ['a `groupBy` outside the list', { from: '2031-03-01', to: '2031-03-31', groupBy: 'vehicle' }, "The 'groupBy' parameter must be one of: zone, service_level, driver."],
+            ['a missing `groupBy`', { from: '2031-03-01', to: '2031-03-31' }, "The 'groupBy' parameter must be one of: zone, service_level, zone_service, driver."],
+            ['a `groupBy` outside the list', { from: '2031-03-01', to: '2031-03-31', groupBy: 'vehicle' }, "The 'groupBy' parameter must be one of: zone, service_level, zone_service, driver."],
             ['a date that is not YYYY-MM-DD', { from: '01/03/2031', to: '2031-03-31', groupBy: 'zone' }, "The 'from' parameter must be a valid date in YYYY-MM-DD format."],
             ['a date that does not exist', { from: '2031-03-01', to: '2031-02-30', groupBy: 'zone' }, "The 'to' parameter must be a valid date in YYYY-MM-DD format."],
         ])('rejects %s with 400', async (_name, query, message) => {

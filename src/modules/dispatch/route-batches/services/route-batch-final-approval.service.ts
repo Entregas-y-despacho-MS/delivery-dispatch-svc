@@ -108,12 +108,13 @@ export class RouteBatchFinalApprovalService {
       throw new RouteBatchApprovalConflictException('ROUTE_BATCH_HAS_NO_APPROVALS', `Route batch ${routeBatchId} has no dispatches to assign.`);
     }
 
-    // A delivery must be `scheduled` (the first approval's promise); a customer pickup, still
-    // `pickup_scheduled` — the generator never moves it out of that status, and it has no promise step.
+    // A delivery is `scheduled` after promise approval. Customer pickups and supplier appointments
+    // keep their own scheduled state; neither goes through the delivery-promise flow.
     const notReady = dispatches.filter((dispatch) =>
       !(
         (dispatch.type === 'delivery' && dispatch.status === DispatchStatusEnum.SCHEDULED) ||
-        (dispatch.type === 'warehouse_return_pickup' && dispatch.status === DispatchStatusEnum.PICKUP_SCHEDULED)
+        (dispatch.type === 'warehouse_return_pickup' && dispatch.status === DispatchStatusEnum.PICKUP_SCHEDULED) ||
+        (dispatch.type === 'supplier_pickup' && dispatch.status === DispatchStatusEnum.SCHEDULED)
       ) ||
       !dispatch.delivery_address?.trim() ||
       dispatch.delivery_latitude === null || dispatch.delivery_longitude === null ||
@@ -123,7 +124,7 @@ export class RouteBatchFinalApprovalService {
     if (notReady.length > 0) {
       throw new RouteBatchApprovalConflictException(
         'DISPATCH_NOT_READY_FOR_FINAL_APPROVAL',
-        `Dispatches ${notReady.map(({ id }) => id).join(', ')} must be a scheduled delivery order or a pickup_scheduled customer pickup, with a complete destination and an unchanged, valid promise window.`,
+        `Dispatches ${notReady.map(({ id }) => id).join(', ')} must be a scheduled delivery, scheduled supplier pickup or pickup_scheduled customer pickup, with a complete destination and a valid time window.`,
       );
     }
 

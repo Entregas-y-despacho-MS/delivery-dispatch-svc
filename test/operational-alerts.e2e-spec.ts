@@ -138,7 +138,7 @@ describe('Alertas operativas (e2e, ST-66.2, RF-A19)', () => {
 
         reasonCode = `${tag}-ACCIDENT`;
         const [{ incident_reason_id: reasonId }] = await db.query(
-            `INSERT INTO incident_reasons (code, name, requires_evidence, counts_as_attempt, active) VALUES ($1,$2,false,false,true) RETURNING incident_reason_id`,
+            `INSERT INTO incident_reasons (code, name, requires_evidence, counts_as_attempt, active, criticality) VALUES ($1,$2,false,false,true,'high') RETURNING incident_reason_id`,
             [reasonCode, `Accidente ${tag}`],
         );
         reasonIds.push(reasonId);

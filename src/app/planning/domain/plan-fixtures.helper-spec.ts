@@ -47,6 +47,7 @@ export function dispatch(id: number, overrides: Partial<PlanDispatch> & { km?: n
     const zoneId = rest.zoneId ?? 1;
     return {
         dispatchId: id,
+        dispatchType: 'delivery',
         zoneId,
         zoneCode: `ZON-${zoneId}`,
         zoneName: `Zona ${zoneId}`,

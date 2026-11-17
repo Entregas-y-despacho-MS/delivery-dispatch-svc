@@ -8,6 +8,7 @@ export function toCapacityDispatch(dispatch: PlanDispatch): RouteCapacityDispatc
     return {
         dispatchId: dispatch.dispatchId,
         estimatedWeightKg: dispatch.estimatedWeightKg,
+        estimatedVolumeM3: dispatch.estimatedVolumeM3,
         packages: dispatch.packages,
     };
 }

@@ -260,7 +260,7 @@ describe('WarehouseReceiptIntakeService.apply', () => {
             .mockResolvedValueOnce([])
             .mockResolvedValueOnce([])
             .mockResolvedValueOnce([[{ version: 4, updated_at: UPDATED_AT }], 1]) // UPDATE dispatches
-            .mockResolvedValueOnce([{ incident_reason_id: 6 }]); // incident_reasons lookup
+            .mockResolvedValueOnce([{ incident_reason_id: 6, criticality: 'high' }]); // incident_reasons lookup
 
         const result = await service.apply(
             { ...data, result: 'with_differences', notes: 'Falta una caja' },
@@ -284,7 +284,7 @@ describe('WarehouseReceiptIntakeService.apply', () => {
             .mockResolvedValueOnce([])
             .mockResolvedValueOnce([])
             .mockResolvedValueOnce([[{ version: 4, updated_at: UPDATED_AT }], 1])
-            .mockResolvedValueOnce([{ incident_reason_id: 6 }]);
+            .mockResolvedValueOnce([{ incident_reason_id: 6, criticality: 'high' }]);
 
         await service.apply(
             { ...data, referenceType: 'purchase_order', referenceId: 'PO-1', result: 'rejected' },
@@ -304,7 +304,7 @@ describe('WarehouseReceiptIntakeService.apply', () => {
             .mockResolvedValueOnce([])
             .mockResolvedValueOnce([])
             .mockResolvedValueOnce([[{ version: 4, updated_at: UPDATED_AT }], 1])
-            .mockResolvedValueOnce([{ incident_reason_id: 6 }]);
+            .mockResolvedValueOnce([{ incident_reason_id: 6, criticality: 'high' }]);
 
         const result = await service.apply({ ...data, result: 'rejected' }, { manager: { query } as unknown as EntityManager });
 
@@ -340,7 +340,7 @@ describe('WarehouseReceiptIntakeService.apply', () => {
         for (let i = 0; i < itemInserts; i++) query.mockResolvedValueOnce([]);
         return query
             .mockResolvedValueOnce([[{ version: 4, updated_at: UPDATED_AT }], 1])
-            .mockResolvedValueOnce([{ incident_reason_id: 6 }]);
+            .mockResolvedValueOnce([{ incident_reason_id: 6, criticality: 'high' }]);
     }
 
     it('hands the receipt result and its items to the publication, in the same transaction manager', async () => {

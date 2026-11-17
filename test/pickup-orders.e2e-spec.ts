@@ -330,7 +330,8 @@ describe('Órdenes de recojo (e2e, ST-81.2)', () => {
             expect((await dispatchRow(id)).status).toBe('pickup_scheduled');
         });
 
-        it.each(['pickup_scheduled', 'address_review'])('%s sin lote: queda cancelled con closed_at, con su causal en el historial y sin publicar al ERP', async (status) => {
+        it('pickup_scheduled sin lote: queda cancelled con closed_at, con su causal en el historial y sin publicar al ERP', async () => {
+            const status = 'pickup_scheduled';
             const id = await insert({ status, coordinates: status === 'pickup_scheduled' });
             const before = await dispatchRow(id);
 
@@ -412,7 +413,7 @@ describe('Órdenes de recojo (e2e, ST-81.2)', () => {
             expect(await batchRow(batchId)).toMatchObject({ status: 'cancelled', version: 2 });
         });
 
-        it.each(['assigned', 'scheduled', 'pending', 'in_transit', 'picked_up_in_transit', 'delivered', 'cancelled'])('%s → 409 DISPATCH_CANCEL_NOT_ALLOWED y no cambia nada', async (status) => {
+        it.each(['address_review', 'assigned', 'scheduled', 'pending', 'in_transit', 'picked_up_in_transit', 'delivered', 'cancelled'])('%s → 409 DISPATCH_CANCEL_NOT_ALLOWED y no cambia nada', async (status) => {
             const id = await insert({ status });
             const before = await dispatchRow(id);
 
@@ -420,7 +421,7 @@ describe('Órdenes de recojo (e2e, ST-81.2)', () => {
 
             expect(res.status).toBe(409);
             expect(res.body.error).toBe('DISPATCH_CANCEL_NOT_ALLOWED');
-            expect(res.body.message).toContain('pickup_scheduled, address_review or in_planning');
+            expect(res.body.message).toContain('pickup_scheduled or in_planning');
             expect(await dispatchRow(id)).toEqual(before);
         });
 

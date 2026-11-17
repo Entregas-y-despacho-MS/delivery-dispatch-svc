@@ -5,6 +5,7 @@ import {
     cutoffBefore,
     evaluateCandidateDates,
     localInstant,
+    minutesOfDay,
     rescheduledDateProblem,
     viableCandidateDates,
     weekStart,
@@ -80,8 +81,23 @@ export class InsertionLotPlanner extends LotPlanner {
         const openStates = this.openStates(input);
         const matrices = await this.loadMatrices(input, waiting, openStates);
 
-        const simParams = (matrix: ZoneMatrix): SimParams => buildSimParams(settings, (from, to) =>
-            matrix.durations[from === null ? 0 : matrix.indexOf.get(from)!][matrix.indexOf.get(to)!]);
+        const warehousesById = new Map(input.warehouses.map((warehouse) => [warehouse.warehouseId, warehouse]));
+        const simParams = (matrix: ZoneMatrix, supplierPickup = false, warehouseId?: number): SimParams => {
+            const warehouse = warehouseId === undefined ? undefined : warehousesById.get(warehouseId);
+            const base = buildSimParams(settings, (from, to) =>
+                matrix.durations[from === null ? 0 : matrix.indexOf.get(from)!][matrix.indexOf.get(to)!]);
+            const receptionEndMinute = warehouse?.receptionEndTime
+                ? minutesOfDay(warehouse.receptionEndTime.slice(0, 5))
+                : base.routeEndMinute;
+            return {
+                ...base,
+                routeEndMinute: supplierPickup ? Math.min(base.routeEndMinute, receptionEndMinute) : base.routeEndMinute,
+                returnToDepot: supplierPickup,
+                ...(supplierPickup && {
+                    returnToDepotSeconds: (from: number) => matrix.durations[matrix.indexOf.get(from)!][0],
+                }),
+            };
+        };
 
         // Vehicles and drivers are one per day (D-21). Seeded with the batches that already exist.
         const usedVehicles = new Map<string, Set<number>>();
@@ -136,7 +152,7 @@ export class InsertionLotPlanner extends LotPlanner {
             for (const [key, items] of groups) {
                 const first = items[0].dispatch;
                 const matrix = matrices.get(key)!;
-                const params = simParams(matrix);
+                const params = simParams(matrix, first.dispatchType === 'supplier_pickup', first.warehouseId);
                 const byId = new Map(items.map((item) => [item.dispatch.dispatchId, item]));
                 const queueOrder = new Map(items.map((item) => [item.dispatch.dispatchId, item.order]));
                 const planned: number[] = [];
@@ -151,6 +167,12 @@ export class InsertionLotPlanner extends LotPlanner {
                 const opens = openStates.get(`${date}|${key}`) ?? [];
                 const stillWaiting: PlanDispatch[] = [];
                 for (const dispatch of pool) {
+                    // Procurement jobs are a dedicated run for one purchase order: never add them
+                    // to an already-open customer route (or another supplier's route).
+                    if (dispatch.dispatchType === 'supplier_pickup') {
+                        stillWaiting.push(dispatch);
+                        continue;
+                    }
                     let best: { state: OpenState; position: number; cost: number; simulation: SimResult } | null = null;
                     for (const state of opens) {
                         if (state.stops.length + 1 > maxStops) continue;
@@ -175,14 +197,17 @@ export class InsertionLotPlanner extends LotPlanner {
                 }
 
                 // 2. What is left: new batches with the vehicles that are free that day.
-                let freeVehicles = input.vehicles.filter((vehicle) => !usedVehicles.get(date)?.has(vehicle.vehicleId));
+                const allowedVehicles = first.dispatchType === 'supplier_pickup' && first.preferredVehicleId !== null && first.preferredVehicleId !== undefined
+                    ? input.vehicles.filter((vehicle) => vehicle.vehicleId === first.preferredVehicleId)
+                    : input.vehicles;
+                let freeVehicles = allowedVehicles.filter((vehicle) => !usedVehicles.get(date)?.has(vehicle.vehicleId));
                 const leftovers: { dispatch: PlanDispatch; failure: Failure }[] = [];
                 let round = 0;
 
                 while (pool.length > 0 && freeVehicles.length > 0) {
                     const globalIndex = [0, ...pool.map((dispatch) => matrix.indexOf.get(dispatch.dispatchId)!)];
                     const duration: DurationLookup = (from, to) => matrix.durations[globalIndex[from]][globalIndex[to]];
-                    const composition = composeBatches(pool, duration, freeVehicles, input.vehicles, maxStops);
+                    const composition = composeBatches(pool, duration, freeVehicles, allowedVehicles, maxStops);
 
                     for (const dispatch of composition.unfittable) {
                         unplanned.push({ dispatchId: dispatch.dispatchId, reason: 'no_vehicle_fits', detail: zoneDetail(dispatch) });
@@ -378,7 +403,7 @@ export class InsertionLotPlanner extends LotPlanner {
     }
 
     /**
-     * One matrix per zone and warehouse, over every order that may be planned there (any date) and the
+     * One matrix per planning group and warehouse, over every order that may be planned there (any date) and the
      * stops of its open batches. Every request is made before anything is decided, so an OSRM failure
      * aborts with no side effects.
      */
@@ -422,11 +447,17 @@ export class InsertionLotPlanner extends LotPlanner {
 }
 
 /** The zone as a coordinator reads it: id for the screens, code and name for the person. */
-function zoneDetail(dispatch: { zoneId: number; zoneCode: string; zoneName: string }): { zoneId: number; zoneCode: string; zoneName: string } {
+function zoneDetail(dispatch: { zoneId: number | null; zoneCode: string; zoneName: string }): { zoneId: number | null; zoneCode: string; zoneName: string } {
     return { zoneId: dispatch.zoneId, zoneCode: dispatch.zoneCode, zoneName: dispatch.zoneName };
 }
 
 function zoneKey(dispatch: PlanDispatch): string {
+    if (dispatch.dispatchType === 'supplier_pickup') {
+        // Supplier pickups have no customer delivery zone. Group into dedicated runs by receiving
+        // warehouse, date (applied by the caller), and any legacy pinned vehicle.
+        const vehicle = dispatch.preferredVehicleId ?? 'any';
+        return `supplier:${dispatch.warehouseId}:${vehicle}`;
+    }
     return `${dispatch.zoneId}:${dispatch.warehouseId}`;
 }
 

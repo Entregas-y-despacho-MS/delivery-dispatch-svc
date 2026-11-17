@@ -83,6 +83,7 @@ export class IncidentReasonsService {
         reason.code              = dto.code;
         reason.name              = dto.name;
         reason.requiresEvidence  = dto.requiresEvidence;
+        reason.criticality       = dto.criticality ?? 'low';
         reason.active            = true; // RF-A32, Escenario 1 — a new reason is enabled right away
 
         const saved = await this.saveHandlingDuplicate(() => repo.save(reason));
@@ -104,6 +105,7 @@ export class IncidentReasonsService {
         if (dto.code             !== undefined) payload.code             = dto.code;
         if (dto.name             !== undefined) payload.name             = dto.name;
         if (dto.requiresEvidence !== undefined) payload.requiresEvidence = dto.requiresEvidence;
+        if (dto.criticality      !== undefined) payload.criticality      = dto.criticality;
         if (dto.active           !== undefined) payload.active           = dto.active;
 
         // update() with an empty payload throws in TypeORM — an empty PUT is just a no-op read.

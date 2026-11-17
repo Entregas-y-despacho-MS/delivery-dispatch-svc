@@ -65,6 +65,7 @@ export class DeliveryZonesService {
         zone.code              = dto.code;
         zone.name              = dto.name;
         zone.estimatedTimeMin  = dto.estimatedTimeMin;
+        zone.boundary          = dto.boundary ?? null;
 
         const saved = await this.saveHandlingDuplicate(() => repo.save(zone));
 
@@ -86,6 +87,7 @@ export class DeliveryZonesService {
         if (dto.code             !== undefined) payload.code             = dto.code;
         if (dto.name             !== undefined) payload.name             = dto.name;
         if (dto.estimatedTimeMin !== undefined) payload.estimatedTimeMin = dto.estimatedTimeMin;
+        if (dto.boundary         !== undefined) payload.boundary         = dto.boundary;
 
         await this.saveHandlingDuplicate(() => repo.update(id, payload));
 

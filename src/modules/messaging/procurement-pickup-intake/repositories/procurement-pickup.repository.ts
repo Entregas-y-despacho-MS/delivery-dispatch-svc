@@ -11,6 +11,7 @@ import { DispatchStatusPublicationService } from '../../../dispatch/dispatch-sta
 
 interface DispatchRow {
   dispatch_id: number;
+  route_batch_id: number | null;
   status: string;
   delivery_address: string;
   delivery_reference: string | null;
@@ -53,6 +54,16 @@ export class ProcurementPickupRepository {
   ): Promise<DispatchChangeOutcome | null> {
     const manager = this.manager(options);
     const current = await this.find(data.purchaseOrderId, options);
+    if (current && isAttachedToRoute(current)) {
+      return await this.alertCoordinator(
+        'supplier_pickup_update_requires_coordinator',
+        data.purchaseOrderId,
+        current,
+        'order_changed',
+        data.updatedAt,
+        options,
+      );
+    }
     if (current && !this.isEditable(current.status)) {
       return await this.alertCoordinator(
         'supplier_pickup_request_after_terminal_state',
@@ -187,6 +198,18 @@ export class ProcurementPickupRepository {
     const manager = this.manager(options);
     const current = await this.find(data.purchaseOrderId, options);
     if (!current) return null;
+    // A planned pickup's date, location, cargo and vehicle fit are part of its route. Do not mutate
+    // them behind the route review screen; ask coordination to correct/replan the batch first.
+    if (isAttachedToRoute(current)) {
+      return await this.alertCoordinator(
+        'supplier_pickup_update_requires_coordinator',
+        data.purchaseOrderId,
+        current,
+        'order_changed',
+        data.updatedAt,
+        options,
+      );
+    }
     if (!this.isEditable(current.status)) {
       return await this.alertCoordinator(
         'supplier_pickup_update_requires_coordinator',
@@ -329,6 +352,18 @@ export class ProcurementPickupRepository {
   ): Promise<DispatchChangeOutcome | null> {
     const current = await this.find(data.purchaseOrderId, options);
     if (!current) return null;
+    // Cancellation must not leave a cancelled supplier stop occupying an active route batch.
+    // Coordination handles removal/replanning as one audited batch correction.
+    if (isAttachedToRoute(current)) {
+      return await this.alertCoordinator(
+        'supplier_pickup_cancel_requires_coordinator',
+        data.purchaseOrderId,
+        current,
+        'order_cancelled',
+        data.cancelledAt,
+        options,
+      );
+    }
     if (!this.isEditable(current.status)) {
       return await this.alertCoordinator(
         'supplier_pickup_cancel_requires_coordinator',
@@ -380,7 +415,7 @@ export class ProcurementPickupRepository {
     options: TransactionOptions,
   ): Promise<DispatchRow | null> {
     const [row] = (await this.manager(options).query(
-      `SELECT d.dispatch_id, s.name AS status, d.delivery_address,
+      `SELECT d.dispatch_id, d.route_batch_id, s.name AS status, d.delivery_address,
                     d.delivery_reference, d.delivery_latitude, d.delivery_longitude,
                     d.scheduled_window_start, d.scheduled_window_end, d.destination_warehouse_id
              FROM dispatches d
@@ -545,6 +580,10 @@ export class ProcurementPickupRepository {
       );
     return options.manager;
   }
+}
+
+function isAttachedToRoute(dispatch: DispatchRow): boolean {
+  return Number.isInteger(dispatch.route_batch_id);
 }
 
 function sameNumber(

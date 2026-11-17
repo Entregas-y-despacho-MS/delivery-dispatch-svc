@@ -104,6 +104,36 @@ describe('roleId inexistente y comodines de búsqueda (e2e)', () => {
     });
 
     describe('la búsqueda trata % y _ como texto', () => {
+        it('zonas: crea, devuelve y limpia el polígono usando pares [longitud, latitud]', async () => {
+            const code = `RS${run}P`;
+            const boundary = [[-68.15, -16.5], [-68.1, -16.5], [-68.1, -16.45], [-68.15, -16.45]];
+            const created = await request(app.getHttpServer()).post(api('/delivery-zones')).set(auth('coordinator')).send({
+                code, name: `Zona polígono ${run}`, estimatedTimeMin: 30, boundary,
+            });
+
+            expect(created.status).toBe(201);
+            expect(created.body.boundary).toEqual(boundary);
+            expect((await request(app.getHttpServer()).get(api(`/delivery-zones/${created.body.id}`)).set(auth('coordinator'))).body.boundary).toEqual(boundary);
+
+            const renamed = await request(app.getHttpServer()).put(api(`/delivery-zones/${created.body.id}`)).set(auth('coordinator')).send({ name: `Zona polígono editada ${run}` });
+            expect(renamed.status).toBe(200);
+            expect(renamed.body.boundary).toEqual(boundary);
+
+            const cleared = await request(app.getHttpServer()).put(api(`/delivery-zones/${created.body.id}`)).set(auth('coordinator')).send({ boundary: null });
+            expect(cleared.status).toBe(200);
+            expect(cleared.body.boundary).toBeNull();
+            const [{ boundary: storedBoundary }] = await dataSource.query(`SELECT boundary FROM delivery_zones WHERE delivery_zone_id = $1`, [created.body.id]);
+            expect(storedBoundary).toBeNull();
+        });
+
+        it('zonas: rechaza un polígono degenerado', async () => {
+            const response = await request(app.getHttpServer()).post(api('/delivery-zones')).set(auth('coordinator')).send({
+                code: `RS${run}X`, name: `Zona inválida ${run}`, estimatedTimeMin: 30,
+                boundary: [[-68, -16], [-67, -15], [-66, -14]],
+            });
+            expect(response.status).toBe(400);
+        });
+
         it('roles: "%" y "_" no listan todos los roles', async () => {
             for (const term of ['%', '_']) {
                 const res = await request(app.getHttpServer()).get(api(`/roles?search=${encodeURIComponent(term)}`)).set(auth('admin'));

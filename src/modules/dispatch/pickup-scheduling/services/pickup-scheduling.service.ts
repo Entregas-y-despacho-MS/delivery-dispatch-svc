@@ -35,8 +35,8 @@ export const INCIDENT_REPORTED_TOPIC = 'dispatch.transfer.incident_reported';
 const SUPPLIER_PICKUP_TYPE = 'supplier_pickup';
 
 export interface SchedulePickupInput {
-    /** Vehicle whose capacity the estimated load is compared with. */
-    vehicleId: number;
+    /** Optional backward-compatible preference; otherwise route planning chooses the vehicle. */
+    vehicleId?: number;
     /** Slot to agree; when omitted, the earliest slot still ahead is taken. */
     window?: TimeRange;
 }
@@ -77,7 +77,9 @@ export class PickupSchedulingService {
     ) {}
 
     /**
-     * Schedules a supplier pickup (ERP-04, ST-75.1). One transaction: the dispatch row is locked, so a
+     * Schedules a supplier pickup (ERP-04, ST-75.1). The appointment belongs to the supplier and warehouse;
+     * choosing the route vehicle is deferred to planning unless a legacy caller supplies a preference.
+     * One transaction: the dispatch row is locked, so a
      * repeated or concurrent request finds it already `scheduled` and answers 409 instead of publishing twice.
      * The agreed slot overwrites `scheduled_window_*`; the supplier's own window is kept in the event.
      * The `dispatch.pickup.scheduled` message goes to the outbox in the same transaction (D-54).
@@ -98,7 +100,7 @@ export class PickupSchedulingService {
             if (input.window && !isWithinAnySlot(input.window, slots)) throw new PickupWindowNotAvailableException();
             const window = input.window ?? slots[0];
 
-            await this.assertCapacity(manager, row, input.vehicleId);
+            if (input.vehicleId !== undefined) await this.assertCapacity(manager, row, input.vehicleId);
 
             const recordVersion = await this.nextRecordVersion(manager, dispatchId);
             const [updated]: { tracking_code: string }[] = await manager.query(
@@ -128,7 +130,7 @@ export class PickupSchedulingService {
                     fromStatus: row.status,
                     toStatus: DispatchStatusEnum.SCHEDULED,
                     purchaseOrderId: row.source_order_ref,
-                    vehicleId: input.vehicleId,
+                    ...(input.vehicleId !== undefined && { vehicleId: input.vehicleId }),
                     supplierWindow: {
                         startsAt: supplier.startsAt.toISOString(),
                         endsAt: supplier.endsAt.toISOString(),

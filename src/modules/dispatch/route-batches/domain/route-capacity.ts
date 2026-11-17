@@ -10,6 +10,7 @@ export interface RouteCapacityPackage {
 export interface RouteCapacityDispatch {
   dispatchId: number;
   estimatedWeightKg: number | null;
+  estimatedVolumeM3?: number | null;
   packages: RouteCapacityPackage[];
 }
 
@@ -60,6 +61,7 @@ export function calculateRouteCapacity(
   for (const dispatch of dispatches) {
     if (dispatch.packages.length === 0) {
       weightKg += dispatch.estimatedWeightKg ?? 0;
+      volumeM3 += dispatch.estimatedVolumeM3 ?? 0;
       estimatedDispatchIds.push(dispatch.dispatchId);
       continue;
     }

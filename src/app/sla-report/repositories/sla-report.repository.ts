@@ -34,6 +34,9 @@ interface GroupDefinition {
     nameSql: string;
     /** Extra condition on the group, when the grouping has one. */
     whereSql?: string;
+    zoneNameSql?: string;
+    serviceLevelNameSql?: string;
+    groupKeySql?: string;
 }
 
 // Whitelist: the SQL of a grouping is always one of these, never built from user text. Zones, service levels and users
@@ -51,6 +54,14 @@ const GROUPS: Record<SlaGroupBy, GroupDefinition> = {
         nameSql: 'g.name',
         // Only the levels that are active are reported (Express stays off); a dispatch with no level is still counted.
         whereSql: '(d.service_level_id IS NULL OR g.active)',
+    },
+    [SlaGroupBy.ZONE_SERVICE]: {
+        joinSql: 'LEFT JOIN delivery_zones z ON z.delivery_zone_id = d.delivery_zone_id LEFT JOIN service_levels sl ON sl.service_level_id = d.service_level_id',
+        idSql: 'NULL::int',
+        groupKeySql: "CONCAT(COALESCE(d.delivery_zone_id::text, 'none'), ':', COALESCE(d.service_level_id::text, 'none'))",
+        nameSql: "CONCAT(COALESCE(z.name, 'Sin zona'), ' · ', COALESCE(sl.name, 'Sin nivel'))",
+        zoneNameSql: "COALESCE(z.name, 'Sin zona')",
+        serviceLevelNameSql: "COALESCE(sl.name, 'Sin nivel')",
     },
     [SlaGroupBy.DRIVER]: {
         joinSql: 'LEFT JOIN users g ON g.user_id = rb.driver_id',
@@ -75,6 +86,9 @@ function buildSql(group: GroupDefinition): string {
     WITH closed AS (
         SELECT s.name AS status, d.closed_at, d.scheduled_window_start, d.scheduled_window_end,
                ${group.idSql} AS group_id, ${group.nameSql} AS group_name,
+               ${group.groupKeySql ?? 'NULL::text'} AS group_key,
+               ${group.zoneNameSql ?? 'NULL::text'} AS zone_name,
+               ${group.serviceLevelNameSql ?? 'NULL::text'} AS service_level_name,
                dep.departed_at,
                (SELECT COUNT(*) FROM dispatch_incidents i WHERE i.dispatch_id = d.dispatch_id)::int AS incident_count
           FROM dispatches d
@@ -98,7 +112,7 @@ function buildSql(group: GroupDefinition): string {
            AND d.closed_at < ${TO_TS}
            ${group.whereSql ? `AND ${group.whereSql}` : ''}
     )
-    SELECT c.group_id, c.group_name,
+    SELECT c.group_id, c.group_name, c.group_key, c.zone_name, c.service_level_name,
            COUNT(*)::int AS closed_count,
            COUNT(*) FILTER (WHERE c.status = '${DispatchStatusEnum.DELIVERED}')::int AS delivered_count,
            COUNT(*) FILTER (
@@ -122,7 +136,7 @@ function buildSql(group: GroupDefinition): string {
            ), 0)::float8 AS cycle_minutes_sum,
            COALESCE(SUM(c.incident_count), 0)::int AS incident_count
       FROM closed c
-     GROUP BY c.group_id, c.group_name
+     GROUP BY c.group_id, c.group_name, c.group_key, c.zone_name, c.service_level_name
      ORDER BY c.group_name NULLS LAST, c.group_id`;
 }
 
@@ -130,6 +144,7 @@ function buildSql(group: GroupDefinition): string {
 export const SLA_REPORT_SQL: Readonly<Record<SlaGroupBy, string>> = {
     [SlaGroupBy.ZONE]: buildSql(GROUPS[SlaGroupBy.ZONE]),
     [SlaGroupBy.SERVICE_LEVEL]: buildSql(GROUPS[SlaGroupBy.SERVICE_LEVEL]),
+    [SlaGroupBy.ZONE_SERVICE]: buildSql(GROUPS[SlaGroupBy.ZONE_SERVICE]),
     [SlaGroupBy.DRIVER]: buildSql(GROUPS[SlaGroupBy.DRIVER]),
     [SlaGroupBy.VEHICLE]: buildSql(GROUPS[SlaGroupBy.VEHICLE]),
 };
@@ -137,6 +152,9 @@ export const SLA_REPORT_SQL: Readonly<Record<SlaGroupBy, string>> = {
 interface SlaGroupRow {
     group_id: number | null;
     group_name: string | null;
+    group_key?: string | null;
+    zone_name?: string | null;
+    service_level_name?: string | null;
     closed_count: number;
     delivered_count: number;
     on_time_count: number;
@@ -161,6 +179,9 @@ export class SlaReportRepository {
         return rows.map((row) => ({
             groupId: row.group_id,
             groupName: row.group_name,
+            ...(row.group_key != null ? { groupKey: row.group_key } : {}),
+            ...(row.zone_name != null ? { zoneName: row.zone_name } : {}),
+            ...(row.service_level_name != null ? { serviceLevelName: row.service_level_name } : {}),
             closedCount: row.closed_count,
             deliveredCount: row.delivered_count,
             onTimeCount: row.on_time_count,

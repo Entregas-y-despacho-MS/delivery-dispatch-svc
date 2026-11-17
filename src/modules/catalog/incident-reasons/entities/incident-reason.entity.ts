@@ -20,6 +20,9 @@ export class IncidentReason extends BaseEntitySoftDelete {
     @Column({ name: 'counts_as_attempt', type: 'boolean', default: false })
     countsAsAttempt: boolean;
 
+    @Column({ name: 'criticality', type: 'varchar', length: 10, default: 'low' })
+    criticality: 'low' | 'high';
+
     @Column({ name: 'active', type: 'boolean', default: true })
     active: boolean;
 }

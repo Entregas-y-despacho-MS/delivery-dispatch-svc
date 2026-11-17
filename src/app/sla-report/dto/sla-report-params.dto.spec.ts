@@ -13,7 +13,7 @@ describe('SlaReportParamsDto', () => {
     const valid = { from: '2026-10-01', to: '2026-10-31', groupBy: 'zone' };
 
     it('accepts each grouping', async () => {
-        for (const groupBy of ['zone', 'service_level', 'driver']) expect(await messagesOf({ ...valid, groupBy })).toEqual([]);
+        for (const groupBy of ['zone', 'service_level', 'zone_service', 'driver']) expect(await messagesOf({ ...valid, groupBy })).toEqual([]);
     });
 
     it('requires `from`, `to` and `groupBy`', async () => {
@@ -31,7 +31,7 @@ describe('SlaReportParamsDto', () => {
     });
 
     it('rejects a grouping outside the list', async () => {
-        expect(await messagesOf({ ...valid, groupBy: 'vehicle' })).toContain("The 'groupBy' parameter must be one of: zone, service_level, driver.");
+        expect(await messagesOf({ ...valid, groupBy: 'vehicle' })).toContain("The 'groupBy' parameter must be one of: zone, service_level, zone_service, driver.");
         expect(await messagesOf({ ...valid, groupBy: 'ZONE' })).not.toEqual([]);
     });
 });

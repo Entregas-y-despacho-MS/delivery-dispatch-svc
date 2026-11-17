@@ -26,7 +26,7 @@ interface DispatchRow {
 export interface AppliedReceiptEvents {
     statusChanged: DispatchStatusChangedEvent;
     /** Only when the receipt opened a `receipt_difference` incident. */
-    incidentReported?: { dispatchId: number; incidentId: string; reasonCode: string; reportedAt: string; criticality: 'high' };
+    incidentReported?: { dispatchId: number; incidentId: string; reasonCode: string; reportedAt: string; criticality: 'low' | 'high' };
 }
 
 export type ApplyReceiptResult =
@@ -131,8 +131,8 @@ export class WarehouseReceiptIntakeService {
 
         let incidentReported: AppliedReceiptEvents['incidentReported'];
         if (newStatus === 'incident') {
-            const [reason]: { incident_reason_id: number }[] = await manager.query(
-                `SELECT incident_reason_id FROM incident_reasons WHERE code = $1 AND active = TRUE AND deleted_at IS NULL`,
+            const [reason]: { incident_reason_id: number; criticality: 'low' | 'high' }[] = await manager.query(
+                `SELECT incident_reason_id, criticality FROM incident_reasons WHERE code = $1 AND active = TRUE AND deleted_at IS NULL`,
                 [RECEIPT_DIFFERENCE_REASON_CODE],
             );
             if (!reason) throw new Error(`Incident reason ${RECEIPT_DIFFERENCE_REASON_CODE} is missing.`);
@@ -146,7 +146,7 @@ export class WarehouseReceiptIntakeService {
             }, { manager });
             incidentReported = {
                 dispatchId: found.dispatch_id, incidentId, reasonCode: RECEIPT_DIFFERENCE_REASON_CODE,
-                reportedAt: receivedAt.toISOString(), criticality: 'high',
+                reportedAt: receivedAt.toISOString(), criticality: reason.criticality,
             };
         }
 

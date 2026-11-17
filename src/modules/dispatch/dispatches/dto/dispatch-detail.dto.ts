@@ -62,6 +62,66 @@ export class DispatchDetailDestinationDto {
     zone!: DispatchDetailRefDto | null;
 }
 
+export class DispatchDetailSupplierPickupItemDto {
+    @ApiProperty({ type: String, example: 'SKU-001', description: 'Product code from the purchase order' })
+    itemCode!: string;
+
+    @ApiPropertyOptional({ type: String, nullable: true, example: 'Caja de repuestos', description: 'Product description' })
+    description!: string | null;
+
+    @ApiProperty({ type: 'number', format: 'double', example: 4, description: 'Quantity expected at the supplier' })
+    expectedQuantity!: number;
+
+    @ApiPropertyOptional({ type: 'number', format: 'double', nullable: true, example: 4, description: 'Quantity confirmed by the driver at collection; `null` until collected' })
+    receivedQuantity!: number | null;
+}
+
+export class DispatchDetailWarehouseDto {
+    @ApiProperty({ type: 'integer', example: 1, description: 'Warehouse catalog id' })
+    id!: number;
+
+    @ApiProperty({ type: String, example: 'WH-LPZ-01', description: 'Warehouse code' })
+    code!: string;
+
+    @ApiProperty({ type: String, example: 'Almacén La Paz', description: 'Warehouse name' })
+    name!: string;
+}
+
+export class DispatchDetailSupplierPickupDto {
+    @ApiProperty({ type: String, example: 'Av. 20 de Octubre 123', description: 'Supplier pickup origin address' })
+    originAddress!: string;
+
+    @ApiPropertyOptional({ type: String, nullable: true, description: 'Supplier pickup address reference' })
+    originReference!: string | null;
+
+    @ApiPropertyOptional({ type: 'number', format: 'double', nullable: true, description: 'Supplier latitude' })
+    originLatitude!: number | null;
+
+    @ApiPropertyOptional({ type: 'number', format: 'double', nullable: true, description: 'Supplier longitude' })
+    originLongitude!: number | null;
+
+    @ApiPropertyOptional({ type: String, nullable: true, description: 'Supplier contact name' })
+    supplierContactName!: string | null;
+
+    @ApiPropertyOptional({ type: String, nullable: true, description: 'Supplier contact phone' })
+    supplierContactPhone!: string | null;
+
+    @NullableRef(DispatchDetailWarehouseDto, 'Warehouse that must receive this purchase order')
+    destinationWarehouse!: DispatchDetailWarehouseDto | null;
+
+    @ApiProperty({ type: [DispatchDetailSupplierPickupItemDto], description: 'Items expected from the supplier and quantities recorded at collection' })
+    items!: DispatchDetailSupplierPickupItemDto[];
+
+    @ApiPropertyOptional({ type: 'number', nullable: true, description: 'Estimated package count' })
+    estimatedPackages!: number | null;
+
+    @ApiPropertyOptional({ type: 'number', format: 'double', nullable: true, description: 'Estimated cargo weight in kilograms' })
+    estimatedWeightKg!: number | null;
+
+    @ApiPropertyOptional({ type: 'number', format: 'double', nullable: true, description: 'Estimated cargo volume in cubic metres' })
+    estimatedVolumeM3!: number | null;
+}
+
 export class DispatchDetailUserDto {
     @ApiProperty({ type: 'integer', example: 7, description: 'Id of the user' })
     id!: number;
@@ -287,8 +347,8 @@ export class DispatchDetailDto {
     @NullableRef(DispatchDetailRefDto, 'Service level; `null` if none')
     serviceLevel!: DispatchDetailRefDto | null;
 
-    @ApiProperty({ type: String, example: 'hand_delivery_standard', description: 'Evidence policy the delivery had to meet' })
-    evidencePolicy!: string;
+    @ApiPropertyOptional({ type: String, nullable: true, example: 'hand_delivery_standard', description: 'Evidence policy of a customer delivery; `null` for supplier pickups' })
+    evidencePolicy!: string | null;
 
     @ApiPropertyOptional({ type: String, nullable: true, example: 'Prepaid', description: 'Read-only payment label from the origin system; `null` if none' })
     paymentStatusLabel!: string | null;
@@ -319,6 +379,9 @@ export class DispatchDetailDto {
 
     @NullableRef(DispatchDetailReceiptDto, 'Warehouse receipt of the goods (RMA or supplier pickup); `null` while the dispatch has none. Orphan receipts are not exposed')
     receipt!: DispatchDetailReceiptDto | null;
+
+    @NullableRef(DispatchDetailSupplierPickupDto, 'Supplier pickup workflow details; `null` for customer deliveries and other dispatch types')
+    supplierPickup!: DispatchDetailSupplierPickupDto | null;
 
     @ApiProperty({ type: [DispatchDetailEventDto], description: 'Timeline, oldest first' })
     timeline!: DispatchDetailEventDto[];

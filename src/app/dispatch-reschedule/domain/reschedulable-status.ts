@@ -27,13 +27,10 @@ const CANCELLABLE: readonly string[] = [
 ];
 
 /**
- * States from which the coordinator can cancel a customer pickup (`warehouse_return_pickup`, ST-81.2): before it is
- * planned (`pickup_scheduled`), while its address still needs review (`address_review`, an RMA without coordinates has
- * no other way out) and while it is in a batch being planned (`in_planning`). Once assigned the route owns it.
+ * Customer-pickup cancellation follows the ES-81 GWT contract: `pickup_scheduled` and `in_planning` only.
  */
 const PICKUP_CANCELLABLE: readonly string[] = [
     DispatchStatusEnum.PICKUP_SCHEDULED,
-    DispatchStatusEnum.ADDRESS_REVIEW,
     DispatchStatusEnum.IN_PLANNING,
 ];
 

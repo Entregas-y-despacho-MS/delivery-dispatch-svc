@@ -145,7 +145,8 @@ export function validateCutoffBatch(facts: BatchFacts, params: SimParams): Cutof
     const noDestination = facts.stops.filter((stop) => !stop.hasDestination);
     if (noDestination.length > 0) fail('destination_incomplete', ids(noDestination));
     // A customer pickup never has dispatch_packages rows (only an estimated_boxes guess, ST-81.3).
-    const noPackages = facts.stops.filter((stop) => stop.dispatch.status !== 'pickup_scheduled' && stop.dispatch.packages.length === 0);
+    const noPackages = facts.stops.filter((stop) => stop.dispatch.status !== 'pickup_scheduled'
+        && stop.dispatch.dispatchType !== 'supplier_pickup' && stop.dispatch.packages.length === 0);
     if (noPackages.length > 0) fail('packages_missing', ids(noPackages));
 
     // Vehicle and capacity.
