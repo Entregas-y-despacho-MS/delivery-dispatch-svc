@@ -1,6 +1,6 @@
 # Contratos de mensajes (Pub/Sub)
 
-JSON Schemas y ejemplos de los mensajes que Despachos intercambia con el ERP (Marketplace, Inventarios y Compras) y con el simulador de CRM sobre Google Cloud Pub/Sub. La fuente de verdad del catálogo es `../delivery-dispatch-docs/interoperabilidad-y-flujos.md`, sección 1.4.
+JSON Schemas y ejemplos de los mensajes que Despachos intercambia con el ERP (Marketplace, Inventarios y Compras) y con el simulador de CRM sobre Google Cloud Pub/Sub. El catálogo de tópicos es la sección [Mapa tópico → archivos](#mapa-tópico--archivos) de este documento.
 
 ## Estructura
 
@@ -41,18 +41,16 @@ Se referencian con `$ref` a `envelope.schema.json#/$defs/<nombre>`:
 
 ## Cómo agregar o cambiar un tópico
 
-1. Agregar la fila al catálogo de `interoperabilidad-y-flujos.md` (sección 1.4).
+1. Agregar la fila del tópico en [Mapa tópico → archivos](#mapa-tópico--archivos).
 2. Crear `schemas/<topico>.schema.json` y `examples/<topico>.example.json`.
 3. Si el cambio es incompatible con la versión vigente, subir `schemaVersion` en esquema y ejemplo.
-4. Correr `npm run contracts:check` y `npm test`: el verificador compara catálogo, esquemas, ejemplos y fixtures del simulador; `npm test` lo ejecuta antes de Vitest.
+4. Correr `npm run contracts:check` y `npm test`: el verificador compara el catálogo de este README, los esquemas, los ejemplos (válidos e inválidos) y los fixtures del simulador; `npm test` lo ejecuta antes de Vitest.
 
-El catálogo se busca como `docs/interoperabilidad-y-flujos.md` en el checkout o en sus directorios superiores, y también en el repositorio hermano `delivery-dispatch-docs` (desde un checkout normal o un worktree). Si está en otra ubicación, se puede indicar con `CONTRACTS_CATALOG_PATH` (ruta absoluta al archivo `interoperabilidad-y-flujos.md`). Si no se encuentra, la verificación falla con una instrucción para configurarlo.
-
-El catálogo y esta carpeta se mantienen sincronizados: un tópico existe en ambos o en ninguno.
+El catálogo y esta carpeta se mantienen sincronizados: un tópico está en la tabla de [Mapa tópico → archivos](#mapa-tópico--archivos) y tiene esquema y ejemplo, o no está en ninguno de los dos. El catálogo vive en este repositorio y no depende de ningún otro.
 
 ## Mapa tópico → archivos
 
-Cada fila corresponde a `schemas/<tópico>.schema.json` y `examples/<tópico>.example.json`. La descripción de cada tópico está en el catálogo (sección 1.4 del documento).
+Este es el catálogo de tópicos. Cada fila corresponde a `schemas/<tópico>.schema.json` y `examples/<tópico>.example.json`; el verificador lee las filas de esta sección (hasta el siguiente título de nivel 2).
 
 **Mensajes que recibe Despachos**
 

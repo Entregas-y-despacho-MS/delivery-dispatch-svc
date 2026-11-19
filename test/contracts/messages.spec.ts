@@ -1,37 +1,19 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import Ajv2020Module from 'ajv/dist/2020.js';
 import addFormatsModule from 'ajv-formats';
 
 /**
- * Contratos de mensajería (ST-76.1): un esquema y un ejemplo por tópico del
- * catálogo de docs/interoperabilidad-y-flujos.md §1.4.
+ * Contratos de mensajería: un esquema y un ejemplo por tópico del catálogo, que es la sección
+ * «Mapa tópico → archivos» de contracts/messages/README.md.
  */
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const CONTRACTS = resolve(ROOT, 'contracts/messages');
 const SCHEMAS_DIR = resolve(CONTRACTS, 'schemas');
 const EXAMPLES_DIR = resolve(CONTRACTS, 'examples');
-const catalogPath = (): string => {
-  const configuredPath = process.env.CONTRACTS_CATALOG_PATH;
-  if (configuredPath) return resolve(configuredPath);
-
-  let parent = ROOT;
-  for (let level = 0; level <= 5; level += 1) {
-    const candidates = [
-      resolve(parent, 'docs/interoperabilidad-y-flujos.md'),
-      resolve(parent, 'delivery-dispatch-docs/interoperabilidad-y-flujos.md'),
-    ];
-    const candidate = candidates.find(existsSync);
-    if (candidate) return candidate;
-    parent = dirname(parent);
-  }
-
-  throw new Error(
-    'No se encontró el catálogo interoperabilidad-y-flujos.md en docs/ ni delivery-dispatch-docs/. ' +
-      'Configura CONTRACTS_CATALOG_PATH con su ruta.',
-  );
-};
+const CATALOG_PATH = resolve(CONTRACTS, 'README.md');
+const CATALOG_SECTION = '## Mapa tópico → archivos';
 
 const Ajv2020 = (Ajv2020Module as any).default ?? Ajv2020Module;
 const addFormats = (addFormatsModule as any).default ?? addFormatsModule;
@@ -66,12 +48,13 @@ const mutated = (topic: string, change: (message: any) => void) => {
   return message;
 };
 
-/** Tópicos listados en las tablas de la sección 1.4 del documento. */
+/** Tópicos listados en las tablas de la sección del catálogo del README. */
 const catalogTopics = (path: string): string[] => {
   const text = readFileSync(path, 'utf8');
-  const start = text.indexOf('### 1.4.');
-  const end = text.indexOf('### 1.5.');
-  const section = text.slice(start, end);
+  const start = text.indexOf(CATALOG_SECTION);
+  if (start < 0) throw new Error(`No se encontró la sección del catálogo en ${path}`);
+  const next = text.indexOf('\n## ', start + CATALOG_SECTION.length);
+  const section = text.slice(start, next < 0 ? undefined : next);
   const topics = [...section.matchAll(/^\| `([a-z_]+\.[a-z_]+\.[a-z_]+)` \|/gm)]
     .map((match) => match[1])
     .sort();
@@ -111,9 +94,9 @@ describe('contratos de mensajes: carpeta contracts/messages', () => {
   });
 });
 
-describe('contratos de mensajes: sincronía con el catálogo del documento', () => {
-  it('cada tópico del catálogo 1.4 tiene esquema y ejemplo, y viceversa', () => {
-    const catalog = catalogTopics(catalogPath());
+describe('contratos de mensajes: sincronía con el catálogo del README', () => {
+  it('cada tópico del catálogo tiene esquema y ejemplo, y viceversa', () => {
+    const catalog = catalogTopics(CATALOG_PATH);
     expect(catalog.length).toBeGreaterThan(0);
     expect(schemaTopics).toEqual(catalog);
     expect(exampleTopics).toEqual(catalog);
