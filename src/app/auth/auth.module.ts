@@ -45,10 +45,12 @@ import { PasswordChangeGuard } from './guards/password-change.guard.js';
     ],
     providers: [
         // APP_GUARD applies these guards globally. Remove this module from AppModule to disable them.
+        // ThrottlerGuard goes first: rejected requests (401/403) count toward the rate limit too, so nobody can
+        // hammer an endpoint (and fill the audit trail of sensitive actions) without a valid token.
+        { provide: APP_GUARD, useClass: ThrottlerGuard },
         { provide: APP_GUARD, useClass: JwtAuthGuard },
         { provide: APP_GUARD, useClass: PasswordChangeGuard }, // after JwtAuthGuard: needs request.user
         { provide: APP_GUARD, useClass: RolesGuard },
-        { provide: APP_GUARD, useClass: ThrottlerGuard },
         JwtConfig,
         AuthService,
         TwoFactorService,

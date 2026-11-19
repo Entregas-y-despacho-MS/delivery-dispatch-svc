@@ -55,6 +55,7 @@ import { DispatchOtpModule } from './app/dispatch-otp/dispatch-otp.module.js';
 import { DriverMetricsModule } from './app/driver-metrics/driver-metrics.module.js';
 import { DispatchEvidenceModule } from './app/dispatch-evidence/dispatch-evidence.module.js';
 import { AuditLogsModule } from './modules/audit/audit-logs/audit-logs.module.js';
+import { AdminAuditEventsModule } from './modules/audit/admin-audit-events/admin-audit-events.module.js';
 import { DispatchEventsAppModule } from './app/dispatch-events/dispatch-events.module.js';
 import { DispatchIncidentsAppModule } from './app/dispatch-incidents/dispatch-incidents.module.js';
 import { SupplierPickupModule } from './app/supplier-pickup/supplier-pickup.module.js';
@@ -97,6 +98,7 @@ import { FleetReportsModule } from './app/fleet-reports/fleet-reports.module.js'
     FleetReportsModule,
     DispatchEvidenceModule,
     AuditLogsModule,
+    AdminAuditEventsModule,
     RouteBatchCorrectionModule,
     DispatchRescheduleModule,
     FinalReviewModule,
