@@ -1,8 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MailerPort } from '../../../plugins/mailer/mailer.port.js';
-import type { DispatchStatusChangedEvent } from '../../dispatch-status/dispatch-status-changed.event.js';
-import { buildStatusNotice, eligibleStatusNotice, formatOccurredAt, trackingLink } from '../domain/build-status-notice.js';
+import { buildStatusNotice, eligibleStatusNotice, formatOccurredAt, trackingLink, type StatusTransition } from '../domain/build-status-notice.js';
 import { STATUS_NOTICE_DISPATCH_TYPE, STATUS_NOTICE_TEMPLATE } from '../domain/status-notice-table.js';
 import { CustomerStatusNoticeRepository } from './customer-status-notice.repository.js';
 
@@ -36,11 +35,11 @@ export class CustomerStatusNoticeService {
         const dispatch = await this.repository.findDispatch(incident.dispatchId);
         if (!dispatch || dispatch.currentStatus !== 'incident') return 'ignored';
         return await this.handle({
-            dispatchId: incident.dispatchId, status: 'incident', previousStatus: 'in_transit', version: 0, updatedAt: incident.reportedAt,
+            dispatchId: incident.dispatchId, status: 'incident', previousStatus: null, updatedAt: incident.reportedAt,
         });
     }
 
-    async handle(event: DispatchStatusChangedEvent, now: Date = new Date()): Promise<StatusNoticeOutcome> {
+    async handle(event: StatusTransition, now: Date = new Date()): Promise<StatusNoticeOutcome> {
         if (!eligibleStatusNotice(event)) return 'ignored';
         const dispatch = await this.repository.findDispatch(event.dispatchId);
         if (!dispatch || dispatch.type !== STATUS_NOTICE_DISPATCH_TYPE) return 'ignored';

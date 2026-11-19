@@ -1,5 +1,16 @@
-import type { DispatchStatusChangedEvent } from '../../dispatch-status/dispatch-status-changed.event.js';
 import { STATUS_NOTICE_DISPATCH_TYPE, STATUS_NOTICE_TABLE, type StatusNoticeEntry } from './status-notice-table.js';
+
+/**
+ * The part of a status change this module needs. `dispatch.status_changed` fits it as it is; the incident report
+ * does not say what the previous status was, so `previousStatus` can be `null` (unknown).
+ */
+export interface StatusTransition {
+    dispatchId: number;
+    status: string;
+    previousStatus: string | null;
+    /** ISO instant of the transition. */
+    updatedAt: string;
+}
 
 /** What is read from the dispatch to build the email. `trackingToken` is only ever used to build the link. */
 export interface StatusNoticeDispatch {
@@ -28,13 +39,13 @@ export interface StatusNotice {
 }
 
 /** The entry of the table when the transition is one the customer is owed an email for; `null` otherwise. */
-export function eligibleStatusNotice(event: Pick<DispatchStatusChangedEvent, 'status' | 'previousStatus'>): StatusNoticeEntry | null {
+export function eligibleStatusNotice(event: Pick<StatusTransition, 'status' | 'previousStatus'>): StatusNoticeEntry | null {
     if (event.status === event.previousStatus) return null;
     return Object.hasOwn(STATUS_NOTICE_TABLE, event.status) ? STATUS_NOTICE_TABLE[event.status]! : null;
 }
 
 /** Maps an accepted event to the notice, or `null` (not eligible, not a delivery, no recipient, bad date). */
-export function buildStatusNotice(event: DispatchStatusChangedEvent, dispatch: StatusNoticeDispatch): StatusNotice | null {
+export function buildStatusNotice(event: StatusTransition, dispatch: StatusNoticeDispatch): StatusNotice | null {
     const entry = eligibleStatusNotice(event);
     if (!entry || dispatch.type !== STATUS_NOTICE_DISPATCH_TYPE) return null;
     const recipient = dispatch.contactEmail?.trim();

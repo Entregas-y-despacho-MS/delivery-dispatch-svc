@@ -22,6 +22,10 @@ describe('eligibleStatusNotice', () => {
         },
     );
 
+    it('notifies a transition whose previous status is unknown (the incident report)', () => {
+        expect(eligibleStatusNotice({ status: 'incident', previousStatus: null })).toBe(STATUS_NOTICE_TABLE.incident);
+    });
+
     it('does not notify a transition to the same status', () => {
         expect(eligibleStatusNotice({ status: 'incident', previousStatus: 'incident' })).toBeNull();
     });
