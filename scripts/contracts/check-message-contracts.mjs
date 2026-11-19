@@ -7,6 +7,7 @@ const ROOT = resolve(import.meta.dirname, '../..');
 const CONTRACTS = resolve(ROOT, 'contracts/messages');
 const SCHEMAS_DIR = resolve(CONTRACTS, 'schemas');
 const EXAMPLES_DIR = resolve(CONTRACTS, 'examples');
+const INVALID_EXAMPLES_DIR = resolve(EXAMPLES_DIR, 'invalid');
 const FIXTURES_DIR = resolve(ROOT, 'test/simulator/fixtures');
 
 const Ajv2020 = Ajv2020Module.default ?? Ajv2020Module;
@@ -141,6 +142,43 @@ const checkContracts = () => {
       }
     } catch (error) {
       errors.push(`${examplePath}: ${error.message}`);
+    }
+  }
+
+  // Ejemplos inválidos: { description, expectedErrorPath, message }. Cada uno debe fallar y señalar
+  // el campo esperado (un error en esa ruta o debajo de ella), no fallar por cualquier otro motivo.
+  const invalidFiles = existsSync(INVALID_EXAMPLES_DIR) ? jsonFiles(INVALID_EXAMPLES_DIR, '.invalid.json') : [];
+  for (const file of invalidFiles) {
+    const invalidPath = resolve(INVALID_EXAMPLES_DIR, file);
+    try {
+      const { expectedErrorPath, message } = readJson(invalidPath);
+      const topic = message?.type;
+      if (typeof expectedErrorPath !== 'string' || !expectedErrorPath.startsWith('/')) {
+        errors.push(`${invalidPath}: expectedErrorPath debe ser una ruta JSON Pointer (por ejemplo /data/trackingCode)`);
+        continue;
+      }
+      if (typeof topic !== 'string' || !schemaTopics.includes(topic) || !file.startsWith(`${topic}.`)) {
+        errors.push(`${invalidPath}: el nombre debe empezar con un tópico existente igual a message.type`);
+        continue;
+      }
+
+      const validate = ajv.getSchema(readJson(resolve(SCHEMAS_DIR, `${topic}.schema.json`)).$id);
+      checked += 1;
+      if (validate(message)) {
+        errors.push(`${invalidPath}: debía ser inválido`);
+        continue;
+      }
+      const paths = (validate.errors ?? []).map((error) => error.instancePath || '/');
+      const pointsAtField = paths.some(
+        (path) => path === expectedErrorPath || path.startsWith(`${expectedErrorPath}/`),
+      );
+      if (!pointsAtField) {
+        errors.push(
+          `${invalidPath}: el error debía señalar ${expectedErrorPath} y señaló ${describeAjvErrors(validate.errors)}`,
+        );
+      }
+    } catch (error) {
+      errors.push(`${invalidPath}: ${error.message}`);
     }
   }
 

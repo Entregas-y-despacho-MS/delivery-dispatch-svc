@@ -1,0 +1,19 @@
+{
+  "messageId": "019a8f2c-41d0-7b6e-9c3a-2f7e1d5a8c10",
+  "type": "crm.delivery_complaint.opened",
+  "schemaVersion": 1,
+  "source": "crm",
+  "occurredAt": "2026-11-18T14:05:00Z",
+  "data": {
+    "crmCaseId": "CRM-CASE-2026-000871",
+    "caseVersion": 1,
+    "dispatchId": 482,
+    "trackingCode": "DSP-2026-00482",
+    "salesOrderId": "SO-2026-000123",
+    "reasonCode": "DAMAGED_ITEM",
+    "openedAt": "2026-11-18T14:03:12Z",
+    "affectedItems": [
+      { "packageId": "PKG-000123-1", "quantity": 1 }
+    ]
+  }
+}

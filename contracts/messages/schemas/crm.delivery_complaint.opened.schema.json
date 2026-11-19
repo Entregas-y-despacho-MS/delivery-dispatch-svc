@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.delivery-dispatch.local/messages/schemas/crm.delivery_complaint.opened.schema.json",
+  "title": "crm.delivery_complaint.opened",
+  "description": "Reclamo sobre una entrega completada, publicado por el simulador de CRM. Identifica una parada concreta con `dispatchId` o `trackingCode` (al menos uno; si llegan ambos deben corresponder al mismo despacho, regla que valida el consumidor y no el esquema). Se acepta aunque el lote del despacho siga `in_execution`: lo que cuenta es que el despacho individual esté `delivered`. `salesOrderId` solo ayuda a validar y nunca resuelve por sí solo varios despachos. Sin conversación comercial, datos personales, credenciales ni evidencia binaria: `additionalProperties: false` lo impone.",
+  "type": "object",
+  "allOf": [{ "$ref": "../envelope.schema.json" }],
+  "properties": {
+    "type": { "const": "crm.delivery_complaint.opened" },
+    "source": { "const": "crm" },
+    "schemaVersion": { "const": 1 },
+    "data": { "$ref": "#/$defs/data" }
+  },
+  "$defs": {
+    "data": {
+      "type": "object",
+      "required": ["crmCaseId", "caseVersion", "openedAt", "reasonCode", "affectedItems"],
+      "properties": {
+        "crmCaseId": {
+          "description": "ID del caso en CRM. Con `source` forma la clave funcional: un mismo `(source, crmCaseId)` nunca crea una segunda investigación.",
+          "$ref": "../envelope.schema.json#/$defs/entityId"
+        },
+        "caseVersion": {
+          "description": "Versión creciente del caso en CRM. Despachos ignora un mensaje con `caseVersion` menor o igual a la ya procesada para el mismo caso.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "dispatchId": {
+          "description": "ID del despacho individual (parada) en Despachos.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "trackingCode": {
+          "$ref": "dispatch.transfer.status_changed.schema.json#/$defs/trackingCode"
+        },
+        "salesOrderId": {
+          "description": "Pedido de venta, opcional. Solo valida la referencia; no identifica el despacho por sí solo.",
+          "$ref": "../envelope.schema.json#/$defs/entityId"
+        },
+        "reasonCode": {
+          "$ref": "#/$defs/complaintReasonCode"
+        },
+        "openedAt": {
+          "description": "Momento en que se abrió el caso en CRM.",
+          "$ref": "../envelope.schema.json#/$defs/dateTimeUtc"
+        },
+        "affectedItems": {
+          "description": "Identificación mínima de lo reclamado.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/affectedItem" }
+        }
+      },
+      "anyOf": [
+        { "properties": { "dispatchId": true }, "required": ["dispatchId"] },
+        { "properties": { "trackingCode": true }, "required": ["trackingCode"] }
+      ],
+      "additionalProperties": false
+    },
+    "complaintReasonCode": {
+      "description": "Código de motivo del catálogo de CRM (por ejemplo DAMAGED_ITEM). Es un patrón y no un enum: un motivo nuevo de CRM no debe mandar el reclamo al dead-letter.",
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{1,39}$"
+    },
+    "affectedItem": {
+      "description": "Producto o bulto afectado, identificado por `packageId` o por `itemCode`, exactamente uno.",
+      "type": "object",
+      "required": ["quantity"],
+      "properties": {
+        "packageId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
+        "itemCode": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "quantity": { "type": "integer", "minimum": 1 }
+      },
+      "oneOf": [
+        { "properties": { "packageId": true }, "required": ["packageId"] },
+        { "properties": { "itemCode": true }, "required": ["itemCode"] }
+      ],
+      "additionalProperties": false
+    }
+  }
+}

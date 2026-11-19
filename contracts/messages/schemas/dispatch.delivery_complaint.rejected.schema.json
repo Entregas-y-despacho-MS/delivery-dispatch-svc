@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.delivery-dispatch.local/messages/schemas/dispatch.delivery_complaint.rejected.schema.json",
+  "title": "dispatch.delivery_complaint.rejected",
+  "description": "Acuse asíncrono a CRM: el reclamo no abrió una investigación. `rejectionCode` es estable y CRM puede decidir sobre él. Un duplicado (`messageId` o `(source, crmCaseId)` repetido) o una `caseVersion` atrasada no generan este acuse: se ignoran sin revertir el caso vigente. Sin datos personales ni tracking_token.",
+  "type": "object",
+  "allOf": [{ "$ref": "../envelope.schema.json" }],
+  "properties": {
+    "type": { "const": "dispatch.delivery_complaint.rejected" },
+    "source": { "const": "dispatch" },
+    "schemaVersion": { "const": 1 },
+    "data": { "$ref": "#/$defs/data" }
+  },
+  "$defs": {
+    "data": {
+      "type": "object",
+      "required": ["correlationMessageId", "rejectionCode", "rejectedAt"],
+      "properties": {
+        "correlationMessageId": {
+          "description": "`messageId` del mensaje rechazado.",
+          "$ref": "../envelope.schema.json#/$defs/messageId"
+        },
+        "crmCaseId": {
+          "description": "Opcional: falta cuando el propio payload rechazado no lo traía o no era legible.",
+          "$ref": "../envelope.schema.json#/$defs/entityId"
+        },
+        "caseVersion": { "type": "integer", "minimum": 1 },
+        "rejectionCode": { "$ref": "#/$defs/rejectionCode" },
+        "field": {
+          "description": "Solo con `schema_invalid`: ruta JSON Pointer del primer campo que no validó (por ejemplo /data/affectedItems).",
+          "type": "string",
+          "maxLength": 200
+        },
+        "rejectedAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" }
+      },
+      "additionalProperties": false
+    },
+    "rejectionCode": {
+      "description": "schema_invalid: el mensaje no cumple el esquema. dispatch_not_found: la referencia no corresponde a ningún despacho. dispatch_not_delivered: el despacho existe pero no está `delivered`. dispatch_reference_mismatch: `dispatchId` y `trackingCode` llegan juntos y no son el mismo despacho. dispatch_reference_ambiguous: la referencia no resuelve una sola parada.",
+      "type": "string",
+      "enum": [
+        "schema_invalid",
+        "dispatch_not_found",
+        "dispatch_not_delivered",
+        "dispatch_reference_mismatch",
+        "dispatch_reference_ambiguous"
+      ]
+    }
+  }
+}

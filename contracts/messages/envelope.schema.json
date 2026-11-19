@@ -31,9 +31,9 @@
       "minimum": 1
     },
     "source": {
-      "description": "Servicio emisor.",
+      "description": "Servicio emisor. `crm` es el simulador de CRM (no hay integración con un CRM real).",
       "type": "string",
-      "enum": ["marketplace", "inventory", "procurement", "dispatch"]
+      "enum": ["marketplace", "inventory", "procurement", "dispatch", "crm"]
     },
     "dateTimeUtc": {
       "description": "Fecha y hora ISO-8601 en UTC (sufijo Z).",
