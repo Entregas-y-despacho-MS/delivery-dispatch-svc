@@ -1,0 +1,5 @@
+<h1>{{statusLabel}}</h1>
+<p>{{message}}</p>
+<p>Estado actualizado el {{occurredAt}}.</p>
+{{#if trackingCode}}<p>Código de seguimiento: {{trackingCode}}</p>{{/if}}
+{{#if trackingUrl}}<p><a href="{{trackingUrl}}">Ver estado de la entrega</a></p>{{else}}<p>Si necesitas ayuda, comunícate con Despacho indicando tu código de seguimiento.</p>{{/if}}
