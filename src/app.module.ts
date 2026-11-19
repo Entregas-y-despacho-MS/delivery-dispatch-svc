@@ -44,6 +44,7 @@ import { SchedulerModule } from './app/scheduler/scheduler.module.js';
 import { PlanningModule } from './app/planning/planning.module.js';
 import { PromiseFirmingModule } from './app/promise-firming/promise-firming.module.js';
 import { FinalReviewModule } from './app/final-review/final-review.module.js';
+import { CustomerStatusNoticesModule } from './app/customer-status-notices/customer-status-notices.module.js';
 import { RouteBatchCorrectionModule } from './app/route-batch-correction/route-batch-correction.module.js';
 import { DispatchRescheduleModule } from './app/dispatch-reschedule/dispatch-reschedule.module.js';
 import { RouteCutoffModule } from './app/route-cutoff/route-cutoff.module.js';
@@ -99,6 +100,7 @@ import { FleetReportsModule } from './app/fleet-reports/fleet-reports.module.js'
     RouteBatchCorrectionModule,
     DispatchRescheduleModule,
     FinalReviewModule,
+    CustomerStatusNoticesModule,
     UsersModule,
     RolesModule,
     PushTokensModule,
