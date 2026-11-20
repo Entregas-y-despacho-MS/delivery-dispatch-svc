@@ -20,6 +20,7 @@ import { ApiNotFound, ApiUnauthorized, ApiConflict, ApiBadRequests, ApiIdParam }
 import { FindAllUsersResponseDto } from '../dto/find-all-users-response.dto.js';
 import { AdminOnly, Roles } from '../../../../app/auth/decorators/index.js';
 import { RoleEnum } from '../../../../shared/enums/index.js';
+import { AuditAction } from '../../../audit/admin-audit-events/decorators/audit-action.decorator.js';
 
 /**
  * Error dictionary for this module:
@@ -114,6 +115,7 @@ export class UsersController {
     }
 
     @Patch(':id/role')
+    @AuditAction('user.role_changed', { bodyFields: ['roleId'] })
     @AdminOnly()
     @ApiOperation({
         summary:     'Change a user\'s role',
