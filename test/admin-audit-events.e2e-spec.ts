@@ -10,6 +10,7 @@ import { AppModule } from '../src/app.module.js';
 import { AppConfig } from '../src/config/services/app.config.js';
 import { HttpExceptionFilter } from '../src/shared/filters/index.js';
 import { hashPassword } from '../src/shared/utils/crypto.util.js';
+import { AdminAuditEventEntity } from '../src/modules/audit/admin-audit-events/entities/admin-audit-event.entity.js';
 
 interface AuditRow {
     admin_audit_event_id: string;
@@ -165,6 +166,36 @@ describe('admin audit events (RF-A35)', () => {
     it('generates a correlation id when the client sends none or a malformed one', async () => {
         const res = await request(app.getHttpServer()).get(`/${api}/health`).set('X-Request-Id', 'bad id with spaces');
         expect(res.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
+    });
+
+    it('matches the entity: same columns, types, lengths and nullability as the migration', async () => {
+        const columns: Array<{ column_name: string; udt_name: string; character_maximum_length: number | null; is_nullable: 'YES' | 'NO' }> =
+            await db.query(`SELECT column_name, udt_name, character_maximum_length, is_nullable FROM information_schema.columns WHERE table_name = 'admin_audit_events'`);
+        const udt: Record<string, string> = { uuid: 'uuid', int: 'int4', varchar: 'varchar', smallint: 'int2', inet: 'inet', jsonb: 'jsonb', timestamptz: 'timestamptz' };
+        const metadata = db.getMetadata(AdminAuditEventEntity);
+        expect(metadata.columns.map((column) => column.databaseName).sort()).toEqual(columns.map((column) => column.column_name).sort());
+        for (const column of metadata.columns) {
+            const real = columns.find((candidate) => candidate.column_name === column.databaseName)!;
+            expect({ column: column.databaseName, type: udt[String(column.type)], length: column.length ? Number(column.length) : null, nullable: column.isNullable })
+                .toEqual({ column: real.column_name, type: real.udt_name, length: real.character_maximum_length, nullable: real.is_nullable === 'YES' });
+        }
+    });
+
+    it('keeps the events of a user that is deleted, by the API or physically', async () => {
+        const hash = await hashPassword(password);
+        const [{ user_id: doomed }] = await db.query(
+            `INSERT INTO users (role_id, full_name, username, password_hash, requires_pwd_change) VALUES ($1, 'E2E audit doomed', $2, $3, false) RETURNING user_id`,
+            [roles.coordinator, `${prefix}-doomed`, hash],
+        );
+        const login = await request(app.getHttpServer()).post(`/${api}/auth/login`).send({ username: `${prefix}-doomed`, password });
+        const correlationId = correlation();
+        expect((await changeRole(login.body.accessToken as string, ids.target, { roleId: roles.admin }, correlationId)).status).toBe(403);
+
+        const deleted = await request(app.getHttpServer()).delete(`/${api}/users/${doomed}`).set('Authorization', `Bearer ${tokens.admin}`);
+        expect(deleted.status).toBeLessThan(300);
+        await db.query('DELETE FROM users WHERE user_id = $1', [doomed]);
+
+        expect(await eventsOf(correlationId)).toEqual([expect.objectContaining({ actor_user_id: doomed, actor_role: 'coordinator', result: 'denied' })]);
     });
 
     it('does not record handlers outside the catalog', async () => {

@@ -35,13 +35,33 @@ export interface AuditEventInput {
 
 /**
  * Keys that are never stored, whatever an action declares (defense in depth over the allow-list): secrets, and
- * personal data of users and customers. Catalog codes (`zoneCode`, `reasonCode`) are business data and stay.
+ * personal data of users and customers. A key is split into words (`newPassword` → new, password; `api_key` → api,
+ * key) and compared word by word, so `bypass` or `footprint` are not mistaken for a password or an OTP. Catalog
+ * codes (`zoneCode`, `reasonCode`) are business data and stay.
  */
-const SECRET_KEY = /pass(word)?|token|secret|signature|otp|authorization|cookie|hash|^(totp|verification|reset)?code$/i;
-const PERSONAL_KEY = /e-?mail|phone|full_?name|first_?name|last_?name|^name$|address|document|contact|recipient/i;
+const SECRET_WORDS = new Set([
+    'password', 'passwd', 'pass', 'pwd', 'passphrase', 'pin', 'token', 'jwt', 'secret', 'signature', 'otp', 'totp',
+    'authorization', 'cookie', 'hash', 'credential', 'credentials', 'apikey',
+]);
+const SECRET_PAIRS = new Set(['api key', 'access key', 'private key', 'secret key', 'client secret']);
+/** A `code` that is a one-time or verification code, not a catalog code. */
+const SECRET_CODE_PREFIXES = new Set(['totp', 'otp', 'verification', 'reset', 'auth', 'security', 'recovery', 'backup']);
+const PERSONAL_WORDS = new Set(['email', 'mail', 'phone', 'mobile', 'address', 'contact', 'recipient', 'document']);
+const PERSONAL_PAIRS = new Set(['full name', 'first name', 'last name', 'user name']);
 const MAX_METADATA_VALUE = 200;
 
-export const isForbiddenMetadataKey = (key: string): boolean => SECRET_KEY.test(key) || PERSONAL_KEY.test(key);
+const keyWords = (key: string): string[] =>
+    key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(/[^A-Za-z0-9]+/).filter(Boolean).map((word) => word.toLowerCase());
+
+export function isForbiddenMetadataKey(key: string): boolean {
+    const words = keyWords(key);
+    const pairs = words.slice(1).map((word, index) => `${words[index]} ${word}`);
+    if (words.some((word) => SECRET_WORDS.has(word) || PERSONAL_WORDS.has(word))) return true;
+    if (pairs.some((pair) => SECRET_PAIRS.has(pair) || PERSONAL_PAIRS.has(pair))) return true;
+    if (words.length === 1 && (words[0] === 'code' || words[0] === 'name')) return true;
+    const last = words.length - 1;
+    return words[last] === 'code' && last > 0 && SECRET_CODE_PREFIXES.has(words[last - 1]!);
+}
 
 /** Keeps only scalar values of allowed keys, trimmed to a bounded length. */
 export function redactMetadata(metadata: Record<string, unknown> | undefined): AdminAuditEvent['metadata'] {

@@ -1,16 +1,17 @@
 import { ConflictException } from '@nestjs/common';
-import { HTTP_CODE_METADATA } from '@nestjs/common/constants.js';
+import { HTTP_CODE_METADATA, REDIRECT_METADATA } from '@nestjs/common/constants.js';
 import { Reflector } from '@nestjs/core';
 import { lastValueFrom, of, throwError } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 import { AdminAuditInterceptor } from './admin-audit.interceptor.js';
 
-function setup(audited = true, method = 'PATCH', httpCode?: number) {
+function setup(audited = true, method = 'PATCH', httpCode?: number, response: object = { headersSent: false, statusCode: 200 }, redirect?: object) {
     const handler = (): void => undefined;
     if (httpCode) Reflect.defineMetadata(HTTP_CODE_METADATA, httpCode, handler);
+    if (redirect) Reflect.defineMetadata(REDIRECT_METADATA, redirect, handler);
     const context = {
         getHandler: () => handler,
-        switchToHttp: () => ({ getRequest: () => ({ method }) }),
+        switchToHttp: () => ({ getRequest: () => ({ method }), getResponse: () => response }),
     } as any;
     const audit = {
         auditedAction: vi.fn(() => (audited ? { action: 'user.role_changed' } : null)),
@@ -36,6 +37,22 @@ describe('AdminAuditInterceptor', () => {
         const noContent = setup(true, 'DELETE', 204);
         await lastValueFrom(noContent.interceptor.intercept(noContent.context, { handle: () => of(undefined) }));
         expect(noContent.audit.recordOutcome).toHaveBeenCalledWith(noContent.context, 204);
+    });
+
+    it('uses the status already sent by a handler that writes the response itself (@Res)', async () => {
+        const { interceptor, audit, context } = setup(true, 'POST', undefined, { headersSent: true, statusCode: 202 });
+        await lastValueFrom(interceptor.intercept(context, { handle: () => of(undefined) }));
+        expect(audit.recordOutcome).toHaveBeenCalledWith(context, 202);
+    });
+
+    it('uses the @Redirect status, 302 when it declares none', async () => {
+        const moved = setup(true, 'GET', undefined, undefined, { url: '/x', statusCode: 301 });
+        await lastValueFrom(moved.interceptor.intercept(moved.context, { handle: () => of(undefined) }));
+        expect(moved.audit.recordOutcome).toHaveBeenCalledWith(moved.context, 301);
+
+        const found = setup(true, 'GET', undefined, undefined, { url: '/x' });
+        await lastValueFrom(found.interceptor.intercept(found.context, { handle: () => of(undefined) }));
+        expect(found.audit.recordOutcome).toHaveBeenCalledWith(found.context, 302);
     });
 
     it('records the error and rethrows exactly the same error', async () => {

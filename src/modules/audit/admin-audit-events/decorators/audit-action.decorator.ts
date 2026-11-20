@@ -21,6 +21,7 @@ export interface AuditActionMetadata extends AuditActionOptions {
 /**
  * Marks a handler as a sensitive administrative action of the catalog: every call that reaches it, or is denied
  * before it (401/403), leaves an `admin_audit_events` row with actor, role, entity, result and correlation.
+ * With `@Res()` the handler must send the response before it returns, so the recorded status is the real one.
  */
 export const AuditAction = (action: AuditActionName, options: AuditActionOptions = {}): MethodDecorator => {
     const forbidden = (options.bodyFields ?? []).filter(isForbiddenMetadataKey);

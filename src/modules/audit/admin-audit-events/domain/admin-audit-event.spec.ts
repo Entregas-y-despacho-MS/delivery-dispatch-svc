@@ -45,6 +45,17 @@ describe('redactMetadata', () => {
         })).toEqual({ roleId: 3 });
     });
 
+    it('drops every kind of credential, whatever the naming style', () => {
+        const keys = ['pwd', 'passwd', 'apiKey', 'api_key', 'API-KEY', 'pin', 'userPin', 'credential', 'credentials', 'jwt', 'accessKey',
+            'privateKey', 'clientSecret', 'otpCode', 'resetCode', 'sessionToken', 'x-api-key', 'PASSWORD'];
+        expect(redactMetadata(Object.fromEntries(keys.map((key) => [key, 'v'])))).toEqual({});
+    });
+
+    it('keeps business keys that only contain a secret word inside another word', () => {
+        const keys = ['bypass', 'footprint', 'passengerCount', 'topic', 'shipping', 'mailboxSize', 'keyboardLayout', 'zoneName', 'statusCode'];
+        expect(Object.keys(redactMetadata(Object.fromEntries(keys.map((key) => [key, 1]))))).toEqual(keys);
+    });
+
     it('drops personal data but keeps catalog codes', () => {
         expect(redactMetadata({
             email: 'a@b.com', phone: '+591', fullName: 'Ana', name: 'Ana', contactEmail: 'x', deliveryAddress: 'Calle',
