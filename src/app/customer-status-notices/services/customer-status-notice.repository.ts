@@ -1,11 +1,35 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { STATUS_NOTICE_RESERVED_EVENT, STATUS_NOTICE_RESULT_EVENT } from '../customer-status-notice-events.js';
+import { ATTEMPT_LEASE_MINUTES } from '../domain/delivery-policy.js';
 import type { StatusNoticeDispatch } from '../domain/build-status-notice.js';
 
-/** Serialises the reservations of one dispatch (first key of the advisory lock). */
-const RESERVATION_LOCK_KEY = 39_001;
+/** A notification to register: everything `customer_notifications` keeps about the email before it is sent. */
+export interface NewNotification {
+    dispatchId: number;
+    notificationType: string;
+    /** Unique: the source event and the type of notification. A second registration of it is refused. */
+    idempotencyKey: string;
+    sourceEventKey: string;
+    dispatchStatus: string;
+    /** ISO instant of the transition. */
+    occurredAt: string;
+    /** Already normalized. */
+    recipient: string;
+    template: string;
+    templateVersion: number;
+}
+
+/** How a round of attempts ended. `retrying` and `exhausted` follow a transient failure. */
+export interface NotificationOutcome {
+    status: 'sent' | 'bounced' | 'retrying' | 'exhausted';
+    /** Attempts made in this round (they are added to the ones already counted). */
+    attemptsMade: number;
+    /** When the recovery task should try again; `null` unless `status` is `retrying`. */
+    nextAttemptAt: Date | null;
+    /** Sanitized; `null` when the email was sent. */
+    lastError: string | null;
+}
 
 @Injectable()
 export class CustomerStatusNoticeRepository {
@@ -37,35 +61,47 @@ export class CustomerStatusNoticeRepository {
     }
 
     /**
-     * Reserves the email of one transition (`dispatchId` + `status` + `occurredAt`) unless it is already reserved;
-     * true when this call reserved it. A repeated event has the same `occurredAt`, a new passage through the
-     * same status has another one. The advisory lock makes two concurrent copies of an event decide in turn.
+     * Registers the email and takes it for this process: the id of the new row, or `null` when the idempotency key is
+     * already registered (a second delivery of the same event, or a concurrent copy of it). The unique index decides,
+     * so no lock is needed. The row starts `sending` with a lease: if this process dies before it records the outcome,
+     * the recovery task finds the row once the lease runs out.
      */
-    async reserve(dispatchId: number, status: string, occurredAt: string): Promise<boolean> {
-        return await this.dataSource.transaction(async (manager) => {
-            await manager.query('SELECT pg_advisory_xact_lock($1::int, $2::int)', [RESERVATION_LOCK_KEY, dispatchId]);
-            const rows: unknown[] = await manager.query(
-                `INSERT INTO dispatch_events (dispatch_id, event_type, actor_type, reason, metadata)
-                 SELECT $1::int, $2::varchar, 'system', $3::text, $4::jsonb
-                  WHERE NOT EXISTS (
-                        SELECT 1 FROM dispatch_events e
-                         WHERE e.dispatch_id = $1::int AND e.event_type = $2::varchar
-                           AND e.metadata->>'status' = $5::text AND e.metadata->>'occurredAt' = $6::text)
-                 RETURNING dispatch_event_id`,
-                [
-                    dispatchId, STATUS_NOTICE_RESERVED_EVENT, `Status change email "${status}": handed to the mail transport`,
-                    JSON.stringify({ status, occurredAt }), status, occurredAt,
-                ],
-            );
-            return rows.length > 0;
-        });
+    async reserve(notification: NewNotification): Promise<number | null> {
+        const rows: Array<{ customer_notification_id: number }> = await this.dataSource.query(
+            `INSERT INTO customer_notifications
+                    (dispatch_id, notification_type, idempotency_key, source_event_key, dispatch_status, occurred_at,
+                     recipient, template, template_version, status, next_attempt_at, locked_until)
+             VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7, $8, $9, 'sending',
+                     NOW() + make_interval(mins => $10::int), NOW() + make_interval(mins => $10::int))
+             ON CONFLICT (idempotency_key) DO NOTHING
+             RETURNING customer_notification_id`,
+            [
+                notification.dispatchId, notification.notificationType, notification.idempotencyKey, notification.sourceEventKey,
+                notification.dispatchStatus, notification.occurredAt, notification.recipient, notification.template,
+                notification.templateVersion, ATTEMPT_LEASE_MINUTES,
+            ],
+        );
+        return rows[0]?.customer_notification_id ?? null;
     }
 
-    async recordResult(dispatchId: number, status: string, occurredAt: string, result: 'sent' | 'bounced' | 'failed'): Promise<void> {
-        await this.dataSource.query(
-            `INSERT INTO dispatch_events (dispatch_id, event_type, actor_type, reason, metadata)
-             VALUES ($1, $2, 'system', $3, $4::jsonb)`,
-            [dispatchId, STATUS_NOTICE_RESULT_EVENT, `Status change email "${status}": ${result}`, JSON.stringify({ status, occurredAt, result })],
+    /**
+     * Writes how a round of attempts ended and releases the lease. It only touches a row that is still `sending`, so
+     * a process that comes back after its lease ran out and another one took the row over cannot overwrite the result.
+     * True when this call wrote it.
+     */
+    async recordOutcome(notificationId: number, outcome: NotificationOutcome): Promise<boolean> {
+        const [rows]: [unknown[], number] = await this.dataSource.query(
+            `UPDATE customer_notifications
+                SET status = $2::varchar,
+                    attempts = attempts + $3::int,
+                    next_attempt_at = $4::timestamptz,
+                    locked_until = NULL,
+                    last_error = CASE WHEN $2::varchar = 'sent' THEN last_error ELSE $5::varchar END,
+                    sent_at = CASE WHEN $2::varchar = 'sent' THEN NOW() ELSE sent_at END
+              WHERE customer_notification_id = $1 AND status = 'sending'
+              RETURNING customer_notification_id`,
+            [notificationId, outcome.status, outcome.attemptsMade, outcome.nextAttemptAt, outcome.lastError],
         );
+        return rows.length > 0;
     }
 }

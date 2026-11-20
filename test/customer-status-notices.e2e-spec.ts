@@ -43,8 +43,8 @@ describe('customer status change email (ST-39.1, RF-U16)', () => {
         await events.emitAsync(DISPATCH_STATUS_CHANGED_EVENT, event);
         await new Promise((resolve) => setTimeout(resolve, 400));
     };
-    const noticeEvents = (id: number) => db.query(
-        `SELECT event_type, metadata FROM dispatch_events WHERE dispatch_id = $1 AND event_type LIKE 'customer_status_notice_%' ORDER BY dispatch_event_id`, [id]);
+    const notifications = (id: number) => db.query(
+        `SELECT * FROM customer_notifications WHERE dispatch_id = $1 ORDER BY customer_notification_id`, [id]);
 
     beforeAll(async () => {
         const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
@@ -60,6 +60,8 @@ describe('customer status change email (ST-39.1, RF-U16)', () => {
 
     afterAll(async () => {
         if (db?.isInitialized) await withEventPurge(db, { dispatchRefs: [`${sourcePrefix}%`] }, async (manager) => {
+            await manager.query(
+                'DELETE FROM customer_notifications WHERE dispatch_id IN (SELECT dispatch_id FROM dispatches WHERE source_order_ref LIKE $1)', [`${sourcePrefix}%`]);
             await manager.query('DELETE FROM dispatches WHERE source_order_ref LIKE $1', [`${sourcePrefix}%`]);
         });
         await app?.close();
@@ -80,10 +82,15 @@ describe('customer status change email (ST-39.1, RF-U16)', () => {
         expect(JSON.stringify(mail)).not.toMatch(/Secret street|\+59170000999/);
         expect(JSON.stringify(mail.metadata)).not.toMatch(/tok-|ana@example/);
 
-        const recorded = await noticeEvents(id);
-        expect(recorded.map((e: { event_type: string }) => e.event_type)).toEqual(['customer_status_notice_reserved', 'customer_status_notice_result']);
-        expect(recorded[1].metadata).toMatchObject({ status: 'out_for_delivery', result: 'sent' });
-        expect(JSON.stringify(recorded)).not.toMatch(/tok-|ana@example|Secret street/);
+        const recorded = await notifications(id);
+        expect(recorded).toHaveLength(1);
+        expect(recorded[0]).toMatchObject({
+            notification_type: 'status_change', dispatch_status: 'out_for_delivery', recipient: 'ana@example.com', template: 'status-change',
+            template_version: 1, status: 'sent', attempts: 1, next_attempt_at: null, locked_until: null, last_error: null,
+            idempotency_key: `status_change:${id}:out_for_delivery:2026-11-19T14:30:00.000Z`,
+        });
+        expect(recorded[0].sent_at).toBeInstanceOf(Date);
+        expect(JSON.stringify(recorded)).not.toMatch(/tok-|Secret street|\+59170000999/);
     });
 
     it('sends nothing for statuses outside the table, for the same status and for non-delivery dispatches', async () => {
@@ -96,7 +103,7 @@ describe('customer status change email (ST-39.1, RF-U16)', () => {
         await emit(changed(pickup, 'delivered', 'in_transit'));
         await emit(changed(999_999_999, 'delivered', 'in_transit'));
         expect(sent.length).toBe(before);
-        expect(await noticeEvents(id)).toHaveLength(0);
+        expect(await notifications(id)).toHaveLength(0);
     });
 
     it('does not repeat the email of the same transition, but sends the next passage through the same status', async () => {
@@ -109,6 +116,7 @@ describe('customer status change email (ST-39.1, RF-U16)', () => {
 
         await emit(changed(id, 'incident', 'in_transit', '2026-11-19T18:00:00.000Z'));
         expect(sent.length).toBe(before + 2);
+        expect(await notifications(id)).toHaveLength(2);
     });
 
     it('sends nothing without a recipient, and sends no link when there is no token or it expired', async () => {
@@ -148,11 +156,14 @@ describe('customer status change email (ST-39.1, RF-U16)', () => {
         expect(sent.length).toBe(before);
     });
 
-    it('records a bounce as the result', async () => {
+    it('records a bounce as final, after one attempt and with no retry scheduled', async () => {
         const id = await dispatch();
         mailStatus = 'bounced';
+        const before = sent.length;
         try { await emit(changed(id, 'not_delivered', 'in_transit')); } finally { mailStatus = 'sent'; }
-        const recorded = await noticeEvents(id);
-        expect(recorded[1].metadata).toMatchObject({ status: 'not_delivered', result: 'bounced' });
+        expect(sent.length).toBe(before + 1);
+        const [recorded] = await notifications(id);
+        expect(recorded).toMatchObject({ dispatch_status: 'not_delivered', status: 'bounced', attempts: 1, next_attempt_at: null });
+        expect(recorded.last_error).toBeTruthy();
     });
 });

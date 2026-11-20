@@ -45,6 +45,10 @@ describe('buildStatusNotice', () => {
         });
     });
 
+    it('normalizes the recipient: no surrounding spaces and lower case', () => {
+        expect(buildStatusNotice(event(), dispatch({ contactEmail: '  Ana.Perez@Example.COM ' }))!.recipient).toBe('ana.perez@example.com');
+    });
+
     it('never carries the tracking token or any other internal data', () => {
         const payload = JSON.stringify(buildStatusNotice(event(), dispatch({ trackingToken: 'secret-token' })));
         expect(payload).not.toContain('secret-token');

@@ -1,3 +1,4 @@
+import { normalizeRecipient } from './idempotency.js';
 import { STATUS_NOTICE_DISPATCH_TYPE, STATUS_NOTICE_TABLE, type StatusNoticeEntry } from './status-notice-table.js';
 
 /**
@@ -48,7 +49,7 @@ export function eligibleStatusNotice(event: Pick<StatusTransition, 'status' | 'p
 export function buildStatusNotice(event: StatusTransition, dispatch: StatusNoticeDispatch): StatusNotice | null {
     const entry = eligibleStatusNotice(event);
     if (!entry || dispatch.type !== STATUS_NOTICE_DISPATCH_TYPE) return null;
-    const recipient = dispatch.contactEmail?.trim();
+    const recipient = normalizeRecipient(dispatch.contactEmail ?? '');
     if (!recipient) return null;
     const occurred = new Date(event.updatedAt);
     if (Number.isNaN(occurred.getTime())) return null;

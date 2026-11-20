@@ -1,17 +1,32 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { MailerPort } from '../../../plugins/mailer/mailer.port.js';
-import { buildStatusNotice, eligibleStatusNotice, formatOccurredAt, trackingLink, type StatusTransition } from '../domain/build-status-notice.js';
-import { STATUS_NOTICE_DISPATCH_TYPE, STATUS_NOTICE_TEMPLATE } from '../domain/status-notice-table.js';
-import { CustomerStatusNoticeRepository } from './customer-status-notice.repository.js';
+import { MailerPort, type MailDeliveryResult } from '../../../plugins/mailer/mailer.port.js';
+import {
+    buildStatusNotice, eligibleStatusNotice, formatOccurredAt, trackingLink, type StatusNotice, type StatusNoticeDispatch, type StatusTransition,
+} from '../domain/build-status-notice.js';
+import { INLINE_MAX_ATTEMPTS, classifyDelivery, inlineBackoffMs, nextStepAfterFailure } from '../domain/delivery-policy.js';
+import { STATUS_CHANGE_NOTIFICATION, idempotencyKey, sourceEventKey } from '../domain/idempotency.js';
+import { sanitizeError } from '../domain/sanitize-error.js';
+import { STATUS_NOTICE_DISPATCH_TYPE, STATUS_NOTICE_TEMPLATE, STATUS_NOTICE_TEMPLATE_VERSION } from '../domain/status-notice-table.js';
+import { CustomerStatusNoticeRepository, type NotificationOutcome } from './customer-status-notice.repository.js';
 
+/** `failed` is a transient failure: the email stays registered as `retrying` (or `exhausted`) and the recovery task owns it. */
 export type StatusNoticeOutcome = 'sent' | 'bounced' | 'failed' | 'ignored' | 'no-recipient' | 'duplicate';
 
+const BOUNCE_ERROR = 'The mail provider rejected the recipient.';
+
+const delay = (milliseconds: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
 /**
- * The email owed to the customer when a delivery changes status (ST-39.1, RF-U16). Which transitions count is
- * the table in `status-notice-table.ts`. The email is reserved in `dispatch_events` before it is sent, so a
- * repeated event does not send it twice. Logs carry the dispatch id and the status only: never the address,
- * the phone or the tracking token.
+ * The email owed to the customer when a delivery changes status (ST-39.1, RF-U16), sent once and recoverable (ST-39.2).
+ *
+ * The email is registered in `customer_notifications` before it is sent, under an idempotency key made of the source
+ * event and the type of notification: a repeated or concurrent delivery of the same event finds the key taken and
+ * sends nothing. The send is attempted up to three times right away (the push retry policy); a transient failure
+ * (`failed`) that survives them stays `retrying` for the recovery task, and a permanent one (`bounced`) is not retried.
+ * Nothing here ever fails the status transition that originated the email: it runs after the commit and its errors
+ * are recorded, not thrown. Logs carry the dispatch id and the status only: never the address, the phone, the
+ * tracking token or the provider's error.
  */
 @Injectable()
 export class CustomerStatusNoticeService {
@@ -39,7 +54,7 @@ export class CustomerStatusNoticeService {
         });
     }
 
-    async handle(event: StatusTransition, now: Date = new Date()): Promise<StatusNoticeOutcome> {
+    async handle(event: StatusTransition, now: Date = new Date(), wait: (milliseconds: number) => Promise<void> = delay): Promise<StatusNoticeOutcome> {
         if (!eligibleStatusNotice(event)) return 'ignored';
         const dispatch = await this.repository.findDispatch(event.dispatchId);
         if (!dispatch || dispatch.type !== STATUS_NOTICE_DISPATCH_TYPE) return 'ignored';
@@ -48,11 +63,71 @@ export class CustomerStatusNoticeService {
             this.logger.warn({ event: 'status_notice_skipped', dispatchId: event.dispatchId, status: event.status });
             return 'no-recipient';
         }
-        if (!(await this.repository.reserve(notice.dispatchId, notice.status, notice.occurredAt))) return 'duplicate';
 
-        let result: 'sent' | 'bounced' | 'failed' = 'failed';
+        const source = sourceEventKey(notice.dispatchId, notice.status, notice.occurredAt);
+        const notificationId = await this.repository.reserve({
+            dispatchId: notice.dispatchId,
+            notificationType: STATUS_CHANGE_NOTIFICATION,
+            idempotencyKey: idempotencyKey(STATUS_CHANGE_NOTIFICATION, source),
+            sourceEventKey: source,
+            dispatchStatus: notice.status,
+            occurredAt: notice.occurredAt,
+            recipient: notice.recipient,
+            template: STATUS_NOTICE_TEMPLATE,
+            templateVersion: STATUS_NOTICE_TEMPLATE_VERSION,
+        });
+        if (notificationId === null) return 'duplicate';
+
+        return await this.attempt(notificationId, notice, dispatch, { attemptsBefore: 0, maxAttempts: INLINE_MAX_ATTEMPTS, now, wait });
+    }
+
+    /**
+     * Sends a registered email, at most `maxAttempts` times in a row, and records how it ended. A transient failure
+     * waits the inline backoff before the next attempt. The bookkeeping never throws: if the outcome cannot be
+     * written the row keeps its lease and the recovery task retries it when the lease runs out.
+     */
+    private async attempt(
+        notificationId: number,
+        notice: StatusNotice,
+        dispatch: StatusNoticeDispatch,
+        run: { attemptsBefore: number; maxAttempts: number; now: Date; wait: (milliseconds: number) => Promise<void> },
+    ): Promise<StatusNoticeOutcome> {
+        let result: MailDeliveryResult = { status: 'failed' };
+        let attemptsMade = 0;
+        while (attemptsMade < run.maxAttempts) {
+            result = await this.sendOnce(notificationId, notice, dispatch, run.now);
+            attemptsMade += 1;
+            if (classifyDelivery(result.status) !== 'transient') break;
+            this.logger.warn({ event: 'status_notice_send_failed', dispatchId: notice.dispatchId, status: notice.status, attempt: run.attemptsBefore + attemptsMade });
+            if (attemptsMade < run.maxAttempts) await run.wait(inlineBackoffMs(attemptsMade));
+        }
+
+        const outcome = this.outcomeOf(result, run.attemptsBefore, attemptsMade, run.now);
         try {
-            const delivery = await this.mailer.send({
+            if (!(await this.repository.recordOutcome(notificationId, outcome))) {
+                this.logger.warn({ event: 'status_notice_outcome_superseded', dispatchId: notice.dispatchId, status: notice.status });
+            }
+        } catch {
+            this.logger.error({ event: 'status_notice_outcome_not_recorded', dispatchId: notice.dispatchId, status: notice.status, outcome: outcome.status });
+        }
+        if (outcome.status === 'retrying' || outcome.status === 'exhausted') {
+            this.logger.warn({ event: `status_notice_${outcome.status}`, dispatchId: notice.dispatchId, status: notice.status });
+        }
+        return outcome.status === 'sent' ? 'sent' : outcome.status === 'bounced' ? 'bounced' : 'failed';
+    }
+
+    private outcomeOf(result: MailDeliveryResult, attemptsBefore: number, attemptsMade: number, now: Date): NotificationOutcome {
+        const delivery = classifyDelivery(result.status);
+        if (delivery === 'sent') return { status: 'sent', attemptsMade, nextAttemptAt: null, lastError: null };
+        if (delivery === 'permanent') return { status: 'bounced', attemptsMade, nextAttemptAt: null, lastError: sanitizeError(result.error ?? BOUNCE_ERROR) };
+        const next = nextStepAfterFailure(attemptsBefore + attemptsMade, now);
+        return { status: next.status, attemptsMade, nextAttemptAt: next.nextAttemptAt, lastError: sanitizeError(result.error) };
+    }
+
+    /** One attempt with the provider. A thrown error is a transient failure like any other. */
+    private async sendOnce(notificationId: number, notice: StatusNotice, dispatch: StatusNoticeDispatch, now: Date): Promise<MailDeliveryResult> {
+        try {
+            return await this.mailer.send({
                 to: notice.recipient,
                 subject: notice.subject,
                 template: STATUS_NOTICE_TEMPLATE,
@@ -63,17 +138,10 @@ export class CustomerStatusNoticeService {
                     trackingCode: notice.trackingCode ?? '',
                     trackingUrl: trackingLink(dispatch, this.webUrl, now),
                 },
-                metadata: { dispatchId: notice.dispatchId, template: STATUS_NOTICE_TEMPLATE, status: notice.status },
+                metadata: { dispatchId: notice.dispatchId, template: STATUS_NOTICE_TEMPLATE, status: notice.status, customerNotificationId: notificationId },
             });
-            result = delivery.status;
-        } catch {
-            this.logger.warn({ event: 'status_notice_send_failed', dispatchId: notice.dispatchId, status: notice.status });
+        } catch (error) {
+            return { status: 'failed', error: sanitizeError(error) };
         }
-        try {
-            await this.repository.recordResult(notice.dispatchId, notice.status, notice.occurredAt, result);
-        } catch {
-            this.logger.error({ event: 'status_notice_result_not_recorded', dispatchId: notice.dispatchId, status: notice.status, result });
-        }
-        return result;
     }
 }
