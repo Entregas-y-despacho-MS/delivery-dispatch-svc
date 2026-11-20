@@ -18,7 +18,7 @@
       "properties": {
         "salesOrderId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
         "purchaseOrderId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
-        "trackingCode": { "$ref": "dispatch.transfer.status_changed.schema.json#/$defs/trackingCode" },
+        "trackingCode": { "$ref": "../envelope.schema.json#/$defs/trackingCode" },
         "incidentId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
         "reasonCode": { "$ref": "dispatch.transfer.status_changed.schema.json#/$defs/reasonCode" },
         "reportedAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },

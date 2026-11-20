@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import Ajv2020Module from 'ajv/dist/2020.js';
 import addFormatsModule from 'ajv-formats';
 
@@ -7,6 +7,7 @@ const ROOT = resolve(import.meta.dirname, '../..');
 const CONTRACTS = resolve(ROOT, 'contracts/messages');
 const SCHEMAS_DIR = resolve(CONTRACTS, 'schemas');
 const EXAMPLES_DIR = resolve(CONTRACTS, 'examples');
+const INVALID_EXAMPLES_DIR = resolve(EXAMPLES_DIR, 'invalid');
 const FIXTURES_DIR = resolve(ROOT, 'test/simulator/fixtures');
 
 const Ajv2020 = Ajv2020Module.default ?? Ajv2020Module;
@@ -22,43 +23,21 @@ const jsonFiles = (directory, suffix) =>
 const topicNames = (directory, suffix) =>
   jsonFiles(directory, suffix).map((file) => file.slice(0, -suffix.length));
 
-const catalogPath = () => {
-  const configuredPath = process.env.CONTRACTS_CATALOG_PATH;
-  if (configuredPath) {
-    const path = resolve(configuredPath);
-    if (!existsSync(path)) {
-      throw new Error(`CONTRACTS_CATALOG_PATH no existe: ${path}`);
-    }
-    return path;
-  }
-
-  // Search the checkout and its ancestors for either supported catalog layout.
-  let parent = ROOT;
-  for (let level = 0; level <= 5; level += 1) {
-    const candidates = [
-      resolve(parent, 'docs/interoperabilidad-y-flujos.md'),
-      resolve(parent, 'delivery-dispatch-docs/interoperabilidad-y-flujos.md'),
-    ];
-    const candidate = candidates.find(existsSync);
-    if (candidate) return candidate;
-    parent = dirname(parent);
-  }
-
-  throw new Error(
-    'No se encontró el catálogo interoperabilidad-y-flujos.md en docs/ ni delivery-dispatch-docs/. ' +
-      'Configura CONTRACTS_CATALOG_PATH con la ruta del catálogo.',
-  );
-};
+// El catálogo es la sección «Mapa tópico → archivos» del README de contracts/messages: vive en este
+// mismo repositorio, así que no depende de ningún otro checkout.
+const CATALOG_PATH = resolve(CONTRACTS, 'README.md');
+const CATALOG_SECTION = '## Mapa tópico → archivos';
 
 const catalogTopics = (path) => {
   const text = readFileSync(path, 'utf8');
-  const start = text.indexOf('### 1.4.');
-  const end = text.indexOf('### 1.5.', start + 1);
-  if (start < 0 || end < 0) {
-    throw new Error(`No se encontró la sección 1.4 del catálogo: ${path}`);
+  const start = text.indexOf(CATALOG_SECTION);
+  if (start < 0) {
+    throw new Error(`No se encontró la sección «${CATALOG_SECTION.slice(3)}» en ${path}`);
   }
+  const next = text.indexOf('\n## ', start + CATALOG_SECTION.length);
+  const section = text.slice(start, next < 0 ? undefined : next);
 
-  return [...text.slice(start, end).matchAll(/^\| `([a-z_]+\.[a-z_]+\.[a-z_]+)` \|/gm)]
+  return [...section.matchAll(/^\| `([a-z_]+\.[a-z_]+\.[a-z_]+)` \|/gm)]
     .map((match) => match[1])
     .sort();
 };
@@ -89,7 +68,7 @@ const checkContracts = () => {
   let checked = 0;
   const schemaTopics = topicNames(SCHEMAS_DIR, '.schema.json');
   const exampleTopics = topicNames(EXAMPLES_DIR, '.example.json');
-  const catalog = catalogTopics(catalogPath());
+  const catalog = catalogTopics(CATALOG_PATH);
 
   if (schemaTopics.length === 0) errors.push(`No hay esquemas en ${SCHEMAS_DIR}`);
   errors.push(...reportDifference('Esquemas y ejemplos', schemaTopics, exampleTopics));
@@ -141,6 +120,43 @@ const checkContracts = () => {
       }
     } catch (error) {
       errors.push(`${examplePath}: ${error.message}`);
+    }
+  }
+
+  // Ejemplos inválidos: { description, expectedErrorPath, message }. Cada uno debe fallar y señalar
+  // el campo esperado (un error en esa ruta o debajo de ella), no fallar por cualquier otro motivo.
+  const invalidFiles = existsSync(INVALID_EXAMPLES_DIR) ? jsonFiles(INVALID_EXAMPLES_DIR, '.invalid.json') : [];
+  for (const file of invalidFiles) {
+    const invalidPath = resolve(INVALID_EXAMPLES_DIR, file);
+    try {
+      const { expectedErrorPath, message } = readJson(invalidPath);
+      const topic = message?.type;
+      if (typeof expectedErrorPath !== 'string' || !expectedErrorPath.startsWith('/')) {
+        errors.push(`${invalidPath}: expectedErrorPath debe ser una ruta JSON Pointer (por ejemplo /data/trackingCode)`);
+        continue;
+      }
+      if (typeof topic !== 'string' || !schemaTopics.includes(topic) || !file.startsWith(`${topic}.`)) {
+        errors.push(`${invalidPath}: el nombre debe empezar con un tópico existente igual a message.type`);
+        continue;
+      }
+
+      const validate = ajv.getSchema(readJson(resolve(SCHEMAS_DIR, `${topic}.schema.json`)).$id);
+      checked += 1;
+      if (validate(message)) {
+        errors.push(`${invalidPath}: debía ser inválido`);
+        continue;
+      }
+      const paths = (validate.errors ?? []).map((error) => error.instancePath || '/');
+      const pointsAtField = paths.some(
+        (path) => path === expectedErrorPath || path.startsWith(`${expectedErrorPath}/`),
+      );
+      if (!pointsAtField) {
+        errors.push(
+          `${invalidPath}: el error debía señalar ${expectedErrorPath} y señaló ${describeAjvErrors(validate.errors)}`,
+        );
+      }
+    } catch (error) {
+      errors.push(`${invalidPath}: ${error.message}`);
     }
   }
 

@@ -1,0 +1,17 @@
+{
+  "description": "caseVersion sin crmCaseId: la versión solo tiene sentido junto al caso.",
+  "expectedErrorPath": "/data",
+  "message": {
+    "messageId": "019a8f2d-0c88-7a53-b2e4-91d7f0c6e215",
+    "type": "dispatch.delivery_complaint.rejected",
+    "schemaVersion": 1,
+    "source": "dispatch",
+    "occurredAt": "2026-11-18T14:10:01Z",
+    "data": {
+      "correlationMessageId": "019a8f2c-f3b1-7e05-a6d8-4c2e9b1f7a36",
+      "caseVersion": 1,
+      "rejectionCode": "dispatch_not_delivered",
+      "rejectedAt": "2026-11-18T14:10:01Z"
+    }
+  }
+}

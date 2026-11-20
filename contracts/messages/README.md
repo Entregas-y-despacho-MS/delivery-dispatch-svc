@@ -1,6 +1,6 @@
 # Contratos de mensajes (Pub/Sub)
 
-JSON Schemas y ejemplos de los mensajes que Despachos intercambia con el ERP (Marketplace, Inventarios y Compras) sobre Google Cloud Pub/Sub. La fuente de verdad del catálogo es `../delivery-dispatch-docs/interoperabilidad-y-flujos.md`, sección 1.4.
+JSON Schemas y ejemplos de los mensajes que Despachos intercambia con el ERP (Marketplace, Inventarios y Compras) y con el simulador de CRM sobre Google Cloud Pub/Sub. El catálogo de tópicos es la sección [Mapa tópico → archivos](#mapa-tópico--archivos) de este documento.
 
 ## Estructura
 
@@ -9,8 +9,11 @@ contracts/messages/
 ├── README.md                          # este documento
 ├── envelope.schema.json               # sobre común (1.3) y definiciones reutilizables ($defs)
 ├── schemas/<topico>.schema.json       # un esquema por tópico
-└── examples/<topico>.example.json     # un mensaje válido por tópico
+├── examples/<topico>.example.json     # un mensaje válido por tópico
+└── examples/invalid/<topico>.<caso>.invalid.json   # mensajes inválidos a propósito (opcional)
 ```
+
+Un ejemplo inválido tiene la forma `{ description, expectedErrorPath, message }`. El verificador exige que `message` no valide **y** que uno de sus errores señale `expectedErrorPath` (esa ruta JSON Pointer o una debajo de ella): así se comprueba que el esquema rechaza el campo correcto y no falla por otro motivo.
 
 El nombre de archivo es exactamente el nombre del tópico, por ejemplo `inventory.shipment.ready.schema.json`.
 
@@ -34,22 +37,22 @@ Un mensaje que no valida no crea ni modifica registros: se envía al tópico de 
 
 Se referencian con `$ref` a `envelope.schema.json#/$defs/<nombre>`:
 
-`messageId`, `topic`, `schemaVersion`, `source`, `dateTimeUtc`, `recordVersion`, `entityId`, `geoPoint`, `package`, `evidencePolicy`, `handlingCondition`.
+`messageId`, `topic`, `schemaVersion`, `source`, `dateTimeUtc`, `recordVersion`, `entityId`, `trackingCode`, `geoPoint`, `package`, `evidencePolicy`, `handlingCondition`.
+
+`trackingCode` vive en el sobre para que ningún tópico dependa del esquema de otro.
 
 ## Cómo agregar o cambiar un tópico
 
-1. Agregar la fila al catálogo de `interoperabilidad-y-flujos.md` (sección 1.4).
+1. Agregar la fila del tópico en [Mapa tópico → archivos](#mapa-tópico--archivos).
 2. Crear `schemas/<topico>.schema.json` y `examples/<topico>.example.json`.
 3. Si el cambio es incompatible con la versión vigente, subir `schemaVersion` en esquema y ejemplo.
-4. Correr `npm run contracts:check` y `npm test`: el verificador compara catálogo, esquemas, ejemplos y fixtures del simulador; `npm test` lo ejecuta antes de Vitest.
+4. Correr `npm run contracts:check` y `npm test`: el verificador compara el catálogo de este README, los esquemas, los ejemplos (válidos e inválidos) y los fixtures del simulador; `npm test` lo ejecuta antes de Vitest.
 
-El catálogo se busca como `docs/interoperabilidad-y-flujos.md` en el checkout o en sus directorios superiores, y también en el repositorio hermano `delivery-dispatch-docs` (desde un checkout normal o un worktree). Si está en otra ubicación, se puede indicar con `CONTRACTS_CATALOG_PATH` (ruta absoluta al archivo `interoperabilidad-y-flujos.md`). Si no se encuentra, la verificación falla con una instrucción para configurarlo.
-
-El catálogo y esta carpeta se mantienen sincronizados: un tópico existe en ambos o en ninguno.
+El catálogo y esta carpeta se mantienen sincronizados: un tópico está en la tabla de [Mapa tópico → archivos](#mapa-tópico--archivos) y tiene esquema y ejemplo, o no está en ninguno de los dos. El catálogo vive en este repositorio y no depende de ningún otro.
 
 ## Mapa tópico → archivos
 
-Cada fila corresponde a `schemas/<tópico>.schema.json` y `examples/<tópico>.example.json`. La descripción de cada tópico está en el catálogo (sección 1.4 del documento).
+Este es el catálogo de tópicos. Cada fila corresponde a `schemas/<tópico>.schema.json` y `examples/<tópico>.example.json`; el verificador lee las filas de esta sección (hasta el siguiente título de nivel 2).
 
 **Mensajes que recibe Despachos**
 
@@ -66,6 +69,7 @@ Cada fila corresponde a `schemas/<tópico>.schema.json` y `examples/<tópico>.ex
 | `procurement.pickup.requested` | `procurement` | Crea un `supplier_pickup`; dirección, almacén y horario opcionales: si falta uno imprescindible, queda en `address_review`. Estimaciones en kg y m³; `transportConditions` admite condiciones especiales como fragilidad o temperatura. |
 | `procurement.pickup.updated` | `procurement` | Cada bloque enviado reemplaza completo al anterior; exige al menos un cambio. Solo se aplica a despachos `pending`, `address_review` o `scheduled`; `transportConditions` reemplaza la lista anterior al enviarse. |
 | `procurement.pickup.cancelled` | `procurement` | `cancelledAt` obligatorio. Solo cancela despachos `pending`, `address_review` o `scheduled`; cambios fuera de esos estados se registran y generan una alerta al coordinador. |
+| `crm.delivery_complaint.opened` | `crm` | Simulador de CRM. `dispatchId` o `trackingCode` obligatorio (al menos uno). `reasonCode` es un patrón del catálogo de CRM. Sin datos personales. Ver «Reclamos de CRM» más abajo. |
 
 **Mensajes que publica Despachos**
 
@@ -77,6 +81,28 @@ Cada fila corresponde a `schemas/<tópico>.schema.json` y `examples/<tópico>.ex
 | `dispatch.sync.requested` | Marketplace / Inventarios | `entityType`: `sales_order` va a Marketplace y `shipment` va a Inventarios. Reintentos cada 15 minutos, máximo 3 por pedido. |
 | `dispatch.transfer.status_changed` | Marketplace / Compras / Inventarios | Exactamente uno de `salesOrderId` o `purchaseOrderId`. `result` e `items` (solo ítems con diferencias) cuando lo origina una recepción de Almacén. Sin datos personales ni `tracking_token`. |
 | `dispatch.transfer.incident_reported` | Marketplace / Compras | `reasonCode` del catálogo `incident_reasons` y `nextStep` decidido por Despacho. |
+| `dispatch.delivery_complaint.received` | CRM (simulador) | Acuse de un reclamo persistido; `correlationMessageId` es el `messageId` del reclamo. |
+| `dispatch.delivery_complaint.rejected` | CRM (simulador) | Acuse de rechazo con `rejectionCode` estable (enum cerrado). `field` solo con `schema_invalid`; `caseVersion` solo junto a `crmCaseId`. |
+
+### Reclamos de CRM (`crm.delivery_complaint.*` / `dispatch.delivery_complaint.*`)
+
+No hay integración con un CRM real: un simulador publica el reclamo y Despachos responde con un acuse asíncrono por Pub/Sub, nunca por HTTP.
+
+- **Referencia al despacho.** `dispatchId` o `trackingCode`, al menos uno (el esquema lo exige). Si llegan los dos deben ser el mismo despacho; esa coincidencia la valida el consumidor (`dispatch_reference_mismatch`), no el esquema. `salesOrderId` solo ayuda a validar: si un pedido tiene varios despachos no elige ninguno (`dispatch_reference_ambiguous`).
+- **Elegibilidad.** Se acepta si el despacho individual está `delivered`, aunque su lote siga `in_execution`. Consumir un reclamo no cambia el estado del despacho ni del lote.
+- **Idempotencia.** `messageId` repetido: se repite el mismo `received`, sin crear otro caso. `(source, crmCaseId)` ya registrado o `caseVersion` menor o igual a la vigente: se ignora sin acuse y sin revertir el caso.
+- **`received`** significa persistencia idempotente en Despachos, no confirmación comercial ni aprobación de RMA.
+- **`rejectionCode`:**
+
+  | Código | Cuándo |
+  |---|---|
+  | `schema_invalid` | El mensaje no cumple el esquema (además va a `crm.delivery_complaint.opened.dead-letter`). `field` señala el primer campo inválido. |
+  | `dispatch_not_found` | La referencia no corresponde a ningún despacho. |
+  | `dispatch_not_delivered` | El despacho existe pero no está `delivered`. |
+  | `dispatch_reference_mismatch` | `dispatchId` y `trackingCode` llegan juntos y no son el mismo despacho. |
+  | `dispatch_reference_ambiguous` | La referencia no resuelve una sola parada. |
+
+- **Privacidad.** Ni el reclamo ni los acuses llevan datos personales, conversación comercial, credenciales ni evidencia binaria; la evidencia se consulta por referencia autorizada.
 
 ## Publicación y entrega
 

@@ -17,7 +17,7 @@
       "required": ["purchaseOrderId", "trackingCode", "recordVersion", "updatedAt", "pickupWindow"],
       "properties": {
         "purchaseOrderId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
-        "trackingCode": { "$ref": "dispatch.transfer.status_changed.schema.json#/$defs/trackingCode" },
+        "trackingCode": { "$ref": "../envelope.schema.json#/$defs/trackingCode" },
         "recordVersion": { "$ref": "../envelope.schema.json#/$defs/recordVersion" },
         "updatedAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
         "pickupWindow": { "$ref": "procurement.pickup.requested.schema.json#/$defs/pickupWindow" }
