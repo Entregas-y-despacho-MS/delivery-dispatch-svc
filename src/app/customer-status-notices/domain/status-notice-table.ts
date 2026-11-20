@@ -13,6 +13,12 @@ export const STATUS_NOTICE_DISPATCH_TYPE = 'delivery';
 export const STATUS_NOTICE_TEMPLATE = 'status-change';
 
 /**
+ * Version of that template, recorded with every send (ST-39.2). Raise it whenever the wording or the data the
+ * template shows changes, so a delivery can be traced to what the customer actually read.
+ */
+export const STATUS_NOTICE_TEMPLATE_VERSION = 1;
+
+/**
  * Approved status → email table. `scheduled` is deliberately absent (the promise email already covers it)
  * and so is every internal status (`pending`, `in_planning`, `assigned`, `address_review`, pickup statuses).
  * The incident / reschedule reason is internal and is never part of the email.
