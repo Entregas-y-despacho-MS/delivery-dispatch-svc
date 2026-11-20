@@ -80,7 +80,7 @@ export class CustomerStatusNoticeService {
         }
 
         const source = sourceEventKey(notice.dispatchId, notice.status, notice.occurredAt);
-        const notificationId = await this.repository.reserve({
+        const reserved = await this.repository.reserve({
             dispatchId: notice.dispatchId,
             notificationType: STATUS_CHANGE_NOTIFICATION,
             idempotencyKey: idempotencyKey(STATUS_CHANGE_NOTIFICATION, source),
@@ -91,9 +91,9 @@ export class CustomerStatusNoticeService {
             template: STATUS_NOTICE_TEMPLATE,
             templateVersion: STATUS_NOTICE_TEMPLATE_VERSION,
         });
-        if (notificationId === null) return 'duplicate';
+        if (!reserved) return 'duplicate';
 
-        return await this.attempt(notificationId, notice, dispatch, { attemptsBefore: 0, maxAttempts: INLINE_MAX_ATTEMPTS, now, wait });
+        return await this.attempt(reserved, notice, dispatch, { attemptsBefore: 0, maxAttempts: INLINE_MAX_ATTEMPTS, now, wait });
     }
 
     /**
@@ -101,14 +101,20 @@ export class CustomerStatusNoticeService {
      * attempt reached, `sending` with a lease that ran out — and gives each one a single attempt, with the same
      * recipient and status it was registered with. An email that used up its attempts, or whose status is no
      * longer notifiable, is closed as `exhausted` without sending. One bad row never stops the rest.
+     *
+     * The rows are taken **one at a time**, each right before it is sent: a batch taken at once would start every
+     * lease together, and with a slow provider the last rows of the batch would see theirs run out while they wait
+     * their turn (and the next run would take them again and send them twice). `now` is for tests; a real run reads
+     * the clock for each row.
      */
-    async recoverDue(now: Date = new Date(), limit: number = RECOVERY_BATCH_SIZE): Promise<RecoverySummary> {
+    async recoverDue(now?: Date, limit: number = RECOVERY_BATCH_SIZE): Promise<RecoverySummary> {
         const summary: RecoverySummary = { claimed: 0, sent: 0, bounced: 0, failed: 0, exhausted: 0, errors: 0 };
-        const claimed = await this.repository.claimDue(limit);
-        summary.claimed = claimed.length;
-        for (const row of claimed) {
+        for (let taken = 0; taken < limit; taken += 1) {
+            const [row] = await this.repository.claimDue(1);
+            if (!row) break;
+            summary.claimed += 1;
             try {
-                const outcome = await this.recoverOne(row, now);
+                const outcome = await this.recoverOne(row, now ?? new Date());
                 summary[outcome] += 1;
             } catch {
                 summary.errors += 1;
@@ -123,14 +129,14 @@ export class CustomerStatusNoticeService {
         const notice = dispatch ? rebuildStatusNotice(row, dispatch) : null;
         if (!dispatch || !notice) return await this.close(row, 'The status of this email can no longer be notified.');
         if (row.attempts >= MAX_TOTAL_ATTEMPTS) return await this.close(row, 'The attempts of this email ran out.');
-        const outcome = await this.attempt(row.notificationId, notice, dispatch, { attemptsBefore: row.attempts, maxAttempts: 1, now, wait: delay });
+        const outcome = await this.attempt(row, notice, dispatch, { attemptsBefore: row.attempts, maxAttempts: 1, now, wait: delay });
         if (outcome === 'sent' || outcome === 'bounced') return outcome;
         return 'failed';
     }
 
     /** Ends an email that cannot or must not be sent again. */
     private async close(row: ClaimedNotification, reason: string): Promise<'exhausted'> {
-        await this.repository.recordOutcome(row.notificationId, { status: 'exhausted', attemptsMade: 0, nextAttemptAt: null, lastError: sanitizeError(reason) });
+        await this.repository.recordOutcome(row.notificationId, row.lease, { status: 'exhausted', attemptsMade: 0, nextAttemptAt: null, lastError: sanitizeError(reason) });
         this.logger.warn({ event: 'status_notice_exhausted', dispatchId: row.dispatchId, status: row.dispatchStatus });
         return 'exhausted';
     }
@@ -141,7 +147,7 @@ export class CustomerStatusNoticeService {
      * written the row keeps its lease and the recovery task retries it when the lease runs out.
      */
     private async attempt(
-        notificationId: number,
+        owned: { notificationId: number; lease: string },
         notice: StatusNotice,
         dispatch: StatusNoticeDispatch,
         run: { attemptsBefore: number; maxAttempts: number; now: Date; wait: (milliseconds: number) => Promise<void> },
@@ -149,7 +155,7 @@ export class CustomerStatusNoticeService {
         let result: MailDeliveryResult = { status: 'failed' };
         let attemptsMade = 0;
         while (attemptsMade < run.maxAttempts) {
-            result = await this.sendOnce(notificationId, notice, dispatch, run.now);
+            result = await this.sendOnce(owned.notificationId, notice, dispatch, run.now);
             attemptsMade += 1;
             if (classifyDelivery(result.status) !== 'transient') break;
             this.logger.warn({ event: 'status_notice_send_failed', dispatchId: notice.dispatchId, status: notice.status, attempt: run.attemptsBefore + attemptsMade });
@@ -158,7 +164,7 @@ export class CustomerStatusNoticeService {
 
         const outcome = this.outcomeOf(result, run.attemptsBefore, attemptsMade, run.now);
         try {
-            if (!(await this.repository.recordOutcome(notificationId, outcome))) {
+            if (!(await this.repository.recordOutcome(owned.notificationId, owned.lease, outcome))) {
                 this.logger.warn({ event: 'status_notice_outcome_superseded', dispatchId: notice.dispatchId, status: notice.status });
             }
         } catch {

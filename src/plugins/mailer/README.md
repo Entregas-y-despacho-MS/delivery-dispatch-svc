@@ -52,7 +52,13 @@ recoverable**:
 - A provider that is down never reverts or delays the status change: the email runs after the
   transition committed and its failure is recorded, not thrown.
 - If the process dies while sending, the row keeps a 10 minute lease; when it runs out, the recovery
-  task sends it again. In that rare case an email that had already left can be sent twice.
+  task sends it again. In that rare case an email that had already left can be sent twice. The lease
+  is also the proof of ownership: a process that comes back after losing it cannot overwrite the
+  result of the one that took the row over. The recovery task takes one row at a time, each right
+  before sending it, so a slow provider cannot make the leases of the rest of the batch run out.
+- The status change module and the recovery task log the dispatch id and the status only. The
+  transports themselves (`smtp`, `api`, `log`) still log the provider's raw error and, for `log`,
+  the recipients: do not rely on them to keep addresses out of the logs.
 
 States of a row: `sending` (in flight, or waiting for its lease to run out), `retrying` (waiting for
 its next attempt) and the final ones, `sent`, `bounced` and `exhausted`. To see what needs attention:

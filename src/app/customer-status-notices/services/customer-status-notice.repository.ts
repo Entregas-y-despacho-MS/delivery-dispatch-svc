@@ -42,6 +42,15 @@ export interface ClaimedNotification {
     recipient: string;
     /** Attempts already counted, including the one a dead process left unrecorded. */
     attempts: number;
+    /** Proof that this process owns the row; `recordOutcome` needs it. */
+    lease: string;
+}
+
+/** A registered email this process owns: its id and the lease that proves it. */
+export interface ReservedNotification {
+    notificationId: number;
+    /** The `locked_until` of the reservation as text (exact to the microsecond); `recordOutcome` needs it. */
+    lease: string;
 }
 
 @Injectable()
@@ -74,27 +83,27 @@ export class CustomerStatusNoticeRepository {
     }
 
     /**
-     * Registers the email and takes it for this process: the id of the new row, or `null` when the idempotency key is
-     * already registered (a second delivery of the same event, or a concurrent copy of it). The unique index decides,
-     * so no lock is needed. The row starts `sending` with a lease: if this process dies before it records the outcome,
-     * the recovery task finds the row once the lease runs out.
+     * Registers the email and takes it for this process: the new row with its lease, or `null` when the idempotency
+     * key is already registered (a second delivery of the same event, or a concurrent copy of it). The unique index
+     * decides, so no lock is needed. The row starts `sending` with a lease: if this process dies before it records
+     * the outcome, the recovery task finds the row once the lease runs out.
      */
-    async reserve(notification: NewNotification): Promise<number | null> {
-        const rows: Array<{ customer_notification_id: number }> = await this.dataSource.query(
+    async reserve(notification: NewNotification): Promise<ReservedNotification | null> {
+        const rows: Array<{ customer_notification_id: number; lease: string }> = await this.dataSource.query(
             `INSERT INTO customer_notifications
                     (dispatch_id, notification_type, idempotency_key, source_event_key, dispatch_status, occurred_at,
                      recipient, template, template_version, status, next_attempt_at, locked_until)
              VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7, $8, $9, 'sending',
                      NOW() + make_interval(mins => $10::int), NOW() + make_interval(mins => $10::int))
              ON CONFLICT (idempotency_key) DO NOTHING
-             RETURNING customer_notification_id`,
+             RETURNING customer_notification_id, locked_until::text AS lease`,
             [
                 notification.dispatchId, notification.notificationType, notification.idempotencyKey, notification.sourceEventKey,
                 notification.dispatchStatus, notification.occurredAt, notification.recipient, notification.template,
                 notification.templateVersion, ATTEMPT_LEASE_MINUTES,
             ],
         );
-        return rows[0]?.customer_notification_id ?? null;
+        return rows[0] ? { notificationId: rows[0].customer_notification_id, lease: rows[0].lease } : null;
     }
 
     /**
@@ -107,6 +116,7 @@ export class CustomerStatusNoticeRepository {
     async claimDue(limit: number): Promise<ClaimedNotification[]> {
         const [rows]: [Array<{
             customer_notification_id: number; dispatch_id: number; dispatch_status: string; occurred_at: Date; recipient: string; attempts: number;
+            lease: string;
         }>, number] = await this.dataSource.query(
             `UPDATE customer_notifications c
                 SET attempts = c.attempts + CASE WHEN c.status = 'sending' THEN 1 ELSE 0 END,
@@ -119,7 +129,8 @@ export class CustomerStatusNoticeRepository {
                      ORDER BY next_attempt_at, customer_notification_id
                      LIMIT $1
                        FOR UPDATE SKIP LOCKED)
-              RETURNING c.customer_notification_id, c.dispatch_id, c.dispatch_status, c.occurred_at, c.recipient, c.attempts`,
+              RETURNING c.customer_notification_id, c.dispatch_id, c.dispatch_status, c.occurred_at, c.recipient, c.attempts,
+                        c.locked_until::text AS lease`,
             [limit, ATTEMPT_LEASE_MINUTES],
         );
         return rows.map((row) => ({
@@ -129,15 +140,17 @@ export class CustomerStatusNoticeRepository {
             occurredAt: row.occurred_at.toISOString(),
             recipient: row.recipient,
             attempts: row.attempts,
+            lease: row.lease,
         }));
     }
 
     /**
-     * Writes how a round of attempts ended and releases the lease. It only touches a row that is still `sending`, so
-     * a process that comes back after its lease ran out and another one took the row over cannot overwrite the result.
-     * True when this call wrote it.
+     * Writes how a round of attempts ended and releases the lease. It only writes while the row is still `sending`
+     * **under the lease this process was given**: a process that comes back after its lease ran out cannot overwrite
+     * the result of the one that took the row over, neither when that one finished nor while it is still sending
+     * (it holds a newer lease). True when this call wrote it.
      */
-    async recordOutcome(notificationId: number, outcome: NotificationOutcome): Promise<boolean> {
+    async recordOutcome(notificationId: number, lease: string, outcome: NotificationOutcome): Promise<boolean> {
         const [rows]: [unknown[], number] = await this.dataSource.query(
             `UPDATE customer_notifications
                 SET status = $2::varchar,
@@ -146,9 +159,9 @@ export class CustomerStatusNoticeRepository {
                     locked_until = NULL,
                     last_error = CASE WHEN $2::varchar = 'sent' THEN last_error ELSE $5::varchar END,
                     sent_at = CASE WHEN $2::varchar = 'sent' THEN NOW() ELSE sent_at END
-              WHERE customer_notification_id = $1 AND status = 'sending'
+              WHERE customer_notification_id = $1 AND status = 'sending' AND locked_until = $6::timestamptz
               RETURNING customer_notification_id`,
-            [notificationId, outcome.status, outcome.attemptsMade, outcome.nextAttemptAt, outcome.lastError],
+            [notificationId, outcome.status, outcome.attemptsMade, outcome.nextAttemptAt, outcome.lastError, lease],
         );
         return rows.length > 0;
     }

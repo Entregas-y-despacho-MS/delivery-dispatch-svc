@@ -15,8 +15,8 @@ const dispatch = (over: Partial<StatusNoticeDispatch> = {}): StatusNoticeDispatc
 type MailStep = 'sent' | 'bounced' | 'failed' | 'throw';
 interface Options {
     dispatch?: StatusNoticeDispatch | null;
-    /** The id `reserve` returns; `null` is a key that was already taken. */
-    reserved?: number | null;
+    /** `null` is a key that was already taken; by default `reserve` returns row 42 with lease-1. */
+    reserved?: null;
     /** What each attempt with the provider does, in order; the last one repeats. */
     mail?: MailStep[];
     recordThrows?: boolean;
@@ -28,7 +28,7 @@ function build(options: Options = {}) {
     let call = 0;
     const repository = {
         findDispatch: vi.fn(async () => (options.dispatch === undefined ? dispatch() : options.dispatch)),
-        reserve: vi.fn(async () => (options.reserved === undefined ? 42 : options.reserved)),
+        reserve: vi.fn(async () => (options.reserved === undefined ? { notificationId: 42, lease: 'lease-1' } : options.reserved)),
         recordOutcome: vi.fn(async () => {
             if (options.recordThrows) throw new Error('db down');
             return !options.superseded;
@@ -49,7 +49,7 @@ function build(options: Options = {}) {
     return { service, repository, mailer, wait, handle };
 }
 
-const outcomeOf = (repository: ReturnType<typeof build>['repository']) => (repository.recordOutcome.mock.calls[0] as any[])[1];
+const outcomeOf = (repository: ReturnType<typeof build>['repository']) => (repository.recordOutcome.mock.calls[0] as any[])[2];
 
 describe('CustomerStatusNoticeService.handleIncident', () => {
     const incident = { dispatchId: 7, reportedAt: '2026-11-19T15:00:00.000Z' };
@@ -165,7 +165,7 @@ describe('CustomerStatusNoticeService.handle: recovering from the provider', () 
     it('records a sent email after one attempt', async () => {
         const { handle, repository, wait } = build();
         await handle();
-        expect(repository.recordOutcome).toHaveBeenCalledWith(42, { status: 'sent', attemptsMade: 1, nextAttemptAt: null, lastError: null });
+        expect(repository.recordOutcome).toHaveBeenCalledWith(42, 'lease-1', { status: 'sent', attemptsMade: 1, nextAttemptAt: null, lastError: null });
         expect(wait).not.toHaveBeenCalled();
     });
 
@@ -174,7 +174,7 @@ describe('CustomerStatusNoticeService.handle: recovering from the provider', () 
         expect(await handle()).toBe('sent');
         expect(mailer.send).toHaveBeenCalledTimes(3);
         expect(wait.mock.calls.map((call) => (call as any[])[0])).toEqual([500, 1000]);
-        expect(repository.recordOutcome).toHaveBeenCalledWith(42, { status: 'sent', attemptsMade: 3, nextAttemptAt: null, lastError: null });
+        expect(repository.recordOutcome).toHaveBeenCalledWith(42, 'lease-1', { status: 'sent', attemptsMade: 3, nextAttemptAt: null, lastError: null });
     });
 
     it('leaves the email retrying, 5 minutes ahead, when the three attempts fail: the dispatch transition is not touched', async () => {
@@ -224,21 +224,37 @@ describe('CustomerStatusNoticeService.handle: recovering from the provider', () 
 });
 
 describe('CustomerStatusNoticeService.recoverDue', () => {
-    const claimed = (over: Partial<{ notificationId: number; dispatchId: number; dispatchStatus: string; occurredAt: string; recipient: string; attempts: number }> = {}) => ({
-        notificationId: 42, dispatchId: 7, dispatchStatus: 'delivered', occurredAt: '2026-11-19T14:30:00.000Z', recipient: 'ana@example.com', attempts: 3, ...over,
+    const claimed = (over: Partial<{ notificationId: number; dispatchId: number; dispatchStatus: string; occurredAt: string; recipient: string; attempts: number; lease: string }> = {}) => ({
+        notificationId: 42, dispatchId: 7, dispatchStatus: 'delivered', occurredAt: '2026-11-19T14:30:00.000Z', recipient: 'ana@example.com', attempts: 3, lease: 'lease-9', ...over,
     });
 
+    /** `claimDue` hands out the rows one per call, like the real one with a limit of 1, and then nothing. */
     function buildRecovery(rows: ReturnType<typeof claimed>[], options: Options = {}) {
         const base = build(options);
-        const claimDue = vi.fn(async () => rows);
+        const queue = [...rows];
+        const claimDue = vi.fn(async () => queue.splice(0, 1));
         (base.repository as any).claimDue = claimDue;
         return { ...base, claimDue };
     }
 
-    it('asks the repository for the due emails, with a batch limit', async () => {
-        const { service, claimDue } = buildRecovery([]);
+    it('takes the due emails one at a time, each right before it is sent, until there are none', async () => {
+        const { service, claimDue, mailer } = buildRecovery([claimed({ notificationId: 1 }), claimed({ notificationId: 2 })]);
+        expect(await service.recoverDue(NOW)).toMatchObject({ claimed: 2, sent: 2 });
+        expect(claimDue.mock.calls).toEqual([[1], [1], [1]]);
+        expect(mailer.send).toHaveBeenCalledTimes(2);
+    });
+
+    it('does nothing when no email is due', async () => {
+        const { service, mailer } = buildRecovery([]);
         expect(await service.recoverDue(NOW)).toEqual({ claimed: 0, sent: 0, bounced: 0, failed: 0, exhausted: 0, errors: 0 });
-        expect(claimDue).toHaveBeenCalledWith(50);
+        expect(mailer.send).not.toHaveBeenCalled();
+    });
+
+    it('stops at the limit of the run and leaves the rest for the next one', async () => {
+        const { service, claimDue, mailer } = buildRecovery([1, 2, 3].map((notificationId) => claimed({ notificationId })));
+        expect(await service.recoverDue(NOW, 2)).toMatchObject({ claimed: 2, sent: 2 });
+        expect(claimDue).toHaveBeenCalledTimes(2);
+        expect(mailer.send).toHaveBeenCalledTimes(2);
     });
 
     it('sends again the email as it was registered: the stored recipient and status, the current tracking link', async () => {
@@ -252,14 +268,14 @@ describe('CustomerStatusNoticeService.recoverDue', () => {
         const mail = mailer.send.mock.calls[0]![0] as any;
         expect(mail).toMatchObject({ to: 'stored@example.com', subject: 'Tu pedido fue entregado', template: 'status-change' });
         expect(mail.context).toMatchObject({ statusLabel: 'Entregado', trackingCode: 'DSP-2026-00007', trackingUrl: 'http://web.test/seguimiento/secret-token' });
-        expect(repository.recordOutcome).toHaveBeenCalledWith(42, { status: 'sent', attemptsMade: 1, nextAttemptAt: null, lastError: null });
+        expect(repository.recordOutcome).toHaveBeenCalledWith(42, 'lease-9', { status: 'sent', attemptsMade: 1, nextAttemptAt: null, lastError: null });
     });
 
     it('makes a single attempt per run, without waiting, and schedules the next one when it fails', async () => {
         const { service, mailer, repository } = buildRecovery([claimed({ attempts: 3 })], { mail: ['failed'] });
         expect(await service.recoverDue(NOW)).toMatchObject({ claimed: 1, failed: 1 });
         expect(mailer.send).toHaveBeenCalledTimes(1);
-        expect(repository.recordOutcome).toHaveBeenCalledWith(42, {
+        expect(repository.recordOutcome).toHaveBeenCalledWith(42, 'lease-9', {
             status: 'retrying', attemptsMade: 1, nextAttemptAt: new Date('2026-11-19T16:15:00.000Z'), lastError: 'SMTP did not accept any recipient.',
         });
     });
@@ -267,20 +283,20 @@ describe('CustomerStatusNoticeService.recoverDue', () => {
     it('closes the email as exhausted when the last attempt fails', async () => {
         const { service, repository } = buildRecovery([claimed({ attempts: 5 })], { mail: ['failed'] });
         expect(await service.recoverDue(NOW)).toMatchObject({ failed: 1 });
-        expect(repository.recordOutcome).toHaveBeenCalledWith(42, expect.objectContaining({ status: 'exhausted', attemptsMade: 1, nextAttemptAt: null }));
+        expect(repository.recordOutcome).toHaveBeenCalledWith(42, 'lease-9', expect.objectContaining({ status: 'exhausted', attemptsMade: 1, nextAttemptAt: null }));
     });
 
     it('does not retry a bounce', async () => {
         const { service, repository } = buildRecovery([claimed()], { mail: ['bounced'] });
         expect(await service.recoverDue(NOW)).toMatchObject({ bounced: 1 });
-        expect(repository.recordOutcome).toHaveBeenCalledWith(42, expect.objectContaining({ status: 'bounced', nextAttemptAt: null }));
+        expect(repository.recordOutcome).toHaveBeenCalledWith(42, 'lease-9', expect.objectContaining({ status: 'bounced', nextAttemptAt: null }));
     });
 
     it('closes without sending an email that already used up its attempts (a process that died six times)', async () => {
         const { service, mailer, repository } = buildRecovery([claimed({ attempts: 6 })]);
         expect(await service.recoverDue(NOW)).toMatchObject({ claimed: 1, exhausted: 1 });
         expect(mailer.send).not.toHaveBeenCalled();
-        expect(repository.recordOutcome).toHaveBeenCalledWith(42, { status: 'exhausted', attemptsMade: 0, nextAttemptAt: null, lastError: 'The attempts of this email ran out.' });
+        expect(repository.recordOutcome).toHaveBeenCalledWith(42, 'lease-9', { status: 'exhausted', attemptsMade: 0, nextAttemptAt: null, lastError: 'The attempts of this email ran out.' });
     });
 
     it('closes without sending an email whose status is no longer in the table, or whose dispatch is gone', async () => {

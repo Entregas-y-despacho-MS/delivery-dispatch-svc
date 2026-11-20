@@ -23,7 +23,7 @@ export class CustomerNotificationRecoveryTask implements OnModuleInit {
         this.registry.register({
             name: CUSTOMER_NOTIFICATION_RECOVERY_TASK,
             schedule: { kind: 'every-minutes', minutes: CUSTOMER_NOTIFICATION_RECOVERY_EVERY_MINUTES },
-            run: async (context) => await this.notices.recoverDue(context.startedAt),
+            run: async () => await this.notices.recoverDue(),
         });
     }
 }
