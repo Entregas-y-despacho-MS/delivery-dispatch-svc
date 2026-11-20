@@ -65,6 +65,35 @@ export function buildStatusNotice(event: StatusTransition, dispatch: StatusNotic
     };
 }
 
+/** What the recovery task keeps of an email it has to send again. */
+export interface StoredNotification {
+    dispatchId: number;
+    dispatchStatus: string;
+    /** ISO instant of the transition. */
+    occurredAt: string;
+    /** As it was registered. */
+    recipient: string;
+}
+
+/**
+ * The same email as the first attempt built it, from what was stored: the text of the status comes from the table
+ * and the code from the dispatch. `null` when the status is no longer in the table (nothing to say about it).
+ */
+export function rebuildStatusNotice(stored: StoredNotification, dispatch: Pick<StatusNoticeDispatch, 'trackingCode'>): StatusNotice | null {
+    if (!Object.hasOwn(STATUS_NOTICE_TABLE, stored.dispatchStatus)) return null;
+    const entry = STATUS_NOTICE_TABLE[stored.dispatchStatus]!;
+    return {
+        dispatchId: stored.dispatchId,
+        trackingCode: dispatch.trackingCode,
+        status: stored.dispatchStatus,
+        statusLabel: entry.statusLabel,
+        message: entry.message,
+        subject: entry.subject,
+        occurredAt: stored.occurredAt,
+        recipient: stored.recipient,
+    };
+}
+
 /** The tracking page URL, or '' when the link would not work (no token, or the token expired). */
 export function trackingLink(dispatch: StatusNoticeDispatch, webUrl: string, now: Date): string {
     if (!dispatch.trackingToken) return '';

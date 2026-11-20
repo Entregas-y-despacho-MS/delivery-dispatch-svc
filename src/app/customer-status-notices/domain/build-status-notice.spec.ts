@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DispatchStatusChangedEvent } from '../../dispatch-status/dispatch-status-changed.event.js';
-import { buildStatusNotice, eligibleStatusNotice, formatOccurredAt, trackingLink, type StatusNoticeDispatch } from './build-status-notice.js';
+import { buildStatusNotice, eligibleStatusNotice, formatOccurredAt, rebuildStatusNotice, trackingLink, type StatusNoticeDispatch } from './build-status-notice.js';
 import { STATUS_NOTICE_TABLE } from './status-notice-table.js';
 
 const event = (over: Partial<DispatchStatusChangedEvent> = {}): DispatchStatusChangedEvent => ({
@@ -28,6 +28,28 @@ describe('eligibleStatusNotice', () => {
 
     it('does not notify a transition to the same status', () => {
         expect(eligibleStatusNotice({ status: 'incident', previousStatus: 'incident' })).toBeNull();
+    });
+});
+
+describe('rebuildStatusNotice', () => {
+    const stored = { dispatchId: 7, dispatchStatus: 'incident', occurredAt: '2026-11-19T15:00:00.000Z', recipient: 'stored@example.com' };
+
+    it('builds the same email the first attempt built, from the stored data and the table', () => {
+        expect(rebuildStatusNotice(stored, { trackingCode: 'DSP-2026-00007' })).toEqual({
+            dispatchId: 7,
+            trackingCode: 'DSP-2026-00007',
+            status: 'incident',
+            statusLabel: STATUS_NOTICE_TABLE.incident!.statusLabel,
+            message: STATUS_NOTICE_TABLE.incident!.message,
+            subject: STATUS_NOTICE_TABLE.incident!.subject,
+            occurredAt: '2026-11-19T15:00:00.000Z',
+            recipient: 'stored@example.com',
+        });
+    });
+
+    it('returns null for a status that is no longer in the table (including inherited names)', () => {
+        expect(rebuildStatusNotice({ ...stored, dispatchStatus: 'assigned' }, { trackingCode: null })).toBeNull();
+        expect(rebuildStatusNotice({ ...stored, dispatchStatus: 'constructor' }, { trackingCode: null })).toBeNull();
     });
 });
 

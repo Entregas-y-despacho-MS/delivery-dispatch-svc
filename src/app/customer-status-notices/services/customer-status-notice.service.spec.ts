@@ -222,3 +222,80 @@ describe('CustomerStatusNoticeService.handle: recovering from the provider', () 
         expect(await handle()).toBe('sent');
     });
 });
+
+describe('CustomerStatusNoticeService.recoverDue', () => {
+    const claimed = (over: Partial<{ notificationId: number; dispatchId: number; dispatchStatus: string; occurredAt: string; recipient: string; attempts: number }> = {}) => ({
+        notificationId: 42, dispatchId: 7, dispatchStatus: 'delivered', occurredAt: '2026-11-19T14:30:00.000Z', recipient: 'ana@example.com', attempts: 3, ...over,
+    });
+
+    function buildRecovery(rows: ReturnType<typeof claimed>[], options: Options = {}) {
+        const base = build(options);
+        const claimDue = vi.fn(async () => rows);
+        (base.repository as any).claimDue = claimDue;
+        return { ...base, claimDue };
+    }
+
+    it('asks the repository for the due emails, with a batch limit', async () => {
+        const { service, claimDue } = buildRecovery([]);
+        expect(await service.recoverDue(NOW)).toEqual({ claimed: 0, sent: 0, bounced: 0, failed: 0, exhausted: 0, errors: 0 });
+        expect(claimDue).toHaveBeenCalledWith(50);
+    });
+
+    it('sends again the email as it was registered: the stored recipient and status, the current tracking link', async () => {
+        const { service, mailer, repository } = buildRecovery(
+            [claimed({ recipient: 'stored@example.com' })], { dispatch: dispatch({ contactEmail: 'changed@example.com', currentStatus: 'returned' }) },
+        );
+
+        expect(await service.recoverDue(NOW)).toMatchObject({ claimed: 1, sent: 1 });
+
+        expect(repository.reserve).not.toHaveBeenCalled();
+        const mail = mailer.send.mock.calls[0]![0] as any;
+        expect(mail).toMatchObject({ to: 'stored@example.com', subject: 'Tu pedido fue entregado', template: 'status-change' });
+        expect(mail.context).toMatchObject({ statusLabel: 'Entregado', trackingCode: 'DSP-2026-00007', trackingUrl: 'http://web.test/seguimiento/secret-token' });
+        expect(repository.recordOutcome).toHaveBeenCalledWith(42, { status: 'sent', attemptsMade: 1, nextAttemptAt: null, lastError: null });
+    });
+
+    it('makes a single attempt per run, without waiting, and schedules the next one when it fails', async () => {
+        const { service, mailer, repository } = buildRecovery([claimed({ attempts: 3 })], { mail: ['failed'] });
+        expect(await service.recoverDue(NOW)).toMatchObject({ claimed: 1, failed: 1 });
+        expect(mailer.send).toHaveBeenCalledTimes(1);
+        expect(repository.recordOutcome).toHaveBeenCalledWith(42, {
+            status: 'retrying', attemptsMade: 1, nextAttemptAt: new Date('2026-11-19T16:15:00.000Z'), lastError: 'SMTP did not accept any recipient.',
+        });
+    });
+
+    it('closes the email as exhausted when the last attempt fails', async () => {
+        const { service, repository } = buildRecovery([claimed({ attempts: 5 })], { mail: ['failed'] });
+        expect(await service.recoverDue(NOW)).toMatchObject({ failed: 1 });
+        expect(repository.recordOutcome).toHaveBeenCalledWith(42, expect.objectContaining({ status: 'exhausted', attemptsMade: 1, nextAttemptAt: null }));
+    });
+
+    it('does not retry a bounce', async () => {
+        const { service, repository } = buildRecovery([claimed()], { mail: ['bounced'] });
+        expect(await service.recoverDue(NOW)).toMatchObject({ bounced: 1 });
+        expect(repository.recordOutcome).toHaveBeenCalledWith(42, expect.objectContaining({ status: 'bounced', nextAttemptAt: null }));
+    });
+
+    it('closes without sending an email that already used up its attempts (a process that died six times)', async () => {
+        const { service, mailer, repository } = buildRecovery([claimed({ attempts: 6 })]);
+        expect(await service.recoverDue(NOW)).toMatchObject({ claimed: 1, exhausted: 1 });
+        expect(mailer.send).not.toHaveBeenCalled();
+        expect(repository.recordOutcome).toHaveBeenCalledWith(42, { status: 'exhausted', attemptsMade: 0, nextAttemptAt: null, lastError: 'The attempts of this email ran out.' });
+    });
+
+    it('closes without sending an email whose status is no longer in the table, or whose dispatch is gone', async () => {
+        const old = buildRecovery([claimed({ dispatchStatus: 'no_longer_notified' })]);
+        expect(await old.service.recoverDue(NOW)).toMatchObject({ exhausted: 1 });
+        const gone = buildRecovery([claimed()], { dispatch: null });
+        expect(await gone.service.recoverDue(NOW)).toMatchObject({ exhausted: 1 });
+        expect(old.mailer.send).not.toHaveBeenCalled();
+        expect(gone.mailer.send).not.toHaveBeenCalled();
+    });
+
+    it('goes on with the rest when one row cannot be processed', async () => {
+        const { service, mailer, repository } = buildRecovery([claimed({ notificationId: 1 }), claimed({ notificationId: 2 })]);
+        repository.findDispatch.mockRejectedValueOnce(new Error('db down'));
+        expect(await service.recoverDue(NOW)).toMatchObject({ claimed: 2, errors: 1, sent: 1 });
+        expect(mailer.send).toHaveBeenCalledTimes(1);
+    });
+});

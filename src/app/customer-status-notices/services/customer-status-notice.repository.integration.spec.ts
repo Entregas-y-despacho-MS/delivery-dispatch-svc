@@ -134,6 +134,70 @@ describe.skipIf(!PORT)('CustomerStatusNoticeRepository against PostgreSQL', () =
         expect(await row(exhausted)).toMatchObject({ status: 'exhausted', next_attempt_at: null });
     });
 
+    describe('claimDue', () => {
+        const mine = <T extends { dispatchId: number }>(rows: T[]) => rows.filter((claimed) => claimed.dispatchId === dispatchId);
+        /** A registered email whose next attempt (or lease) ended `minutesAgo` minutes ago, in the given state. */
+        const due = async (status: string, minutesAgo = 1, attempts = 0): Promise<number> => {
+            const id = (await repository.reserve(notification()))!;
+            await dataSource.query(
+                `UPDATE customer_notifications
+                    SET status = $2::varchar, attempts = $3::int, next_attempt_at = NOW() - make_interval(mins => $4::int),
+                        locked_until = CASE WHEN $2::varchar = 'sending' THEN NOW() - make_interval(mins => $4::int) END,
+                        sent_at = CASE WHEN $2::varchar = 'sent' THEN NOW() END
+                  WHERE customer_notification_id = $1`,
+                [id, status, attempts, minutesAgo],
+            );
+            return id;
+        };
+
+        it('takes over a retrying email whose next attempt arrived, and leases it again', async () => {
+            const id = await due('retrying', 1, 3);
+            const claimed = mine(await repository.claimDue(100)).filter((c) => c.notificationId === id);
+            expect(claimed).toEqual([{
+                notificationId: id, dispatchId, dispatchStatus: 'delivered', occurredAt: '2026-11-19T14:30:00.000Z', recipient: 'ana@example.com', attempts: 3,
+            }]);
+            const stored = await row(id);
+            expect(stored.status).toBe('sending');
+            expect(stored.attempts).toBe(3);
+            expect(stored.locked_until.getTime()).toBeGreaterThan(Date.now());
+            expect(stored.next_attempt_at.getTime()).toBeGreaterThan(Date.now());
+        });
+
+        it('takes over a sending email whose lease ran out and counts the attempt of the process that died', async () => {
+            const id = await due('sending', 15, 0);
+            const claimed = mine(await repository.claimDue(100)).filter((c) => c.notificationId === id);
+            expect(claimed).toHaveLength(1);
+            expect(claimed[0]!.attempts).toBe(1);
+            expect((await row(id)).attempts).toBe(1);
+        });
+
+        it('leaves alone what is not due: a live lease, a retry in the future and the final states', async () => {
+            const live = (await repository.reserve(notification()))!;
+            const future = await due('retrying', -30);
+            const finished = [await due('sent', 5), await due('bounced', 5), await due('exhausted', 5)];
+            const claimed = (await repository.claimDue(100)).map((c) => c.notificationId);
+            for (const id of [live, future, ...finished]) expect(claimed).not.toContain(id);
+        });
+
+        it('does not take the same email twice, even when two runs ask at the same time', async () => {
+            const ids = await Promise.all(Array.from({ length: 6 }, () => due('retrying', 2)));
+            const runs = await Promise.all([repository.claimDue(4), repository.claimDue(4), repository.claimDue(4)]);
+            const claimed = runs.flatMap((run) => run.map((c) => c.notificationId)).filter((id) => ids.includes(id));
+            expect(new Set(claimed).size).toBe(claimed.length);
+            expect(claimed.length).toBe(6);
+        });
+
+        it('takes at most the limit, the oldest first', async () => {
+            const TEN_DAYS = 14_400;
+            const older = await due('retrying', TEN_DAYS + 10);
+            const newer = await due('retrying', TEN_DAYS);
+            const first = await repository.claimDue(1);
+            expect(first.map((c) => c.notificationId)).toEqual([older]);
+            const second = await repository.claimDue(1);
+            expect(second.map((c) => c.notificationId)).toEqual([newer]);
+        });
+    });
+
     it('does not overwrite a row that is no longer sending (another process finished it)', async () => {
         const id = (await repository.reserve(notification()))!;
         await repository.recordOutcome(id, { status: 'sent', attemptsMade: 1, nextAttemptAt: null, lastError: null });

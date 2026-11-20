@@ -2,18 +2,33 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MailerPort, type MailDeliveryResult } from '../../../plugins/mailer/mailer.port.js';
 import {
-    buildStatusNotice, eligibleStatusNotice, formatOccurredAt, trackingLink, type StatusNotice, type StatusNoticeDispatch, type StatusTransition,
+    buildStatusNotice, eligibleStatusNotice, formatOccurredAt, rebuildStatusNotice, trackingLink,
+    type StatusNotice, type StatusNoticeDispatch, type StatusTransition,
 } from '../domain/build-status-notice.js';
-import { INLINE_MAX_ATTEMPTS, classifyDelivery, inlineBackoffMs, nextStepAfterFailure } from '../domain/delivery-policy.js';
+import { INLINE_MAX_ATTEMPTS, MAX_TOTAL_ATTEMPTS, classifyDelivery, inlineBackoffMs, nextStepAfterFailure } from '../domain/delivery-policy.js';
 import { STATUS_CHANGE_NOTIFICATION, idempotencyKey, sourceEventKey } from '../domain/idempotency.js';
 import { sanitizeError } from '../domain/sanitize-error.js';
 import { STATUS_NOTICE_DISPATCH_TYPE, STATUS_NOTICE_TEMPLATE, STATUS_NOTICE_TEMPLATE_VERSION } from '../domain/status-notice-table.js';
-import { CustomerStatusNoticeRepository, type NotificationOutcome } from './customer-status-notice.repository.js';
+import { CustomerStatusNoticeRepository, type ClaimedNotification, type NotificationOutcome } from './customer-status-notice.repository.js';
 
 /** `failed` is a transient failure: the email stays registered as `retrying` (or `exhausted`) and the recovery task owns it. */
 export type StatusNoticeOutcome = 'sent' | 'bounced' | 'failed' | 'ignored' | 'no-recipient' | 'duplicate';
 
 const BOUNCE_ERROR = 'The mail provider rejected the recipient.';
+
+/** Emails the recovery task takes over in one run; the rest wait for the next one. */
+export const RECOVERY_BATCH_SIZE = 50;
+
+/** What one run of the recovery task did. `failed` stays `retrying` (or becomes `exhausted` on the last attempt). */
+export interface RecoverySummary {
+    claimed: number;
+    sent: number;
+    bounced: number;
+    failed: number;
+    exhausted: number;
+    /** Rows whose own processing threw; the lease runs out and the next run takes them again. */
+    errors: number;
+}
 
 const delay = (milliseconds: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -79,6 +94,45 @@ export class CustomerStatusNoticeService {
         if (notificationId === null) return 'duplicate';
 
         return await this.attempt(notificationId, notice, dispatch, { attemptsBefore: 0, maxAttempts: INLINE_MAX_ATTEMPTS, now, wait });
+    }
+
+    /**
+     * The safety net (run by the recovery task): takes over the emails that are due — `retrying` with their next
+     * attempt reached, `sending` with a lease that ran out — and gives each one a single attempt, with the same
+     * recipient and status it was registered with. An email that used up its attempts, or whose status is no
+     * longer notifiable, is closed as `exhausted` without sending. One bad row never stops the rest.
+     */
+    async recoverDue(now: Date = new Date(), limit: number = RECOVERY_BATCH_SIZE): Promise<RecoverySummary> {
+        const summary: RecoverySummary = { claimed: 0, sent: 0, bounced: 0, failed: 0, exhausted: 0, errors: 0 };
+        const claimed = await this.repository.claimDue(limit);
+        summary.claimed = claimed.length;
+        for (const row of claimed) {
+            try {
+                const outcome = await this.recoverOne(row, now);
+                summary[outcome] += 1;
+            } catch {
+                summary.errors += 1;
+                this.logger.error({ event: 'status_notice_recovery_failed', dispatchId: row.dispatchId, status: row.dispatchStatus });
+            }
+        }
+        return summary;
+    }
+
+    private async recoverOne(row: ClaimedNotification, now: Date): Promise<'sent' | 'bounced' | 'failed' | 'exhausted'> {
+        const dispatch = await this.repository.findDispatch(row.dispatchId);
+        const notice = dispatch ? rebuildStatusNotice(row, dispatch) : null;
+        if (!dispatch || !notice) return await this.close(row, 'The status of this email can no longer be notified.');
+        if (row.attempts >= MAX_TOTAL_ATTEMPTS) return await this.close(row, 'The attempts of this email ran out.');
+        const outcome = await this.attempt(row.notificationId, notice, dispatch, { attemptsBefore: row.attempts, maxAttempts: 1, now, wait: delay });
+        if (outcome === 'sent' || outcome === 'bounced') return outcome;
+        return 'failed';
+    }
+
+    /** Ends an email that cannot or must not be sent again. */
+    private async close(row: ClaimedNotification, reason: string): Promise<'exhausted'> {
+        await this.repository.recordOutcome(row.notificationId, { status: 'exhausted', attemptsMade: 0, nextAttemptAt: null, lastError: sanitizeError(reason) });
+        this.logger.warn({ event: 'status_notice_exhausted', dispatchId: row.dispatchId, status: row.dispatchStatus });
+        return 'exhausted';
     }
 
     /**

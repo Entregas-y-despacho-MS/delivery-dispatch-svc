@@ -31,6 +31,19 @@ export interface NotificationOutcome {
     lastError: string | null;
 }
 
+/** An email the recovery task took over: what is needed to rebuild it and try again. */
+export interface ClaimedNotification {
+    notificationId: number;
+    dispatchId: number;
+    dispatchStatus: string;
+    /** ISO instant of the transition. */
+    occurredAt: string;
+    /** As it was registered: the address is not read again from the dispatch. */
+    recipient: string;
+    /** Attempts already counted, including the one a dead process left unrecorded. */
+    attempts: number;
+}
+
 @Injectable()
 export class CustomerStatusNoticeRepository {
     constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
@@ -82,6 +95,41 @@ export class CustomerStatusNoticeRepository {
             ],
         );
         return rows[0]?.customer_notification_id ?? null;
+    }
+
+    /**
+     * Takes over, for the recovery task, up to `limit` emails that are due: `retrying` with their next attempt reached,
+     * and `sending` whose lease ran out (the process died or hung before it recorded the outcome). Each one is
+     * leased again, so a second run sees it as in flight; `FOR UPDATE SKIP LOCKED` keeps two concurrent runs from
+     * taking the same row. An expired `sending` counts one attempt, because the dead process did try: that bounds a
+     * row that kills its process every time.
+     */
+    async claimDue(limit: number): Promise<ClaimedNotification[]> {
+        const [rows]: [Array<{
+            customer_notification_id: number; dispatch_id: number; dispatch_status: string; occurred_at: Date; recipient: string; attempts: number;
+        }>, number] = await this.dataSource.query(
+            `UPDATE customer_notifications c
+                SET attempts = c.attempts + CASE WHEN c.status = 'sending' THEN 1 ELSE 0 END,
+                    status = 'sending',
+                    locked_until = NOW() + make_interval(mins => $2::int),
+                    next_attempt_at = NOW() + make_interval(mins => $2::int)
+              WHERE c.customer_notification_id IN (
+                    SELECT customer_notification_id FROM customer_notifications
+                     WHERE status IN ('sending', 'retrying') AND next_attempt_at <= NOW()
+                     ORDER BY next_attempt_at, customer_notification_id
+                     LIMIT $1
+                       FOR UPDATE SKIP LOCKED)
+              RETURNING c.customer_notification_id, c.dispatch_id, c.dispatch_status, c.occurred_at, c.recipient, c.attempts`,
+            [limit, ATTEMPT_LEASE_MINUTES],
+        );
+        return rows.map((row) => ({
+            notificationId: row.customer_notification_id,
+            dispatchId: row.dispatch_id,
+            dispatchStatus: row.dispatch_status,
+            occurredAt: row.occurred_at.toISOString(),
+            recipient: row.recipient,
+            attempts: row.attempts,
+        }));
     }
 
     /**
