@@ -24,7 +24,11 @@
           "description": "Opcional: falta cuando el propio payload rechazado no lo traía o no era legible.",
           "$ref": "../envelope.schema.json#/$defs/entityId"
         },
-        "caseVersion": { "type": "integer", "minimum": 1 },
+        "caseVersion": {
+          "description": "Solo junto a `crmCaseId`: versión del caso rechazado.",
+          "type": "integer",
+          "minimum": 1
+        },
         "rejectionCode": { "$ref": "#/$defs/rejectionCode" },
         "field": {
           "description": "Solo con `schema_invalid`: ruta JSON Pointer del primer campo que no validó (por ejemplo /data/affectedItems).",
@@ -33,6 +37,13 @@
         },
         "rejectedAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" }
       },
+      "dependentRequired": { "caseVersion": ["crmCaseId"] },
+      "if": {
+        "properties": { "rejectionCode": { "const": "schema_invalid" } },
+        "required": ["rejectionCode"]
+      },
+      "then": true,
+      "else": { "properties": { "field": false } },
       "additionalProperties": false
     },
     "rejectionCode": {

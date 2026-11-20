@@ -52,6 +52,11 @@
       "minLength": 1,
       "maxLength": 64
     },
+    "trackingCode": {
+      "description": "Código del servicio de traslado, único e inmutable (DSP-AAAA-NNNNN).",
+      "type": "string",
+      "pattern": "^DSP-[0-9]{4}-[0-9]{5}$"
+    },
     "geoPoint": {
       "description": "Coordenadas WGS84 en grados decimales.",
       "type": "object",

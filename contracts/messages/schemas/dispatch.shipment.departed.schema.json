@@ -17,7 +17,7 @@
       "required": ["salesOrderId", "trackingCode", "recordVersion", "updatedAt", "departedAt", "driverId", "packageIds"],
       "properties": {
         "salesOrderId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
-        "trackingCode": { "$ref": "dispatch.transfer.status_changed.schema.json#/$defs/trackingCode" },
+        "trackingCode": { "$ref": "../envelope.schema.json#/$defs/trackingCode" },
         "recordVersion": { "$ref": "../envelope.schema.json#/$defs/recordVersion" },
         "updatedAt": { "$ref": "../envelope.schema.json#/$defs/dateTimeUtc" },
         "departedAt": {

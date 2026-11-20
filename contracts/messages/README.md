@@ -37,7 +37,9 @@ Un mensaje que no valida no crea ni modifica registros: se envía al tópico de 
 
 Se referencian con `$ref` a `envelope.schema.json#/$defs/<nombre>`:
 
-`messageId`, `topic`, `schemaVersion`, `source`, `dateTimeUtc`, `recordVersion`, `entityId`, `geoPoint`, `package`, `evidencePolicy`, `handlingCondition`.
+`messageId`, `topic`, `schemaVersion`, `source`, `dateTimeUtc`, `recordVersion`, `entityId`, `trackingCode`, `geoPoint`, `package`, `evidencePolicy`, `handlingCondition`.
+
+`trackingCode` vive en el sobre para que ningún tópico dependa del esquema de otro.
 
 ## Cómo agregar o cambiar un tópico
 
@@ -80,7 +82,7 @@ Este es el catálogo de tópicos. Cada fila corresponde a `schemas/<tópico>.sch
 | `dispatch.transfer.status_changed` | Marketplace / Compras / Inventarios | Exactamente uno de `salesOrderId` o `purchaseOrderId`. `result` e `items` (solo ítems con diferencias) cuando lo origina una recepción de Almacén. Sin datos personales ni `tracking_token`. |
 | `dispatch.transfer.incident_reported` | Marketplace / Compras | `reasonCode` del catálogo `incident_reasons` y `nextStep` decidido por Despacho. |
 | `dispatch.delivery_complaint.received` | CRM (simulador) | Acuse de un reclamo persistido; `correlationMessageId` es el `messageId` del reclamo. |
-| `dispatch.delivery_complaint.rejected` | CRM (simulador) | Acuse de rechazo con `rejectionCode` estable (enum cerrado). |
+| `dispatch.delivery_complaint.rejected` | CRM (simulador) | Acuse de rechazo con `rejectionCode` estable (enum cerrado). `field` solo con `schema_invalid`; `caseVersion` solo junto a `crmCaseId`. |
 
 ### Reclamos de CRM (`crm.delivery_complaint.*` / `dispatch.delivery_complaint.*`)
 

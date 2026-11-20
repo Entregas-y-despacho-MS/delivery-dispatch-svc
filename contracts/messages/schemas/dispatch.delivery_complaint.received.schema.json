@@ -32,7 +32,7 @@
           "minimum": 1
         },
         "trackingCode": {
-          "$ref": "dispatch.transfer.status_changed.schema.json#/$defs/trackingCode"
+          "$ref": "../envelope.schema.json#/$defs/trackingCode"
         },
         "receivedAt": {
           "description": "Momento en que Despachos persistió el reclamo.",

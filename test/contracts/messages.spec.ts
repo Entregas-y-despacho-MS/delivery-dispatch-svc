@@ -331,6 +331,23 @@ describe('contratos de mensajes: reglas de negocio', () => {
     });
   });
 
+  describe('dispatch.delivery_complaint.rejected', () => {
+    const topic = 'dispatch.delivery_complaint.rejected';
+
+    it('acepta field junto a schema_invalid y el acuse sin crmCaseId ni caseVersion', () => {
+      const withField = mutated(topic, (m) => {
+        m.data.rejectionCode = 'schema_invalid';
+        m.data.field = '/data/affectedItems';
+      });
+      const anonymous = mutated(topic, (m) => {
+        delete m.data.crmCaseId;
+        delete m.data.caseVersion;
+      });
+      expect(validate(topic, withField)).toBe(true);
+      expect(validate(topic, anonymous)).toBe(true);
+    });
+  });
+
   it('dispatch.sync.requested limita los intentos a 3', () => {
     const fourth = mutated('dispatch.sync.requested', (m) => {
       m.data.attempt = 4;

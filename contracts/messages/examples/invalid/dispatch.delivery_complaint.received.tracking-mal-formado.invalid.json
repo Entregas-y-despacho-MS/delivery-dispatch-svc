@@ -1,0 +1,19 @@
+{
+  "description": "trackingCode del acuse que no sigue DSP-AAAA-NNNNN.",
+  "expectedErrorPath": "/data/trackingCode",
+  "message": {
+    "messageId": "019a8f2c-5a17-7d24-8e91-6b0c3f2a9d41",
+    "type": "dispatch.delivery_complaint.received",
+    "schemaVersion": 1,
+    "source": "dispatch",
+    "occurredAt": "2026-11-18T14:05:02Z",
+    "data": {
+      "correlationMessageId": "019a8f2c-41d0-7b6e-9c3a-2f7e1d5a8c10",
+      "crmCaseId": "CRM-CASE-2026-000871",
+      "caseVersion": 1,
+      "dispatchId": 482,
+      "trackingCode": "DSP-26-1",
+      "receivedAt": "2026-11-18T14:05:02Z"
+    }
+  }
+}

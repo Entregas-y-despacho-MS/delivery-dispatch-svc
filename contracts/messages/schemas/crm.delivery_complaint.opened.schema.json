@@ -31,7 +31,7 @@
           "minimum": 1
         },
         "trackingCode": {
-          "$ref": "dispatch.transfer.status_changed.schema.json#/$defs/trackingCode"
+          "$ref": "../envelope.schema.json#/$defs/trackingCode"
         },
         "salesOrderId": {
           "description": "Pedido de venta, opcional. Solo valida la referencia; no identifica el despacho por sí solo.",
