@@ -7,6 +7,7 @@
   "steps": [
     {
       "label": "CRM abre el caso (versión 1)",
+      "realDispatch": true,
       "expectAck": {
         "outcome": "received"
       },
@@ -34,6 +35,7 @@
     },
     {
       "label": "CRM reenvía la versión 1 con otro messageId",
+      "realDispatch": true,
       "expectAck": {
         "outcome": "ignored"
       },
@@ -61,6 +63,7 @@
     },
     {
       "label": "CRM actualiza el caso (versión 2)",
+      "realDispatch": true,
       "expectAck": {
         "outcome": "received"
       },

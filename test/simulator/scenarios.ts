@@ -72,6 +72,19 @@ function receiptIdOf(message: Record<string, unknown>): string {
     return typeof data['receiptId'] === 'string' ? data['receiptId'] : '';
 }
 
+/** Points a CRM complaint at the dispatch given: the placeholder reference is dropped and only what was passed stays. */
+function withDispatchReference(
+    envelope: Record<string, unknown>,
+    dispatch: { dispatchId?: number; trackingCode?: string },
+): Record<string, unknown> {
+    const data = { ...((envelope['data'] ?? {}) as Record<string, unknown>) };
+    delete data['dispatchId'];
+    delete data['trackingCode'];
+    if (dispatch.dispatchId !== undefined) data['dispatchId'] = dispatch.dispatchId;
+    if (dispatch.trackingCode !== undefined) data['trackingCode'] = dispatch.trackingCode;
+    return { ...envelope, data };
+}
+
 /**
  * Turns a fixture into what a run publishes: fresh `messageId`s (the same fixed id keeps the same new
  * one, so a repeated step is still a redelivery), order ids suffixed with the run, and every date
@@ -109,6 +122,9 @@ export function buildScenario(fixture: ScenarioFixture, options: BuildOptions = 
                 envelope = { ...envelope, messageId: messageIdFor(envelope['messageId']) };
             }
         }
+        if (!asIs && step.realDispatch === true && options.dispatch !== undefined) {
+            envelope = withDispatchReference(envelope, options.dispatch);
+        }
         return {
             label: step.label,
             topic: String(envelope['type']),
@@ -118,6 +134,7 @@ export function buildScenario(fixture: ScenarioFixture, options: BuildOptions = 
             pauseBefore: step.pauseBefore === true,
             expectInvalid: step.expectInvalid === true,
             expectAck: step.expectAck,
+            realDispatch: step.realDispatch === true,
             orderId: orderIdOf(envelope),
         };
     });

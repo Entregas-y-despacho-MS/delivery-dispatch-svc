@@ -7,6 +7,7 @@ import type {
     SimulatorScript,
 } from '../../test/simulator/scenario.types.js';
 import { buildScenario, scenariosOf } from '../../test/simulator/scenarios.js';
+import { runComplaintScenario } from './complaint-observer.js';
 import {
     closeClient,
     publishEnvelope,
@@ -24,7 +25,7 @@ import {
  * `dispatch.sync.requested` and publish the complete record when Despachos asks for it.
  */
 const SYNC_TOPIC = 'dispatch.sync.requested';
-const SCRIPTS: SimulatorScript[] = ['marketplace', 'inventory', 'procurement', 'demo-returns'];
+const SCRIPTS: SimulatorScript[] = ['marketplace', 'inventory', 'procurement', 'demo-returns', 'crm'];
 /** `simulate:demo-returns` gives a person time to pick the dispatch up before the warehouse confirms the receipt. */
 const DEFAULT_PAUSE_SECONDS: Partial<Record<SimulatorScript, number>> = { 'demo-returns': 30 };
 
@@ -35,7 +36,12 @@ const USAGE = `Uso: npm run simulate:<origen> -- [opciones]
   --run-id <texto>      sufijo de los ids de la corrida (por defecto, aleatorio)
   --delay <ms>          espera entre mensajes (300 por defecto)
   --pause <segundos>    espera antes de los mensajes que esperan al repartidor, p. ej. la recepción (0; 30 en demo-returns)
-  --timeout <minutos>   espera máxima de la solicitud de sincronización (120 por defecto)`;
+  --timeout <minutos>   espera máxima de la solicitud de sincronización (120 por defecto)
+
+Solo simulate:crm (reclamos de CRM; cada paso espera su acuse y dice si llegó lo esperado):
+  --dispatch-id <n>     despacho \`delivered\` que reclaman los escenarios que lo necesitan
+  --tracking-code <c>   su código de seguimiento (DSP-AAAA-NNNNN); con ambos deben ser el mismo despacho
+  --ack-timeout <s>     espera máxima de cada acuse (20 por defecto)`;
 
 const isWithheld = (step: BuiltStep): boolean => step.respondsTo !== undefined;
 
@@ -135,11 +141,29 @@ async function cleanup(subscription: Subscription): Promise<void> {
 
 async function runScenario(
     fixture: ScenarioFixture,
-    options: { runId?: string; asIs: boolean; delayMs: number; pauseSeconds: number; timeoutMinutes: number },
+    options: {
+        runId?: string;
+        asIs: boolean;
+        delayMs: number;
+        pauseSeconds: number;
+        timeoutMinutes: number;
+        ackTimeoutSeconds: number;
+        dispatch?: { dispatchId?: number; trackingCode?: string };
+    },
 ): Promise<boolean> {
-    const scenario = buildScenario(fixture, { runId: options.runId, asIs: options.asIs });
+    const scenario = buildScenario(fixture, { runId: options.runId, asIs: options.asIs, dispatch: options.dispatch });
     console.log(`\n▶ ${scenario.scenario} (corrida ${scenario.runId})`);
     console.log(`  ${scenario.description}`);
+
+    // CRM: publishes the complaint and waits for the acknowledgement Despachos must answer (ST-298.4).
+    if (scenario.script === 'crm') {
+        const ok = await runComplaintScenario(scenario, {
+            delayMs: options.delayMs,
+            ackTimeoutSeconds: options.ackTimeoutSeconds,
+        });
+        console.log(`\n  Esperado: ${scenario.expected}`);
+        return ok;
+    }
 
     const immediate = scenario.steps.filter((step) => !isWithheld(step));
     const withheld = scenario.steps.filter(isWithheld);
@@ -161,6 +185,27 @@ async function runScenario(
     return ok;
 }
 
+/** `--dispatch-id` / `--tracking-code` as the reference of a CRM complaint, or a message when they are not valid. */
+function parseDispatchReference(
+    dispatchId: string | undefined,
+    trackingCode: string | undefined,
+): { dispatchId?: number; trackingCode?: string } | string | undefined {
+    if (dispatchId === undefined && trackingCode === undefined) return undefined;
+    const reference: { dispatchId?: number; trackingCode?: string } = {};
+    if (dispatchId !== undefined) {
+        const id = Number(dispatchId);
+        if (!/^\d+$/.test(dispatchId) || id < 1 || id > 2_147_483_647) {
+            return '--dispatch-id debe ser un entero entre 1 y 2147483647.';
+        }
+        reference.dispatchId = id;
+    }
+    if (trackingCode !== undefined) {
+        if (!/^DSP-\d{4}-\d{5}$/.test(trackingCode)) return '--tracking-code debe tener la forma DSP-AAAA-NNNNN.';
+        reference.trackingCode = trackingCode;
+    }
+    return reference;
+}
+
 async function main(argv: string[]): Promise<number> {
     const script = argv[0] as SimulatorScript | undefined;
     if (script === undefined || !SCRIPTS.includes(script)) {
@@ -178,6 +223,9 @@ async function main(argv: string[]): Promise<number> {
             delay: { type: 'string', default: '300' },
             pause: { type: 'string' },
             timeout: { type: 'string', default: '120' },
+            'dispatch-id': { type: 'string' },
+            'tracking-code': { type: 'string' },
+            'ack-timeout': { type: 'string', default: '20' },
             help: { type: 'boolean', default: false },
         },
     });
@@ -197,13 +245,43 @@ async function main(argv: string[]): Promise<number> {
         return 2;
     }
 
-    const chosen = values.scenario
+    const ackTimeoutSeconds = Number(values['ack-timeout']);
+    if (!Number.isFinite(ackTimeoutSeconds) || ackTimeoutSeconds <= 0) {
+        console.error('--ack-timeout debe ser un número positivo de segundos.');
+        return 2;
+    }
+    const dispatchOrError = parseDispatchReference(values['dispatch-id'], values['tracking-code']);
+    if (typeof dispatchOrError === 'string') {
+        console.error(dispatchOrError);
+        return 2;
+    }
+    const dispatch = dispatchOrError;
+
+    let chosen = values.scenario
         ? available.filter((fixture) => fixture.scenario === values.scenario)
         : available.filter((fixture) => !fixture.steps.some((step) => step.respondsTo !== undefined));
     if (chosen.length === 0) {
         console.error(`No hay un escenario «${values.scenario}» para ${script}. Escenarios:`);
         for (const fixture of available) console.error(describe(fixture));
         return 2;
+    }
+
+    // A complaint that must be accepted needs a delivery that exists: without one the run could only fail.
+    if (script === 'crm' && dispatch === undefined && !values['as-is']) {
+        const needing = chosen.filter((fixture) => fixture.steps.some((step) => step.realDispatch === true));
+        if (needing.length > 0 && values.scenario) {
+            console.error(
+                `El escenario «${values.scenario}» reclama una entrega real: indica un despacho \`delivered\` con ` +
+                    '--dispatch-id y/o --tracking-code.',
+            );
+            return 2;
+        }
+        if (needing.length > 0) {
+            console.log(
+                `Se omiten ${needing.map((fixture) => fixture.scenario).join(', ')}: necesitan --dispatch-id y/o --tracking-code.`,
+            );
+            chosen = chosen.filter((fixture) => !needing.includes(fixture));
+        }
     }
 
     console.log(`Emulador ${simulatorTarget.emulatorHost}, proyecto ${simulatorTarget.projectId}.`);
@@ -215,6 +293,8 @@ async function main(argv: string[]): Promise<number> {
             delayMs,
             pauseSeconds,
             timeoutMinutes,
+            ackTimeoutSeconds,
+            dispatch,
         });
         failed ||= !ok;
     }

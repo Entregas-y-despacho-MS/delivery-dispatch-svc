@@ -36,6 +36,11 @@ export interface ScenarioStep {
     expectInvalid?: boolean;
     /** CRM scenarios: the acknowledgement the simulator waits for after publishing the step. */
     expectAck?: ExpectedAck;
+    /**
+     * CRM scenarios: the step claims a delivery that must exist. The fixture carries a placeholder reference and the
+     * run replaces it with the real `delivered` dispatch the person passes (`--dispatch-id` / `--tracking-code`).
+     */
+    realDispatch?: boolean;
 }
 
 /** A versioned fixture file: `test/simulator/fixtures/<scenario>.json`. */
@@ -64,6 +69,7 @@ export interface BuiltStep {
     pauseBefore: boolean;
     expectInvalid: boolean;
     expectAck?: ExpectedAck;
+    realDispatch: boolean;
     /** Order the message belongs to (`crmCaseId`, `rmaId`, `salesOrderId` or `purchaseOrderId`, already suffixed with the run). */
     orderId: string;
 }
@@ -84,4 +90,6 @@ export interface BuildOptions {
     asIs?: boolean;
     /** "Now" for the date shift. Defaults to the current instant. */
     now?: Date;
+    /** The dispatch every `realDispatch` step claims; whichever field is missing is removed from the message. */
+    dispatch?: { dispatchId?: number; trackingCode?: string };
 }

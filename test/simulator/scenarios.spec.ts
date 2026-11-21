@@ -264,4 +264,47 @@ describe('buildScenario del reclamo de CRM', () => {
         const built = buildScenario(repeated, { runId: 'abc123', now: NOW });
         expect(built.steps.map((step) => step.expectAck?.outcome)).toEqual(['received', 'ignored', 'received']);
     });
+
+    it('--dispatch-id / --tracking-code reemplazan la referencia solo en los pasos que reclaman una entrega real', () => {
+        const dispatch = { dispatchId: 77, trackingCode: 'DSP-2026-00077' };
+        const built = buildScenario(repeated, { runId: 'abc123', now: NOW, dispatch });
+        for (const step of built.steps) {
+            const data = step.envelope['data'] as Record<string, unknown>;
+            expect(data['dispatchId']).toBe(77);
+            expect(data['trackingCode']).toBe('DSP-2026-00077');
+        }
+        // El escenario del despacho inexistente no lo toca: su referencia es inexistente a propósito.
+        const missing = buildScenario(loadScenario('complaint-dispatch-not-found')!, { runId: 'abc123', now: NOW, dispatch });
+        expect((missing.steps[0]!.envelope['data'] as Record<string, unknown>)['dispatchId']).toBe(2147000000);
+    });
+
+    it('con una sola referencia, la otra se quita (si no, no serían el mismo despacho)', () => {
+        const onlyId = buildScenario(repeated, { runId: 'abc123', now: NOW, dispatch: { dispatchId: 77 } });
+        const data = onlyId.steps[0]!.envelope['data'] as Record<string, unknown>;
+        expect(data['dispatchId']).toBe(77);
+        expect(data).not.toHaveProperty('trackingCode');
+        const onlyCode = buildScenario(repeated, { runId: 'abc123', now: NOW, dispatch: { trackingCode: 'DSP-2026-00077' } });
+        const other = onlyCode.steps[0]!.envelope['data'] as Record<string, unknown>;
+        expect(other['trackingCode']).toBe('DSP-2026-00077');
+        expect(other).not.toHaveProperty('dispatchId');
+    });
+
+    it('sin --dispatch-id el fixture conserva su referencia de ejemplo, y con asIs también', () => {
+        const plain = buildScenario(repeated, { runId: 'abc123', now: NOW });
+        expect((plain.steps[0]!.envelope['data'] as Record<string, unknown>)['dispatchId']).toBe(482);
+        const asIs = buildScenario(repeated, { asIs: true, now: NOW, dispatch: { dispatchId: 77 } });
+        expect((asIs.steps[0]!.envelope['data'] as Record<string, unknown>)['dispatchId']).toBe(482);
+    });
+
+    it('el reclamo con la referencia reemplazada sigue cumpliendo el esquema', () => {
+        const built = buildScenario(loadScenario('complaint-opened')!, {
+            runId: 'abc123',
+            now: NOW,
+            dispatch: { trackingCode: 'DSP-2026-00077' },
+        });
+        const validate = ajv.getSchema(
+            'https://contracts.delivery-dispatch.local/messages/schemas/crm.delivery_complaint.opened.schema.json',
+        )!;
+        expect(validate(built.steps[0]!.envelope)).toBe(true);
+    });
 });

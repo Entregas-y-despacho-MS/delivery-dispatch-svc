@@ -7,6 +7,7 @@
   "steps": [
     {
       "label": "CRM abre un reclamo por un bulto dañado",
+      "realDispatch": true,
       "expectAck": {
         "outcome": "received"
       },
