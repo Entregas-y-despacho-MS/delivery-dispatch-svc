@@ -82,8 +82,25 @@ their random dispatch keys. No shared cache instance is inferred.
   Se conserva el primer motivo del episodio aunque después ocurra otro error. Un envío exitoso
   cierra el episodio implícitamente; una falta posterior permite un nuevo marker. No se actualizan
   eventos históricos ni se modifica el esquema. No se adquiere un bloqueo de ruta tras el despacho.
-  La marca es persistencia operativa: no se localizó un consumidor en el código backend
-  inspeccionado que la exponga a Despacho; las interfaces externas no se validaron. Las dependencias y una consulta de diagnóstico figuran en [PENDIENTES](../../../PENDIENTES.md).
+  La marca es persistencia operativa: todavía no existe un endpoint, DTO ni consumidor que la
+  exponga a Despacho (ni siquiera el evaluador de alertas operativas). Consulta de solo lectura
+  para ver qué despachos tienen la marca pendiente sin haberla resuelto con un envío posterior
+  (ordenada por identificadores de eventos del servidor):
+  ```sql
+  WITH lifecycle AS (
+      SELECT dispatch_id,
+             MAX(dispatch_event_id) FILTER (WHERE event_type = 'otp_resolution_required') AS pending_id,
+             COALESCE(MAX(dispatch_event_id) FILTER (WHERE event_type IN ('otp_sent', 'otp_resent')), 0) AS sent_id
+      FROM dispatch_events
+      WHERE event_type IN ('otp_resolution_required', 'otp_sent', 'otp_resent')
+      GROUP BY dispatch_id
+  )
+  SELECT e.dispatch_id, e.dispatch_event_id, e.created_at, e.metadata ->> 'reason' AS reason
+  FROM lifecycle l
+  JOIN dispatch_events e ON e.dispatch_event_id = l.pending_id
+  WHERE l.pending_id > l.sent_id
+  ORDER BY e.dispatch_event_id;
+  ```
 - **C5 — fallo SMS:** intentar un reenvío consume irrevocablemente una de las dos cuotas, incluso si
   el adaptador falla. Se invalida únicamente esa generación y no se devuelve cuota ni se restaura
   el código previo. Es una decisión intencional para mantener los límites bajo fallos/concurrencia;

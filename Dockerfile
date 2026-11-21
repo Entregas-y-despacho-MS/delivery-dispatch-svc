@@ -35,8 +35,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Keep the opt-in manual publisher available for `docker compose run` without exposing it as an API.
+# Not erp-publisher-ui.mjs: it refuses to start under NODE_ENV=production (see its own guard) and
+# is superseded in production by the separate microservice-emulator service — see
+# docs/pubsub-integration.md. Still useful for local dev, just not shipped in this image.
 COPY --from=builder /app/scripts/pubsub/publish-grupo-h-and-simulate.mjs ./scripts/pubsub/
-COPY --from=builder /app/scripts/pubsub/erp-publisher-ui.mjs ./scripts/pubsub/
 
 RUN groupadd -r nestjs && useradd -rm -g nestjs nestjs
 RUN chown -R nestjs:nestjs /app
@@ -45,5 +47,5 @@ USER nestjs
 EXPOSE 3000
 # node:22-bookworm-slim no trae wget; el healthcheck usa node (fetch nativo, Node 22).
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD ["node", "-e", "fetch('http://localhost:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+  CMD ["node", "-e", "fetch(`http://localhost:${process.env.PORT || 3000}/api/health`).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
 CMD ["sh", "-c", "node dist/database/seeds/seed.js && exec node dist/main"]

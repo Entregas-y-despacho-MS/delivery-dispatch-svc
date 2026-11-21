@@ -25,7 +25,7 @@ export interface CancelDispatchOptions {
 /**
  * Types whose cancellation is announced to the ERP. A pickup (`warehouse_return_pickup`) is not (ST-81.2, D3): the
  * payload would carry the RMA as `salesOrderId` to Marketplace, which receives every status without a filter, and a
- * manual pickup has no RMA at all. Telling Almacén about a cancelled RMA is a pending item (`PENDIENTES.md`).
+ * manual pickup has no RMA at all. Telling Almacén about a cancelled RMA is not implemented.
  */
 const PUBLISHES_CANCELLATION_TYPES: readonly string[] = ['delivery'];
 

@@ -1,6 +1,7 @@
 import 'dotenv/config';
 
 import { types } from 'pg';
+import helmet from 'helmet';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module.js';
@@ -21,6 +22,18 @@ async function bootstrap() {
 
     const app = await NestFactory.create(AppModule, { logger });
     const cfg = app.get(AppConfig);
+
+    // Swagger UI relies on inline scripts/styles that helmet's default Content-Security-Policy blocks;
+    // it's only ever enabled outside production (see getEnvSettings), so the CSP is skipped there and
+    // kept at its full default everywhere Swagger is off, production included.
+    //
+    // crossOriginResourcePolicy defaults to 'same-origin', which would make the browser block an
+    // <img>/<iframe> on the web portal (a different origin) pointing at a PDF or an uploaded evidence
+    // file served here; CORS (enableCors below) already governs cross-origin fetch()/XHR separately.
+    app.use(helmet({
+        contentSecurityPolicy:   swagger ? false : undefined,
+        crossOriginResourcePolicy: { policy: 'cross-origin' },
+    }));
 
     app.setGlobalPrefix(cfg.apiPrefix);
 
