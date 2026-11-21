@@ -106,3 +106,19 @@ export function judgeAck(expected: ExpectedAck, arrived: ObservedAck[]): Verdict
     }
     return { ok: true, summary: describeAck(ack) };
 }
+
+/**
+ * `judgeAck` plus one guard: «no acknowledgement» proves nothing when the service has not answered anything yet
+ * (it may be down, or slow). A step that expects `ignored` is conclusive only after an earlier step of the run
+ * received its acknowledgement.
+ */
+export function judgeStep(expected: ExpectedAck, arrived: ObservedAck[], context: { answeredBefore: boolean }): Verdict {
+    const verdict = judgeAck(expected, arrived);
+    if (expected.outcome === 'ignored' && verdict.ok && !context.answeredBefore) {
+        return {
+            ok: false,
+            summary: 'no concluyente: ningún paso anterior recibió acuse, no se sabe si Despachos estaba atendiendo',
+        };
+    }
+    return verdict;
+}

@@ -81,7 +81,12 @@ done
 
 # The CRM complaint flow (ES-298) is not optional: the complaint arrives through the shared input topic (routed by
 # its `type`), is rejected into its dead-letter topic and is answered on the two acknowledgement topics.
-for required in crm.delivery_complaint.opened.dead-letter     dispatch.delivery_complaint.received dispatch.delivery_complaint.rejected; do
+required_topics=(
+    crm.delivery_complaint.opened.dead-letter
+    dispatch.delivery_complaint.received
+    dispatch.delivery_complaint.rejected
+)
+for required in "${required_topics[@]}"; do
     if ! gcloud pubsub topics describe "$required" --project="$project" >/dev/null 2>&1; then
         echo "Required topic $required does not exist after setup (is its schema in contracts/messages/schemas?)." >&2
         exit 1
@@ -93,11 +98,22 @@ done
 # publisher owns it) and no admin role. Pass the e-mail of its service account; no key or secret is handled here.
 service_account="${PUBSUB_SERVICE_ACCOUNT:-}"
 if [[ -n "$service_account" ]]; then
+    # Only a plain service account e-mail: a value that already carries `serviceAccount:` / `user:` / `group:` would
+    # be bound to the wrong member.
+    if [[ ! "$service_account" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+\.iam\.gserviceaccount\.com$ ]]; then
+        echo "PUBSUB_SERVICE_ACCOUNT must be the e-mail of a service account (name@project.iam.gserviceaccount.com)." >&2
+        exit 1
+    fi
     grant() {
-        gcloud pubsub "$1" add-iam-policy-binding "$2"             --project="$project"             --member="serviceAccount:${service_account}"             --role="$3"             --quiet >/dev/null
+        gcloud pubsub "$1" add-iam-policy-binding "$2" \
+            --project="$project" \
+            --member="serviceAccount:${service_account}" \
+            --role="$3" \
+            --quiet >/dev/null
     }
     grant subscriptions "$subscription" roles/pubsub.subscriber
-    for name in "${dead_letter_topics[@]}" "${outbound_topics[@]}"; do
+    # `${arr[@]+...}` keeps an empty array from failing under `set -u` on bash older than 4.4.
+    for name in "${dead_letter_topics[@]}" ${outbound_topics[@]+"${outbound_topics[@]}"}; do
         grant topics "$name" roles/pubsub.publisher
     done
     echo "Granted ${service_account}: Subscriber on $subscription; Publisher on ${#dead_letter_topics[@]} dead-letter and ${#outbound_topics[@]} dispatch.* topics."

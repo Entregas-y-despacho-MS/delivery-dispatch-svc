@@ -245,6 +245,11 @@ async function main(argv: string[]): Promise<number> {
         return 2;
     }
 
+    const crmOnly = (['dispatch-id', 'tracking-code'] as const).filter((name) => values[name] !== undefined);
+    if (script !== 'crm' && crmOnly.length > 0) {
+        console.error(`--${crmOnly.join(' y --')} solo aplica a simulate:crm; simulate:${script} no lo usa.`);
+        return 2;
+    }
     const ackTimeoutSeconds = Number(values['ack-timeout']);
     if (!Number.isFinite(ackTimeoutSeconds) || ackTimeoutSeconds <= 0) {
         console.error('--ack-timeout debe ser un número positivo de segundos.');
@@ -257,6 +262,7 @@ async function main(argv: string[]): Promise<number> {
     }
     const dispatch = dispatchOrError;
 
+    const omitted: string[] = [];
     let chosen = values.scenario
         ? available.filter((fixture) => fixture.scenario === values.scenario)
         : available.filter((fixture) => !fixture.steps.some((step) => step.respondsTo !== undefined));
@@ -280,6 +286,7 @@ async function main(argv: string[]): Promise<number> {
             console.log(
                 `Se omiten ${needing.map((fixture) => fixture.scenario).join(', ')}: necesitan --dispatch-id y/o --tracking-code.`,
             );
+            omitted.push(...needing.map((fixture) => fixture.scenario));
             chosen = chosen.filter((fixture) => !needing.includes(fixture));
         }
     }
@@ -297,6 +304,12 @@ async function main(argv: string[]): Promise<number> {
             dispatch,
         });
         failed ||= !ok;
+    }
+    if (omitted.length > 0) {
+        console.log(
+            `\nEjecutados ${chosen.length} de ${chosen.length + omitted.length} escenarios. Sin ejecutar: ${omitted.join(', ')} ` +
+                '(el camino `received` no se probó: pasa --dispatch-id y/o --tracking-code de un despacho entregado).',
+        );
     }
     return failed ? 1 : 0;
 }

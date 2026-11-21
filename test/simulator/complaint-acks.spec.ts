@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deadLetteredMessageId, judgeAck, parseAck, type ObservedAck } from './complaint-acks.js';
+import { deadLetteredMessageId, judgeAck, judgeStep, parseAck, type ObservedAck } from './complaint-acks.js';
 
 /** Lectura de los acuses del reclamo de CRM que imprime `npm run simulate:crm` (ST-298.4). */
 const envelope = (type: string, messageId: string, data: Record<string, unknown>): string =>
@@ -141,5 +141,27 @@ describe('judgeAck', () => {
         const verdict = judgeAck({ outcome: 'received' }, [received('ack-1'), received('ack-2')]);
         expect(verdict.ok).toBe(false);
         expect(verdict.summary).toContain('2 acuses distintos');
+    });
+});
+
+describe('judgeStep', () => {
+    it('un paso que espera silencio no es concluyente si nada respondió antes (Despachos puede estar caído)', () => {
+        const verdict = judgeStep({ outcome: 'ignored' }, [], { answeredBefore: false });
+        expect(verdict.ok).toBe(false);
+        expect(verdict.summary).toContain('no concluyente');
+    });
+
+    it('el mismo silencio vale una vez que un paso anterior recibió su acuse', () => {
+        expect(judgeStep({ outcome: 'ignored' }, [], { answeredBefore: true }).ok).toBe(true);
+    });
+
+    it('un acuse que llegó donde se esperaba silencio es un fallo, haya o no respuestas previas', () => {
+        expect(judgeStep({ outcome: 'ignored' }, [received()], { answeredBefore: true }).ok).toBe(false);
+        expect(judgeStep({ outcome: 'ignored' }, [received()], { answeredBefore: false }).ok).toBe(false);
+    });
+
+    it('no cambia el veredicto de los pasos que sí esperan un acuse', () => {
+        expect(judgeStep({ outcome: 'received' }, [received()], { answeredBefore: false }).ok).toBe(true);
+        expect(judgeStep({ outcome: 'received' }, [], { answeredBefore: true }).ok).toBe(false);
     });
 });

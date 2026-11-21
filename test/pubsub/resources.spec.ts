@@ -28,7 +28,11 @@ function createdBy(plan: ReturnType<typeof buildPlan>) {
         subscriptions: new Map<string, unknown>(
             plan.subscriptions.map((s: any) => [
                 s.name,
-                { topic: topicPath(PROJECT, s.topic), deadLetterPolicy: s.body.deadLetterPolicy },
+                {
+                    topic: topicPath(PROJECT, s.topic),
+                    deadLetterPolicy: s.body.deadLetterPolicy,
+                    retryPolicy: s.body.retryPolicy,
+                },
             ]),
         ),
     };
@@ -107,9 +111,8 @@ describe('findProblems', () => {
     it('avisa de una suscripción atada a otro tópico', () => {
         const existing = createdBy(plan);
         existing.subscriptions.set('crm.delivery_complaint.opened.dispatch-svc', {
+            ...(existing.subscriptions.get('crm.delivery_complaint.opened.dispatch-svc') as object),
             topic: topicPath(PROJECT, 'inventory.receipt.confirmed'),
-            deadLetterPolicy: plan.subscriptions.find((s: any) => s.name === 'crm.delivery_complaint.opened.dispatch-svc')
-                .body.deadLetterPolicy,
         });
         const problems = findProblems(plan, existing, PROJECT);
         expect(problems).toHaveLength(1);
@@ -119,7 +122,8 @@ describe('findProblems', () => {
     it('avisa de una suscripción sin dead-letter', () => {
         const existing = createdBy(plan);
         existing.subscriptions.set('crm.delivery_complaint.opened.dispatch-svc', {
-            topic: topicPath(PROJECT, 'crm.delivery_complaint.opened'),
+            ...(existing.subscriptions.get('crm.delivery_complaint.opened.dispatch-svc') as object),
+            deadLetterPolicy: undefined,
         });
         expect(findProblems(plan, existing, PROJECT)).toEqual([
             'la suscripción crm.delivery_complaint.opened.dispatch-svc no manda sus fallos a crm.delivery_complaint.opened.dead-letter',
@@ -129,7 +133,7 @@ describe('findProblems', () => {
     it('avisa de un número de entregas distinto del esperado', () => {
         const existing = createdBy(plan);
         existing.subscriptions.set('crm.delivery_complaint.opened.dispatch-svc', {
-            topic: topicPath(PROJECT, 'crm.delivery_complaint.opened'),
+            ...(existing.subscriptions.get('crm.delivery_complaint.opened.dispatch-svc') as object),
             deadLetterPolicy: {
                 deadLetterTopic: topicPath(PROJECT, 'crm.delivery_complaint.opened.dead-letter'),
                 maxDeliveryAttempts: 100,
@@ -138,6 +142,28 @@ describe('findProblems', () => {
         const problems = findProblems(plan, existing, PROJECT);
         expect(problems).toHaveLength(1);
         expect(problems[0]).toContain('100');
+    });
+
+    it('avisa de una suscripción existente sin espera entre reentregas (se agotarían en milisegundos)', () => {
+        const existing = createdBy(plan);
+        const name = 'crm.delivery_complaint.opened.dispatch-svc';
+        existing.subscriptions.set(name, {
+            ...(existing.subscriptions.get(name) as object),
+            retryPolicy: undefined,
+        });
+        const problems = findProblems(plan, existing, PROJECT);
+        expect(problems).toHaveLength(1);
+        expect(problems[0]).toContain('espera entre reentregas');
+    });
+
+    it('avisa de una espera distinta de la esperada', () => {
+        const existing = createdBy(plan);
+        const name = 'crm.delivery_complaint.opened.dispatch-svc';
+        existing.subscriptions.set(name, {
+            ...(existing.subscriptions.get(name) as object),
+            retryPolicy: { minimumBackoff: '1s', maximumBackoff: '600s' },
+        });
+        expect(findProblems(plan, existing, PROJECT)).toHaveLength(1);
     });
 
     it('lista todos los problemas, no solo el primero', () => {

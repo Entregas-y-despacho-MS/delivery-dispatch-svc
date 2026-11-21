@@ -59,6 +59,8 @@ export function buildPlan(topics, options) {
             topic,
             deadLetterTopic: deadLetter,
             maxDeliveryAttempts,
+            minBackoff,
+            maxBackoff,
             body: {
                 retryPolicy: { minimumBackoff: minBackoff, maximumBackoff: maxBackoff },
                 deadLetterPolicy: {
@@ -92,6 +94,14 @@ export function findProblems(plan, existing, project) {
             );
         }
         if (expected.deadLetterTopic === undefined) continue;
+        // Without a backoff the broker redelivers at once and the attempts run out in milliseconds: a subscription that
+        // already existed with an old retry policy (the create call answers 409) must not pass as valid.
+        const retry = actual.retryPolicy;
+        if (retry?.minimumBackoff !== expected.minBackoff || retry?.maximumBackoff !== expected.maxBackoff) {
+            problems.push(
+                `la suscripción ${expected.name} tiene otra espera entre reentregas (${retry?.minimumBackoff ?? 'ninguna'} – ${retry?.maximumBackoff ?? 'ninguna'}), se esperaba ${expected.minBackoff} – ${expected.maxBackoff}; recréala`,
+            );
+        }
         const policy = actual.deadLetterPolicy;
         if (policy?.deadLetterTopic !== topicPath(project, expected.deadLetterTopic)) {
             problems.push(`la suscripción ${expected.name} no manda sus fallos a ${expected.deadLetterTopic}`);

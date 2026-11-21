@@ -35,6 +35,8 @@ const CHECK_ONLY = process.argv.includes('--check');
 
 const BASE_URL = `http://${HOST}/v1/projects/${PROJECT}`;
 
+class NotEmulatorError extends Error {}
+
 async function waitForEmulator(attempts = 30, delayMs = 1000) {
     for (let i = 1; i <= attempts; i++) {
         try {
@@ -43,10 +45,10 @@ async function waitForEmulator(attempts = 30, delayMs = 1000) {
             const res = await fetch(`http://${HOST}/`, { redirect: 'manual' });
             if (res.ok && (await res.text()).trim() === 'Ok') return;
             if (res.status >= 300) {
-                throw new Error(`${HOST} responde HTTP ${res.status}: no es el emulador de Pub/Sub (¿otro programa usa el puerto?).`);
+                throw new NotEmulatorError(`${HOST} responde HTTP ${res.status}: no es el emulador de Pub/Sub (¿otro programa usa el puerto?).`);
             }
         } catch (error) {
-            if (error instanceof Error && error.message.startsWith(HOST)) throw error;
+            if (error instanceof NotEmulatorError) throw error;
             // el emulador todavía no acepta conexiones
         }
         await new Promise((done) => setTimeout(done, delayMs));
