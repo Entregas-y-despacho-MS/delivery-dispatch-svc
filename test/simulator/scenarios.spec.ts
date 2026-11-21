@@ -77,6 +77,38 @@ describe('fixtures del simulador', () => {
         ]);
     });
 
+    it('cubre los escenarios del reclamo de CRM que pide ST-298.4, todos en `simulate:crm`', () => {
+        const crm = fixtures.filter((fixture) => fixture.script === 'crm');
+        expect(crm.map((fixture) => fixture.scenario).sort()).toEqual([
+            'complaint-dispatch-not-found',
+            'complaint-invalid',
+            'complaint-opened',
+            'complaint-repeated-version',
+        ]);
+        for (const fixture of crm) {
+            for (const step of fixture.steps) {
+                expect(step.message['type']).toBe('crm.delivery_complaint.opened');
+                expect(step.message['source']).toBe('crm');
+                expect(step.expectAck, `${fixture.scenario}: falta el acuse esperado`).toBeDefined();
+            }
+        }
+    });
+
+    it('el acuse esperado es coherente con el esquema del reclamo y con su código de rechazo', () => {
+        const codes = readJson(resolve(CONTRACTS, 'schemas', 'dispatch.delivery_complaint.rejected.schema.json'))
+            .$defs.rejectionCode.enum as string[];
+        for (const fixture of fixtures.filter((candidate) => candidate.script === 'crm')) {
+            for (const step of fixture.steps) {
+                const ack = step.expectAck!;
+                if (ack.outcome === 'rejected') expect(codes).toContain(ack.rejectionCode);
+                else expect(ack.rejectionCode).toBeUndefined();
+                // `schema_invalid` es el único rechazo que nombra el campo, y solo ocurre con un mensaje inválido.
+                expect(ack.field !== undefined).toBe(ack.rejectionCode === 'schema_invalid');
+                expect(step.expectInvalid === true).toBe(ack.rejectionCode === 'schema_invalid');
+            }
+        }
+    });
+
     it('el pedido completo lleva confirmedAt y physicallyPacked', () => {
         const [confirmed, ready] = loadScenario('complete-order')!.steps.map(
             (step) => step.message['data'] as Record<string, unknown>,
@@ -187,5 +219,49 @@ describe('buildScenario', () => {
         const built = buildScenario(loadScenario('invalid-message')!, { runId: 'abc123', now: NOW });
         expect(built.steps[0]!.expectInvalid).toBe(true);
         expect((built.steps[0]!.envelope['data'] as Record<string, unknown>)['recipient']).toBeUndefined();
+    });
+});
+
+describe('buildScenario del reclamo de CRM', () => {
+    const repeated = loadScenario('complaint-repeated-version')!;
+
+    it('sufija el crmCaseId con el runId y no el pedido de venta', () => {
+        const built = buildScenario(loadScenario('complaint-opened')!, { runId: 'abc123', now: NOW });
+        const data = built.steps[0]!.envelope['data'] as { crmCaseId: string; salesOrderId?: string };
+        expect(data.crmCaseId).toBe('CRM-CASE-SIM-0001-abc123');
+        expect(built.steps[0]!.orderId).toBe(data.crmCaseId);
+    });
+
+    it('un reclamo con salesOrderId se identifica igualmente por su caso, no por el pedido', () => {
+        const fixture = structuredClone(loadScenario('complaint-opened')!);
+        (fixture.steps[0]!.message['data'] as Record<string, unknown>)['salesOrderId'] = 'SO-2026-000123';
+        const built = buildScenario(fixture, { runId: 'abc123', now: NOW });
+        const data = built.steps[0]!.envelope['data'] as { salesOrderId: string };
+        expect(built.steps[0]!.orderId).toBe('CRM-CASE-SIM-0001-abc123');
+        expect(data.salesOrderId).toBe('SO-2026-000123');
+    });
+
+    it('dos corridas abren casos distintos: una no se ignora como versión repetida de la otra', () => {
+        const first = buildScenario(repeated, { runId: 'aaaaaa', now: NOW });
+        const second = buildScenario(repeated, { runId: 'bbbbbb', now: NOW });
+        expect(first.steps[0]!.orderId).not.toBe(second.steps[0]!.orderId);
+    });
+
+    it('la versión repetida es otro mensaje (otro messageId) del mismo caso y la misma versión', () => {
+        const built = buildScenario(repeated, { runId: 'abc123', now: NOW });
+        const [first, again, next] = built.steps.map((step) => ({
+            messageId: step.envelope['messageId'],
+            ...(step.envelope['data'] as { crmCaseId: string; caseVersion: number }),
+        }));
+        expect(again!.messageId).not.toBe(first!.messageId);
+        expect(again!.crmCaseId).toBe(first!.crmCaseId);
+        expect(again!.caseVersion).toBe(first!.caseVersion);
+        expect(next!.crmCaseId).toBe(first!.crmCaseId);
+        expect(next!.caseVersion).toBe(2);
+    });
+
+    it('conserva el acuse esperado de cada paso', () => {
+        const built = buildScenario(repeated, { runId: 'abc123', now: NOW });
+        expect(built.steps.map((step) => step.expectAck?.outcome)).toEqual(['received', 'ignored', 'received']);
     });
 });

@@ -1,0 +1,36 @@
+{
+  "scenario": "complaint-opened",
+  "script": "crm",
+  "description": "Reclamo válido de CRM sobre una entrega completada. Apunta al despacho 482 / DSP-2026-00482 del fixture: para verlo aceptado hay que indicar un despacho `delivered` real (opciones --dispatch-id y --tracking-code).",
+  "expected": "Despachos guarda el caso en delivery_complaint_cases y publica dispatch.delivery_complaint.received con el mismo correlationMessageId. Si el despacho del fixture no existe, publica rejected/dispatch_not_found.",
+  "anchor": "2026-11-21T12:00:00Z",
+  "steps": [
+    {
+      "label": "CRM abre un reclamo por un bulto dañado",
+      "expectAck": {
+        "outcome": "received"
+      },
+      "message": {
+        "messageId": "01930000-0000-7000-8000-000000000a01",
+        "type": "crm.delivery_complaint.opened",
+        "schemaVersion": 1,
+        "source": "crm",
+        "occurredAt": "2026-11-21T12:00:00Z",
+        "data": {
+          "crmCaseId": "CRM-CASE-SIM-0001",
+          "caseVersion": 1,
+          "dispatchId": 482,
+          "trackingCode": "DSP-2026-00482",
+          "reasonCode": "DAMAGED_ITEM",
+          "openedAt": "2026-11-21T11:58:00Z",
+          "affectedItems": [
+            {
+              "packageId": "PKG-SIM-0001-1",
+              "quantity": 1
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

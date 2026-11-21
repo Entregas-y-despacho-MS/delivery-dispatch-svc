@@ -18,9 +18,11 @@ import type {
 export const FIXTURES_DIR = resolve(import.meta.dirname, 'fixtures');
 
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
-// `rmaId` first: an RMA may also carry the `salesOrderId` it comes from, but the RMA is what each run suffixes.
+// `crmCaseId` before everything: a CRM complaint also carries the `salesOrderId` it refers to, but the case is what
+// each run suffixes (a second run with the same case and version would be ignored as repeated).
+// `rmaId` next: an RMA may also carry the `salesOrderId` it comes from, but the RMA is what each run suffixes.
 // `referenceId` is the RMA / purchase order a warehouse receipt confirms (ST-240.4): it must carry the same suffix.
-const ORDER_ID_KEYS = ['rmaId', 'salesOrderId', 'purchaseOrderId', 'referenceId'] as const;
+const ORDER_ID_KEYS = ['crmCaseId', 'rmaId', 'salesOrderId', 'purchaseOrderId', 'referenceId'] as const;
 
 export function loadScenarios(dir: string = FIXTURES_DIR): ScenarioFixture[] {
     return readdirSync(dir)
@@ -115,6 +117,7 @@ export function buildScenario(fixture: ScenarioFixture, options: BuildOptions = 
             respondsTo: step.respondsTo,
             pauseBefore: step.pauseBefore === true,
             expectInvalid: step.expectInvalid === true,
+            expectAck: step.expectAck,
             orderId: orderIdOf(envelope),
         };
     });

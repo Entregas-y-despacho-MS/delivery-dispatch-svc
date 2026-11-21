@@ -1,0 +1,37 @@
+{
+  "scenario": "complaint-dispatch-not-found",
+  "script": "crm",
+  "description": "Reclamo bien formado cuya referencia no corresponde a ningún despacho.",
+  "expected": "Despachos no crea caso y publica dispatch.delivery_complaint.rejected con rejectionCode dispatch_not_found y el correlationMessageId del reclamo; el mensaje no va al dead-letter.",
+  "anchor": "2026-11-21T12:00:00Z",
+  "steps": [
+    {
+      "label": "CRM reclama un despacho inexistente",
+      "expectAck": {
+        "outcome": "rejected",
+        "rejectionCode": "dispatch_not_found"
+      },
+      "message": {
+        "messageId": "01930000-0000-7000-8000-000000000a02",
+        "type": "crm.delivery_complaint.opened",
+        "schemaVersion": 1,
+        "source": "crm",
+        "occurredAt": "2026-11-21T12:00:00Z",
+        "data": {
+          "crmCaseId": "CRM-CASE-SIM-0002",
+          "caseVersion": 1,
+          "dispatchId": 2147000000,
+          "trackingCode": "DSP-2099-99999",
+          "reasonCode": "DAMAGED_ITEM",
+          "openedAt": "2026-11-21T11:58:00Z",
+          "affectedItems": [
+            {
+              "packageId": "PKG-SIM-0001-1",
+              "quantity": 1
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

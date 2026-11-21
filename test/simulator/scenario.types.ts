@@ -1,8 +1,21 @@
 /** Which `npm run simulate:*` command exposes a scenario. */
-export type SimulatorScript = 'marketplace' | 'inventory' | 'procurement' | 'demo-returns';
+export type SimulatorScript = 'marketplace' | 'inventory' | 'procurement' | 'demo-returns' | 'crm';
 
 /** `entityType` of `dispatch.sync.requested`: it also tells which origin must answer. */
 export type SyncEntityType = 'sales_order' | 'shipment';
+
+/**
+ * What Despachos must answer to a CRM complaint (ST-298.4): `received` / `rejected` are the acknowledgements
+ * `dispatch.delivery_complaint.*` correlated by `correlationMessageId`; `ignored` is a stale or repeated
+ * version, which gets no acknowledgement at all.
+ */
+export interface ExpectedAck {
+    outcome: 'received' | 'rejected' | 'ignored';
+    /** Only with `rejected`: the stable `rejectionCode` of the acknowledgement. */
+    rejectionCode?: string;
+    /** Only with `schema_invalid`: JSON Pointer of the first field that failed. */
+    field?: string;
+}
 
 /** One message of a scenario, as stored in the fixture (complete envelope, fixed ids and dates). */
 export interface ScenarioStep {
@@ -21,6 +34,8 @@ export interface ScenarioStep {
     pauseBefore?: boolean;
     /** On purpose it does not meet its schema; `contracts:check` (ST-73.4) must expect the failure. */
     expectInvalid?: boolean;
+    /** CRM scenarios: the acknowledgement the simulator waits for after publishing the step. */
+    expectAck?: ExpectedAck;
 }
 
 /** A versioned fixture file: `test/simulator/fixtures/<scenario>.json`. */
@@ -48,7 +63,8 @@ export interface BuiltStep {
     respondsTo?: SyncEntityType;
     pauseBefore: boolean;
     expectInvalid: boolean;
-    /** Order the message belongs to (`rmaId`, `salesOrderId` or `purchaseOrderId`, already suffixed with the run). */
+    expectAck?: ExpectedAck;
+    /** Order the message belongs to (`crmCaseId`, `rmaId`, `salesOrderId` or `purchaseOrderId`, already suffixed with the run). */
     orderId: string;
 }
 
