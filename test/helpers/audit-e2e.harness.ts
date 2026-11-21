@@ -1,7 +1,7 @@
 // Shared bootstrap of the e2e files that check the audit trail (RF-A35) of a family of sensitive handlers: the real
 // AppModule, one throwaway user per role (logged in for real), and a way to read the audit rows of a request by its
 // X-Request-Id. Everything it creates is deleted in `close()`.
-import { Test, TestingModule } from '@nestjs/testing';
+import { Test, TestingModule, type TestingModuleBuilder } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { DataSource } from 'typeorm';
@@ -43,8 +43,10 @@ export class AuditE2eHarness {
         return `${this.prefix}-${++this.sequence}`;
     }
 
-    async start(keys: readonly AuditRoleKey[] = ['admin', 'coordinator']): Promise<void> {
-        const moduleRef: TestingModule = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    /** `configure` replaces providers with doubles (e.g. a slow external task) before the app is compiled. */
+    async start(keys: readonly AuditRoleKey[] = ['admin', 'coordinator'], configure?: (builder: TestingModuleBuilder) => TestingModuleBuilder): Promise<void> {
+        const builder = Test.createTestingModule({ imports: [AppModule] });
+        const moduleRef: TestingModule = await (configure ? configure(builder) : builder).compile();
         this.app = moduleRef.createNestApplication();
         this.api = this.app.get(AppConfig).apiPrefix;
         this.app.setGlobalPrefix(this.api);

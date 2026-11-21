@@ -43,6 +43,7 @@ import { ReassignmentTargetDto } from '../dto/reassignment-target.dto.js';
 import { RouteBatchReassignmentService } from '../services/route-batch-reassignment.service.js';
 import { ReassignmentTargetsService } from '../services/reassignment-targets.service.js';
 import { Roles } from '../../../../app/auth/decorators/index.js';
+import { AuditAction } from '../../../audit/admin-audit-events/decorators/audit-action.decorator.js';
 import { CurrentUser } from '../../../../shared/decorators/current-user.decorator.js';
 import { ParseIdPipe } from '../../../../shared/pipes/index.js';
 import { RoleEnum } from '../../../../shared/enums/index.js';
@@ -136,6 +137,7 @@ export class RouteBatchesController {
   }
 
   @Post(':id/approve-promises')
+  @AuditAction('route_batch.approved', { metadata: { stage: 'promises' } })
   @HttpCode(HttpStatus.OK)
   @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
   @ApiOperation({
@@ -168,6 +170,7 @@ export class RouteBatchesController {
   }
 
   @Post(':id/approve-final')
+  @AuditAction('route_batch.approved', { metadata: { stage: 'final' } })
   @HttpCode(HttpStatus.OK)
   @Roles(RoleEnum.COORDINATOR)
   @ApiOperation({
@@ -327,6 +330,7 @@ export class RouteBatchesController {
   }
 
   @Patch(':id/reviewer')
+  @AuditAction('route_batch.assignment_changed', { bodyFields: ['reviewerUserId'], metadata: { target: 'reviewer' } })
   @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
   @ApiOperation({
     summary: 'Reassign the reviewer of a provisional batch',
@@ -394,6 +398,7 @@ export class RouteBatchesController {
   }
 
   @Post(':id/reassign')
+  @AuditAction('route_batch.assignment_changed', { bodyFields: ['targetBatchId'], metadata: { target: 'stops' } })
   @HttpCode(HttpStatus.OK)
   @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
   @ApiOperation({

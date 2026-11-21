@@ -1,6 +1,7 @@
 import { Body, Controller, Param, Patch } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiServiceUnavailableResponse, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../auth/decorators/index.js';
+import { AuditAction } from '../../../modules/audit/admin-audit-events/decorators/audit-action.decorator.js';
 import { AssignRouteBatchDriverDto } from '../../../modules/dispatch/route-batches/dto/assign-route-batch-driver.dto.js';
 import { AssignRouteBatchVehicleDto } from '../../../modules/dispatch/route-batches/dto/assign-route-batch-vehicle.dto.js';
 import { CurrentUser } from '../../../shared/decorators/current-user.decorator.js';
@@ -41,6 +42,7 @@ export class RouteBatchCorrectionController {
     constructor(private readonly correction: RouteBatchCorrectionService) {}
 
     @Patch(':id/driver')
+    @AuditAction('route_batch.assignment_changed', { bodyFields: ['driverId'], metadata: { target: 'driver' } })
     @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
     @ApiOperation({
         summary: 'Assign or change the proposed driver of a route batch',
@@ -73,6 +75,7 @@ export class RouteBatchCorrectionController {
     }
 
     @Patch(':id/vehicle')
+    @AuditAction('route_batch.assignment_changed', { bodyFields: ['vehicleId'], metadata: { target: 'vehicle' } })
     @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
     @ApiOperation({
         summary: 'Assign or change the vehicle of a route batch after validating capacity',
