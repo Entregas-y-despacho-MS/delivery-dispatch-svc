@@ -82,6 +82,39 @@ describe('AdminAuditService.recordOutcome', () => {
         await service.recordOutcome(context(request(), { action: 'planning.run', entityIdParam: null }), 201);
         expect((insert.mock.calls[0] as any[])[0].entityId).toBeNull();
     });
+
+    it('takes the entity id from the id of the response when the action declares it (creations)', async () => {
+        const { service, insert } = build();
+        const declared = { action: 'user.created', entityIdFrom: 'response' };
+        await service.recordOutcome(context(request({ params: {} }), declared), 201, { id: 77, username: 'x' });
+        expect((insert.mock.calls[0] as any[])[0].entityId).toBe('77');
+    });
+
+    it('has no entity id from the response when there is none or it is not an id', async () => {
+        for (const body of [undefined, null, 'text', {}, { id: {} }, { id: null }]) {
+            const { service, insert } = build();
+            await service.recordOutcome(context(request(), { action: 'user.created', entityIdFrom: 'response' }), 400, body);
+            expect((insert.mock.calls[0] as any[])[0].entityId).toBeNull();
+        }
+    });
+
+    it('takes the entity id from the authenticated user when the action declares it (own account)', async () => {
+        const { service, insert } = build();
+        await service.recordOutcome(context(request({ params: { id: '999' } }), { action: 'auth.password_changed', entityIdFrom: 'actor' }), 200);
+        expect((insert.mock.calls[0] as any[])[0].entityId).toBe('4');
+    });
+
+    it('has no entity id from the actor when the request had no valid token', async () => {
+        const { service, insert } = build();
+        await service.recordOutcome(context(request({ user: undefined }), { action: 'auth.password_changed', entityIdFrom: 'actor' }), 401);
+        expect((insert.mock.calls[0] as any[])[0].entityId).toBeNull();
+    });
+
+    it('ignores the route param when the entity id comes from the response or the actor', async () => {
+        const { service, insert } = build();
+        await service.recordOutcome(context(request({ params: { id: '999' } }), { action: 'user.created', entityIdFrom: 'response' }), 201, { id: 5 });
+        expect((insert.mock.calls[0] as any[])[0].entityId).toBe('5');
+    });
 });
 
 describe('AdminAuditService.recordError', () => {

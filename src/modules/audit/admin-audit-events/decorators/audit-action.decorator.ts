@@ -4,9 +4,20 @@ import { isForbiddenMetadataKey } from '../domain/admin-audit-event.js';
 
 export const AUDIT_ACTION_KEY = 'adminAuditAction';
 
+/**
+ * Where the id of the affected entity comes from:
+ * - `param` (default): the route param named by `entityIdParam`.
+ * - `response`: the `id` of the object the handler returns (creations: the id does not exist before the call).
+ *   A failed call has no response, so its event carries no entity id.
+ * - `actor`: the authenticated user (actions a user performs on its own account, e.g. its password or 2FA).
+ */
+export type AuditEntityIdSource = 'param' | 'response' | 'actor';
+
 export interface AuditActionOptions {
     /** Route param that identifies the affected entity (default `id`). `null`: the action has no entity id. */
     entityIdParam?: string | null;
+    /** Source of the entity id (default `param`). `entityIdParam` only applies to `param`. */
+    entityIdFrom?: AuditEntityIdSource;
     /**
      * Request body fields copied to `metadata` (allow-list). Secrets and personal data are refused when the
      * decorator is applied, so a wrong declaration fails at startup instead of leaking.
