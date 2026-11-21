@@ -182,6 +182,36 @@ correcto y deja intacta su política actual.
 Inicia el backend con esas variables de entorno y publica eventos desde el sistema emisor al topic. No configures
 `PUBSUB_EMULATOR_HOST`: si lo dejas apuntando al emulador, el cliente no llegará a Google Cloud.
 
+### Permisos mínimos por entorno (fuente CRM, ST-298.4)
+
+El reclamo de CRM (`crm.delivery_complaint.opened`) **no necesita una subscription ni un topic de entrada propios en
+GCP**: llega por el topic compartido, se enruta por su `type` y lo consume la misma subscription del backend. Lo que
+sí hay en GCP, y debe existir antes de arrancar, es su dead-letter y los dos topics de acuse.
+
+| Recurso | Entorno local (emulador) | GCP (desarrollo / real) |
+|---|---|---|
+| Topic de entrada `crm.delivery_complaint.opened` | Lo crea `pubsub-init` (`bootstrap.mjs`) con su suscripción `….dispatch-svc` y su DLQ | Es el topic compartido (`PUBSUB_INBOUND_TOPIC`); lo crea y es dueño quien publica. El backend no necesita ningún rol sobre él |
+| Subscription del backend | La del bootstrap, una por tópico | `PUBSUB_INBOUND_SUBSCRIPTION`: `roles/pubsub.subscriber` solo sobre esa subscription |
+| `crm.delivery_complaint.opened.dead-letter` | Lo crea el bootstrap | Lo crea `setup-gcp-subscription.sh`; el backend necesita `roles/pubsub.publisher` sobre él |
+| `dispatch.delivery_complaint.received` y `.rejected` | Los crea el bootstrap | Los crea `setup-gcp-subscription.sh`; `roles/pubsub.publisher` sobre cada uno. Los lee CRM, que crea su propia subscription |
+| Simulador de CRM (`npm run simulate:crm`) | Sin credenciales: solo habla con el emulador | No aplica: el simulador nunca publica en Google Cloud |
+
+Nunca se otorgan roles a nivel de proyecto ni administrativos. Para dárselos a la cuenta de servicio del backend sin
+hacerlo a mano, pasa su correo (no una llave) al helper:
+
+```bash
+export PUBSUB_SERVICE_ACCOUNT=backend@<proyecto>.iam.gserviceaccount.com
+./scripts/pubsub/setup-gcp-subscription.sh
+```
+
+El helper concede `roles/pubsub.subscriber` sobre la subscription y `roles/pubsub.publisher` sobre cada dead-letter y
+cada topic `dispatch.*`, y nada más. Si falta algún topic del flujo de reclamos, termina con error. Sin
+`PUBSUB_SERVICE_ACCOUNT` no concede nada y lo avisa. Las credenciales (ADC o un archivo de cuenta de servicio) se
+configuran en el entorno de ejecución y no se guardan en fixtures ni en el repositorio.
+
+En el entorno local, `node scripts/pubsub/bootstrap.mjs --check` valida que existan todos los recursos (incluidos los
+del reclamo de CRM) sin crear nada.
+
 ### Publicar en Grupo H y procesar una copia local
 
 Cuando no tengas permisos de suscripción en GCP, puedes publicar los eventos en el topic real y enviar una copia
