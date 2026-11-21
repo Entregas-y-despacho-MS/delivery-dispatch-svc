@@ -124,6 +124,7 @@ export class MessageConsumer {
                 reasonCode,
                 rejectedAt: deadLetter.rejectedAt,
                 errors,
+                message,
             });
         } catch (error) {
             this.logger.error(

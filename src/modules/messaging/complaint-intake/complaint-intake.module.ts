@@ -4,6 +4,7 @@ import { OutboundMessagesModule } from '../outbound-messages/outbound-messages.m
 import { DeliveryComplaintCase } from './entities/delivery-complaint-case.entity.js';
 import { ComplaintConsumer } from './services/complaint-consumer.service.js';
 import { ComplaintIntakeService } from './services/complaint-intake.service.js';
+import { ComplaintRejectionAcknowledger } from './services/complaint-rejection-acknowledger.service.js';
 
 /**
  * ST-298.3 (8.9 reclamos de CRM). Consumes the complaint a CRM simulator publishes, validates the
@@ -12,7 +13,7 @@ import { ComplaintIntakeService } from './services/complaint-intake.service.js';
  */
 @Module({
     imports:   [TypeOrmModule.forFeature([DeliveryComplaintCase]), OutboundMessagesModule],
-    providers: [ComplaintIntakeService, ComplaintConsumer],
+    providers: [ComplaintIntakeService, ComplaintConsumer, ComplaintRejectionAcknowledger],
     exports:   [ComplaintIntakeService],
 })
 export class ComplaintIntakeModule {}
