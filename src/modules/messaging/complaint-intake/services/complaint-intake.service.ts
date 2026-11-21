@@ -2,10 +2,12 @@ import { Injectable } from '@nestjs/common';
 import type { EntityManager } from 'typeorm';
 import { buildEnvelope, type MessageEnvelope } from '../../../../plugins/messaging/envelope/message-envelope.js';
 import type { TransactionOptions } from '../../../../plugins/messaging/inbound-message-transaction.port.js';
+import { INT4_MAX } from '../../../../shared/constants/int4.js';
 import { OutboxService } from '../../outbound-messages/services/outbox.service.js';
 import {
     COMPLAINT_RECEIVED_TOPIC,
     COMPLAINT_REJECTED_TOPIC,
+    type ComplaintRejectionCode,
     type DeliveryComplaintOpenedData,
     type DispatchRejectionCode,
 } from '../domain/complaint-message.types.js';
@@ -26,7 +28,7 @@ type Resolution =
 
 export type ComplaintIntakeResult =
     | { status: 'accepted'; dispatchId: number; caseVersion: number }
-    | { status: 'rejected'; code: DispatchRejectionCode }
+    | { status: 'rejected'; code: ComplaintRejectionCode }
     /** The case already holds this version or a newer one: nothing is written and no acknowledgement is sent. */
     | { status: 'ignored' };
 
@@ -49,6 +51,13 @@ export class ComplaintIntakeService {
         options: TransactionOptions,
     ): Promise<ComplaintIntakeResult> {
         const manager = this.manager(options);
+
+        // The schema only says `minimum: 1`; the column is an INTEGER. A bigger number would fail inside
+        // Postgres and the broker would redeliver it forever, so it is answered like any invalid payload.
+        if (data.caseVersion > INT4_MAX) {
+            await this.enqueueRejected(manager, envelope, data, 'schema_invalid', '/data/caseVersion');
+            return { status: 'rejected', code: 'schema_invalid' };
+        }
 
         // A repeated or older caseVersion never reverts the case in force and gets no acknowledgement.
         const [existing]: { case_version: number }[] = await manager.query(
@@ -110,16 +119,20 @@ export class ComplaintIntakeService {
      * be the same one; `salesOrderId` only validates and never resolves a dispatch by itself.
      */
     private async resolveDispatch(manager: EntityManager, data: DeliveryComplaintOpenedData): Promise<Resolution> {
+        const dispatchIdParam = data.dispatchId !== undefined && data.dispatchId <= INT4_MAX ? data.dispatchId : null;
         const rows: DispatchRow[] = await manager.query(
             `SELECT d.dispatch_id, d.tracking_code, d.source_order_ref, s.name AS status
                FROM dispatches d
                JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
                JOIN dispatch_types t ON t.dispatch_type_id = d.dispatch_type_id
               WHERE t.name = $3
+                -- The acknowledgement must carry a tracking code; a dispatch without one is not addressable by CRM.
+                AND d.tracking_code IS NOT NULL
                 AND (($1::int IS NOT NULL AND d.dispatch_id = $1)
                   OR ($2::text IS NOT NULL AND d.tracking_code = $2))
               ORDER BY d.dispatch_id`,
-            [data.dispatchId ?? null, data.trackingCode ?? null, DELIVERY_DISPATCH_TYPE],
+            // A dispatchId beyond INTEGER cannot name any dispatch: it is searched as "no such id".
+            [dispatchIdParam, data.trackingCode ?? null, DELIVERY_DISPATCH_TYPE],
         );
 
         const bothGiven = data.dispatchId !== undefined && data.trackingCode !== undefined;
@@ -145,7 +158,8 @@ export class ComplaintIntakeService {
         manager: EntityManager,
         envelope: MessageEnvelope,
         data: DeliveryComplaintOpenedData,
-        code: DispatchRejectionCode,
+        code: ComplaintRejectionCode,
+        field?: string,
     ): Promise<void> {
         const now = new Date();
         await this.outbox.enqueue(
@@ -158,6 +172,7 @@ export class ComplaintIntakeService {
                     crmCaseId: data.crmCaseId,
                     caseVersion: data.caseVersion,
                     rejectionCode: code,
+                    ...(field ? { field } : {}),
                     rejectedAt: now.toISOString(),
                 },
             }),

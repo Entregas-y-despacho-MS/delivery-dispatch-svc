@@ -48,7 +48,7 @@ export class AuditInboundMessageRejectionAdapter extends InboundMessageRejection
             reasonCode,
             rejectedAt,
         });
-        // Listeners that must answer the producer (ST-298.3). Awaited so a failure reaches the consumer's log.
+        // Listeners that must answer the producer (ST-298.3). Awaited, so the alert and the acknowledgement happen in order.
         await this.events.emitAsync(INBOUND_MESSAGE_REJECTED_EVENT, notice);
     }
 }
