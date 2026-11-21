@@ -82,8 +82,6 @@ describe('customer status email: idempotent send and recovery (ST-39.2, RF-U16)'
     afterAll(async () => {
         provider = 'sent';
         if (db?.isInitialized) await withEventPurge(db, { dispatchRefs: [`${sourcePrefix}%`] }, async (manager) => {
-            await manager.query(
-                'DELETE FROM customer_notifications WHERE dispatch_id IN (SELECT dispatch_id FROM dispatches WHERE source_order_ref LIKE $1)', [`${sourcePrefix}%`]);
             await manager.query('DELETE FROM dispatches WHERE source_order_ref LIKE $1', [`${sourcePrefix}%`]);
         });
         await app?.close();

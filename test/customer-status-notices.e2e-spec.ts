@@ -64,8 +64,6 @@ describe('customer status change email (ST-39.1, RF-U16)', () => {
             // alert that collides (uq_operational_alerts_open_subject) with the orphan of the next run on the same database.
             await manager.query(
                 'DELETE FROM operational_alerts WHERE dispatch_id IN (SELECT dispatch_id FROM dispatches WHERE source_order_ref LIKE $1)', [`${sourcePrefix}%`]);
-            await manager.query(
-                'DELETE FROM customer_notifications WHERE dispatch_id IN (SELECT dispatch_id FROM dispatches WHERE source_order_ref LIKE $1)', [`${sourcePrefix}%`]);
             await manager.query('DELETE FROM dispatches WHERE source_order_ref LIKE $1', [`${sourcePrefix}%`]);
         });
         await app?.close();

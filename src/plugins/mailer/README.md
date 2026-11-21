@@ -43,7 +43,9 @@ recoverable**:
   key `status_change:<dispatchId>:<status>:<instant of the transition>`, which is unique: two
   deliveries of the same event leave one row and one send. The row also keeps the status, the
   normalized recipient, the template and its version, the attempts and the last error (sanitized:
-  no address, link or token).
+  addresses, links and long tokens are masked). `last_error` is history, not the current state: it is
+  kept when a later attempt succeeds, so a `sent` row with several attempts and an error tells why it
+  needed them. To list what still needs attention, filter by `status`, not by `last_error`.
 - A failed send is tried **3 times** right away (waits of 500 ms and 1 s, like the push retry). If
   the provider is still failing, the row stays `retrying` and the `customer-notification-recovery`
   task (every 5 minutes) tries again at **5 min, 15 min and 1 h**; after **6 attempts in all** the row
