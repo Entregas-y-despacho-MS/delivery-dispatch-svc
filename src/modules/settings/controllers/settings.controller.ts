@@ -8,6 +8,7 @@ import { ALERT_THRESHOLD_KEYS } from '../settings.constants.js';
 import { CoordinatorOnly, Roles } from '../../../app/auth/decorators/index.js';
 import { RoleEnum } from '../../../shared/enums/index.js';
 import { ApiNotFound, ApiUnauthorized, ApiBadRequests } from '../../../shared/utils/swagger/index.js';
+import { AuditAction } from '../../audit/admin-audit-events/decorators/audit-action.decorator.js';
 
 @ApiTags('Settings')
 @ApiBearerAuth('access-token')
@@ -28,6 +29,7 @@ export class SettingsController {
     }
 
     @Put(':key')
+    @AuditAction('setting.updated', { entityIdParam: 'key', bodyFields: ['value'] })
     @CoordinatorOnly()
     @ApiOperation({
         summary:     'Update a setting',

@@ -6,6 +6,7 @@ import { UpdateAlertThresholdsDto } from '../dto/update-alert-thresholds.dto.js'
 import { Roles, SupervisorOnly } from '../../../app/auth/decorators/index.js';
 import { RoleEnum } from '../../../shared/enums/index.js';
 import { ApiBadRequests, ApiNotFound, ApiUnauthorized } from '../../../shared/utils/swagger/index.js';
+import { AuditAction } from '../../audit/admin-audit-events/decorators/audit-action.decorator.js';
 
 /**
  * Error dictionary: INVALID_SETTING_VALUE 400, SETTING_NOT_FOUND 404
@@ -33,6 +34,11 @@ export class AlertThresholdsController {
     }
 
     @Put()
+    @AuditAction('setting.updated', {
+        entityIdParam: null,
+        bodyFields: ['slaAlertMinOnTimePct', 'gpsStaleAlertMinutes', 'driverIncidentAlertPerDay'],
+        metadata: { setting: 'alert-thresholds' },
+    })
     @SupervisorOnly()
     @ApiOperation({
         summary:     'Change the alert thresholds',

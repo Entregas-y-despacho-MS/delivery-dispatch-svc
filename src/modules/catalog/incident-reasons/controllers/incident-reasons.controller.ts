@@ -17,6 +17,7 @@ import { ApiNotFound, ApiUnauthorized, ApiBadRequests, ApiIdParam, ApiConflict }
 import { Roles, CoordinatorOnly } from '../../../../app/auth/decorators/index.js';
 import { ParseIdPipe } from '../../../../shared/pipes/index.js';
 import { RoleEnum } from '../../../../shared/enums/index.js';
+import { AuditAction } from '../../../audit/admin-audit-events/decorators/audit-action.decorator.js';
 
 /**
  * Error dictionary for this module:
@@ -65,6 +66,7 @@ export class IncidentReasonsController {
     }
 
     @Post()
+    @AuditAction('catalog.changed', { entityIdFrom: 'response', metadata: { catalog: 'incident-reasons', operation: 'create' } })
     @CoordinatorOnly()
     @HttpCode(HttpStatus.CREATED)
     @ApiOperation({
@@ -80,6 +82,7 @@ export class IncidentReasonsController {
     }
 
     @Put(':id')
+    @AuditAction('catalog.changed', { metadata: { catalog: 'incident-reasons', operation: 'update' } })
     @CoordinatorOnly()
     @ApiOperation({
         summary:     'Update an incident reason',
