@@ -23,6 +23,11 @@ export interface AuditActionOptions {
      * decorator is applied, so a wrong declaration fails at startup instead of leaking.
      */
     bodyFields?: readonly string[];
+    /**
+     * Fixed values the handler adds to `metadata` (which of the operations of an action ran: `{ step: 'enable' }`).
+     * Declared in code, never from the request; the same key rules as `bodyFields` apply.
+     */
+    metadata?: Readonly<Record<string, string | number | boolean>>;
 }
 
 export interface AuditActionMetadata extends AuditActionOptions {
@@ -35,9 +40,9 @@ export interface AuditActionMetadata extends AuditActionOptions {
  * With `@Res()` the handler must send the response before it returns, so the recorded status is the real one.
  */
 export const AuditAction = (action: AuditActionName, options: AuditActionOptions = {}): MethodDecorator => {
-    const forbidden = (options.bodyFields ?? []).filter(isForbiddenMetadataKey);
+    const forbidden = [...(options.bodyFields ?? []), ...Object.keys(options.metadata ?? {})].filter(isForbiddenMetadataKey);
     if (forbidden.length > 0) {
-        throw new Error(`@AuditAction('${action}'): bodyFields cannot include secrets or personal data (${forbidden.join(', ')}).`);
+        throw new Error(`@AuditAction('${action}'): bodyFields and metadata cannot include secrets or personal data (${forbidden.join(', ')}).`);
     }
     return SetMetadata(AUDIT_ACTION_KEY, { action, ...options } satisfies AuditActionMetadata);
 };

@@ -15,6 +15,11 @@ describe('AuditAction', () => {
         },
     );
 
+    it('refuses a fixed metadata key that is a secret or personal data, and accepts a plain one', () => {
+        expect(() => AuditAction('auth.two_factor_changed', { metadata: { token: 'x' } })).toThrow(/cannot include secrets or personal data/);
+        expect(() => AuditAction('auth.two_factor_changed', { metadata: { step: 'enable' } })).not.toThrow();
+    });
+
     it('accepts business fields such as ids, flags and catalog codes', () => {
         expect(() => AuditAction('catalog.changed', { bodyFields: ['zoneCode', 'active', 'roleId', 'reasonCode'] })).not.toThrow();
     });

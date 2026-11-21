@@ -57,7 +57,7 @@ export class AdminAuditService {
                 statusCode: status,
                 correlationId: request.correlationId,
                 ip: request.ip,
-                metadata: pickBodyFields(request.body, declared.bodyFields ?? []),
+                metadata: { ...pickBodyFields(request.body, declared.bodyFields ?? []), ...declared.metadata },
             });
         } catch (error) {
             this.logger.error({ event: 'admin_audit_build_failed', status, error: error instanceof Error ? error.name : 'unknown' });

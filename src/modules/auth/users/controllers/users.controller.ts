@@ -77,6 +77,7 @@ export class UsersController {
     }
 
     @Post()
+    @AuditAction('user.created', { entityIdFrom: 'response', bodyFields: ['roleId'] })
     @AdminOnly()
     @HttpCode(HttpStatus.CREATED)
     @ApiOperation({
@@ -93,6 +94,7 @@ export class UsersController {
     }
 
     @Put(':id')
+    @AuditAction('user.updated', { bodyFields: ['active'] })
     @AdminOnly()
     @ApiOperation({
         summary:     'Update a user',
@@ -137,6 +139,7 @@ export class UsersController {
     }
 
     @Delete(':id')
+    @AuditAction('user.deleted')
     @AdminOnly()
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({

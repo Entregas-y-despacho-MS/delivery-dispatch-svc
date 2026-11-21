@@ -110,6 +110,13 @@ describe('AdminAuditService.recordOutcome', () => {
         expect((insert.mock.calls[0] as any[])[0].entityId).toBeNull();
     });
 
+    it('adds the fixed metadata of the handler next to the body fields, and the request cannot override it', async () => {
+        const { service, insert } = build();
+        const declared = { action: 'auth.two_factor_changed', bodyFields: ['step', 'roleId'], metadata: { step: 'enable' } };
+        await service.recordOutcome(context(request({ body: { step: 'disable', roleId: 3 } }), declared), 200);
+        expect((insert.mock.calls[0] as any[])[0].metadata).toEqual({ step: 'enable', roleId: 3 });
+    });
+
     it('ignores the route param when the entity id comes from the response or the actor', async () => {
         const { service, insert } = build();
         await service.recordOutcome(context(request({ params: { id: '999' } }), { action: 'user.created', entityIdFrom: 'response' }), 201, { id: 5 });

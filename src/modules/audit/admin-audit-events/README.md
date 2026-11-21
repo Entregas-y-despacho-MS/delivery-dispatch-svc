@@ -15,6 +15,7 @@ async updateRole(...) { ... }
 | acción | Una del catálogo de abajo (`domain/admin-audit-catalog.ts`); el tipo de entidad sale de ahí, nunca del request. |
 | `entityIdParam` | Parámetro de ruta con el id de la entidad. `'id'` por defecto; `null` si la acción no tiene id. |
 | `entityIdFrom` | De dónde sale el id de la entidad: `'param'` (por defecto, el parámetro `entityIdParam`), `'response'` (el `id` del objeto que devuelve el handler: altas; si la llamada falla no hay id) o `'actor'` (el usuario autenticado: acciones sobre la propia cuenta, como la contraseña o el 2FA). |
+| `metadata` | Valores fijos que el handler agrega a `metadata` (por ejemplo `{ step: 'enable' }` para distinguir qué operación de la acción se ejecutó). Los declara el código, el request no puede cambiarlos y siguen las mismas reglas de claves que `bodyFields`. |
 | `bodyFields` | Campos del body que se copian a `metadata`. Si se declara un secreto o un dato personal, la aplicación no arranca. |
 
 Con `@Res()` el handler debe enviar la respuesta antes de terminar, para que se registre el status real.
