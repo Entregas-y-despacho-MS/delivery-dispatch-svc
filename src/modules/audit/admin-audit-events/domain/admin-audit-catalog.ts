@@ -2,7 +2,9 @@
  * Catalog of sensitive administrative actions (RF-A35). Only handlers decorated with `@AuditAction(<one of these>)`
  * produce an audit event; the action name and its entity type always come from here, never from the request.
  *
- * `endpoints` documents which handlers each action belongs to (the handlers still to decorate are listed there too).
+ * `endpoints` lists, one by one, the handlers that carry each action as `<METHOD> <route without the global prefix>`.
+ * `test/admin-audit-coverage.e2e-spec.ts` walks the routes of the real application and fails when a listed endpoint is
+ * not decorated with its action, or when a decorated handler is not listed here: this is the action → handler matrix.
  * Driver operational endpoints (status, incidents, evidences, GPS) and the public customer endpoints are out of
  * this catalog: their trace is the dispatch history (`dispatch_events`).
  */
@@ -10,6 +12,7 @@ export interface AuditActionDefinition {
     /** `admin_audit_events.entity_type` of the action. */
     entityType: string;
     description: string;
+    /** Exact `<METHOD> <route>` of every handler decorated with the action. */
     endpoints: readonly string[];
 }
 
@@ -24,7 +27,17 @@ export const ADMIN_AUDIT_CATALOG = {
 
     // Business configuration
     'setting.updated':        { entityType: 'setting', description: 'Change a business setting or the alert thresholds', endpoints: ['PUT /settings/:key', 'PUT /settings/alert-thresholds'] },
-    'catalog.changed':        { entityType: 'catalog', description: 'Create, edit or delete a catalog entry (zones, incident and reschedule reasons, service levels, vehicle incident types)', endpoints: ['POST|PUT|DELETE /delivery-zones', 'POST|PUT /incident-reasons', 'POST|PUT /reschedule-reasons', 'POST|PUT|DELETE /service-levels', 'POST|PUT /vehicle-incident-types'] },
+    'catalog.changed':        {
+        entityType: 'catalog',
+        description: 'Create, edit or delete a catalog entry (zones, incident and reschedule reasons, service levels, vehicle incident types)',
+        endpoints: [
+            'POST /delivery-zones', 'PUT /delivery-zones/:id', 'DELETE /delivery-zones/:id',
+            'POST /incident-reasons', 'PUT /incident-reasons/:id',
+            'POST /reschedule-reasons', 'PUT /reschedule-reasons/:id',
+            'POST /service-levels', 'PUT /service-levels/:id', 'DELETE /service-levels/:id',
+            'POST /vehicle-incident-types', 'PUT /vehicle-incident-types/:id',
+        ],
+    },
 
     // Fleet
     'vehicle.changed':        { entityType: 'vehicle', description: 'Create, edit, delete a vehicle or change its status', endpoints: ['POST /vehicles', 'PUT /vehicles/:id', 'PATCH /vehicles/:id/status', 'DELETE /vehicles/:id'] },

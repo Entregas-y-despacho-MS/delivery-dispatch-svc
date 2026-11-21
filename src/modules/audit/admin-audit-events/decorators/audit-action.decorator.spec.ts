@@ -20,6 +20,12 @@ describe('AuditAction', () => {
         expect(() => AuditAction('auth.two_factor_changed', { metadata: { step: 'enable' } })).not.toThrow();
     });
 
+    it('refuses an entity id source that ignores the route param it was given', () => {
+        expect(() => AuditAction('user.created', { entityIdFrom: 'response', entityIdParam: 'id' })).toThrow(/entityIdParam only applies/);
+        expect(() => AuditAction('auth.password_changed', { entityIdFrom: 'actor', entityIdParam: null })).toThrow(/entityIdParam only applies/);
+        expect(() => AuditAction('user.created', { entityIdFrom: 'response' })).not.toThrow();
+    });
+
     it('accepts business fields such as ids, flags and catalog codes', () => {
         expect(() => AuditAction('catalog.changed', { bodyFields: ['zoneCode', 'active', 'roleId', 'reasonCode'] })).not.toThrow();
     });

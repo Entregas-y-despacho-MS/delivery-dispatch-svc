@@ -40,6 +40,9 @@ export interface AuditActionMetadata extends AuditActionOptions {
  * With `@Res()` the handler must send the response before it returns, so the recorded status is the real one.
  */
 export const AuditAction = (action: AuditActionName, options: AuditActionOptions = {}): MethodDecorator => {
+    if (options.entityIdFrom && options.entityIdFrom !== 'param' && options.entityIdParam !== undefined) {
+        throw new Error(`@AuditAction('${action}'): entityIdParam only applies when the entity id comes from the route (entityIdFrom 'param').`);
+    }
     const forbidden = [...(options.bodyFields ?? []), ...Object.keys(options.metadata ?? {})].filter(isForbiddenMetadataKey);
     if (forbidden.length > 0) {
         throw new Error(`@AuditAction('${action}'): bodyFields and metadata cannot include secrets or personal data (${forbidden.join(', ')}).`);

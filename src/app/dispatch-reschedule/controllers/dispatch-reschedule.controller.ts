@@ -96,7 +96,7 @@ export class DispatchRescheduleController {
     }
 
     @Post(':id/cancel')
-    @AuditAction('dispatch.cancelled', { metadata: { idOf: 'dispatch' } })
+    @AuditAction('dispatch.cancelled')
     @HttpCode(HttpStatus.OK)
     @CoordinatorOnly()
     @ApiOperation({

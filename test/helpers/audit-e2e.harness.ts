@@ -71,6 +71,9 @@ export class AuditE2eHarness {
 
     async login(username: string, password: string): Promise<string> {
         const res = await request(this.app.getHttpServer()).post(`/${this.api}/auth/login`).send({ username, password });
+        if (res.status !== 200 || typeof res.body.accessToken !== 'string') {
+            throw new Error(`Login of ${username} failed (${res.status}): the e2e audit users must be able to log in.`);
+        }
         return res.body.accessToken as string;
     }
 

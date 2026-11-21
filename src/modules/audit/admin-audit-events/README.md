@@ -55,24 +55,55 @@ Además de la lista `bodyFields`, cada clave se parte en palabras (`newPassword`
 
 Registrar nunca cambia la respuesta ni lanza. Si no se puede guardar el evento, se loguea un ERROR `admin_audit_write_failed` con el evento completo (sin secretos), para que el hueco sea visible y recuperable.
 
-## Catálogo de acciones sensibles
+**Transacción y outbox (ST-68.2).** El evento se escribe después de que el handler terminó, en su propia escritura, no dentro de la transacción del handler, y no usa outbox: una auditoría que se perdiera junto con una operación revertida ocultaría el intento, y una que bloqueara la operación cambiaría su resultado. Por eso la operación nunca falla por la auditoría y el fallo de escritura no es silencioso: queda el ERROR `admin_audit_write_failed` con el evento completo para reconstruir la fila. Un fallo del servidor entre el handler y la escritura es la única ventana sin registro.
 
-| Acción | Entidad | Endpoints |
-|---|---|---|
-| `user.created` | user | POST /users, POST /auth/register |
-| `user.updated` | user | PUT /users/:id |
-| `user.role_changed` | user | PATCH /users/:id/role (instrumentado) |
-| `user.deleted` | user | DELETE /users/:id |
-| `auth.two_factor_changed` | user | POST /auth/2fa/enable, /auth/2fa/confirm, /auth/2fa/disable |
-| `auth.password_changed` | user | PATCH /auth/change-password |
-| `setting.updated` | setting | PUT /settings/:key, PUT /settings/alert-thresholds |
-| `catalog.changed` | catalog | POST/PUT/DELETE de zonas de reparto, motivos de incidencia y de reprogramación, niveles de servicio y tipos de incidente vehicular |
-| `vehicle.changed` | vehicle | POST /vehicles, PUT /vehicles/:id, PATCH /vehicles/:id/status, DELETE /vehicles/:id |
-| `tracking_link.revealed` | dispatch | POST /dispatches/change-requests/:id/tracking-link |
-| `planning.run` | planning | POST /planning/generate, POST /planning/cutoff |
-| `route_batch.approved` | route_batch | POST /route-batches/:id/approve-promises, POST /route-batches/:id/approve-final |
-| `route_batch.assignment_changed` | route_batch | PATCH /route-batches/:id/driver, /vehicle, /reviewer; POST /route-batches/:id/reassign |
-| `dispatch.cancelled` | dispatch | POST /dispatches/:id/cancel, PATCH /pickup-orders/:id/cancel |
-| `dispatch.rescheduled` | dispatch | POST /dispatches/:id/reschedule, POST /dispatches/:id/return, PATCH /dispatches/:id/priority |
+## Matriz de cobertura: acción → handler → registro
+
+Cada fila es un handler decorado con `@AuditAction`. El catálogo (`domain/admin-audit-catalog.ts`) lista uno por uno los endpoints de cada acción y `test/admin-audit-coverage.e2e-spec.ts` recorre las rutas de la aplicación real: falla si un endpoint del catálogo no lleva su decorador o si un handler decorado no está en el catálogo. No detecta un handler mutante nuevo que no esté en el catálogo: decidir si es sensible es una decisión de diseño que se toma al añadirlo al catálogo, no algo que la prueba pueda inferir (hoy quedan fuera, por acuerdo, los endpoints del repartidor, los públicos del cliente y otros como el mantenimiento de vehículos, `forgot-password`/`reset-password` o `dispatch-reservations`). La columna «Prueba» es el e2e de `test/` que comprueba el registro (permitido, denegado y fallido).
+
+| Acción | Entidad | Endpoints | Handler | Prueba |
+|---|---|---|---|---|
+| `user.created` | user | POST /users | `UsersController.create` | `admin-audit-users-auth` |
+| `user.created` | user | POST /auth/register | `AuthController.register` | `admin-audit-users-auth` |
+| `user.updated` | user | PUT /users/:id | `UsersController.update` | `admin-audit-users-auth` |
+| `user.role_changed` | user | PATCH /users/:id/role | `UsersController.updateRole` | `admin-audit-events` |
+| `user.deleted` | user | DELETE /users/:id | `UsersController.remove` | `admin-audit-users-auth` |
+| `auth.two_factor_changed` | user | POST /auth/2fa/enable, /confirm, /disable | `TwoFactorController.enable, confirm, disable` | `admin-audit-users-auth` |
+| `auth.password_changed` | user | PATCH /auth/change-password | `AuthController.changePassword` | `admin-audit-users-auth` |
+| `setting.updated` | setting | PUT /settings/:key | `SettingsController.update` | `admin-audit-settings-catalogs` |
+| `setting.updated` | setting | PUT /settings/alert-thresholds | `AlertThresholdsController.update` | `admin-audit-settings-catalogs` |
+| `catalog.changed` | catalog | POST, PUT, DELETE /delivery-zones | `DeliveryZonesController.create, update, remove` | `admin-audit-settings-catalogs` |
+| `catalog.changed` | catalog | POST, PUT /incident-reasons | `IncidentReasonsController.create, update` | `admin-audit-settings-catalogs` |
+| `catalog.changed` | catalog | POST, PUT /reschedule-reasons | `RescheduleReasonsController.create, update` | `admin-audit-settings-catalogs` |
+| `catalog.changed` | catalog | POST, PUT, DELETE /service-levels | `ServiceLevelsController.create, update, remove` | `admin-audit-settings-catalogs` |
+| `catalog.changed` | catalog | POST, PUT /vehicle-incident-types | `VehicleIncidentTypesController.create, update` | `admin-audit-settings-catalogs` |
+| `vehicle.changed` | vehicle | POST /vehicles, PUT /vehicles/:id, PATCH /vehicles/:id/status, DELETE /vehicles/:id | `VehiclesController.create, update, changeStatus, remove` | `admin-audit-fleet` |
+| `tracking_link.revealed` | dispatch | POST /dispatches/change-requests/:id/tracking-link | `CustomerChangeRequestsController.revealTrackingLink` | `admin-audit-dispatch-decisions` |
+| `planning.run` | planning | POST /planning/generate, /planning/cutoff | `PlanningController.generate, cutoff` | `admin-audit-planning-batches` |
+| `route_batch.approved` | route_batch | POST /route-batches/:id/approve-promises, /approve-final | `RouteBatchesController.approvePromises, approveFinal` | `admin-audit-planning-batches` |
+| `route_batch.assignment_changed` | route_batch | PATCH /route-batches/:id/reviewer; POST /route-batches/:id/reassign | `RouteBatchesController.reassignReviewer, reassign` | `admin-audit-planning-batches` |
+| `route_batch.assignment_changed` | route_batch | PATCH /route-batches/:id/driver, /vehicle | `RouteBatchCorrectionController.changeDriver, changeVehicle` | `admin-audit-planning-batches` |
+| `dispatch.cancelled` | dispatch | POST /dispatches/:id/cancel | `DispatchRescheduleController.cancel` | `admin-audit-dispatch-decisions` |
+| `dispatch.cancelled` | dispatch | PATCH /pickup-orders/:id/cancel | `PickupOrdersController.cancel` | `admin-audit-dispatch-decisions` |
+| `dispatch.rescheduled` | dispatch | POST /dispatches/:id/reschedule, /return | `DispatchRescheduleController.reschedule, returnToWarehouse` | `admin-audit-dispatch-decisions` |
+| `dispatch.rescheduled` | dispatch | PATCH /dispatches/:id/priority | `DispatchesController.changePriority` | `admin-audit-dispatch-decisions` |
+
+Qué guarda `metadata` según la acción (valores fijos del código y campos declarados del body; las claves de secretos y datos personales se descartan siempre). Salvedad: `value` de `setting.updated` es el valor que se escribió, texto de hasta 200 caracteres; hoy las claves de `settings` son reglas de negocio, así que una clave futura que guarde un secreto no debe auditarse con `value`:
+
+| Acción | `metadata` |
+|---|---|
+| `user.created` | `roleId` |
+| `user.updated` | `active`. No distingue el reseteo de contraseña por un admin de una edición de datos: `metadata` fija no puede depender del cuerpo |
+| `user.role_changed` | `roleId` |
+| `auth.two_factor_changed` | `step`: `enable`, `confirm` o `disable` |
+| `setting.updated` | `value` (por clave) o los tres umbrales y `setting: alert-thresholds` |
+| `catalog.changed` | `catalog` y `operation` (`create`, `update`, `delete`) |
+| `vehicle.changed` | `operation` (`create`, `status`, `update`, `delete`) y `status` en el cambio de estado |
+| `planning.run` | `task`: `generate` o `cutoff` |
+| `route_batch.approved` | `stage`: `promises` o `final` |
+| `route_batch.assignment_changed` | `target`: `reviewer`, `driver`, `vehicle` o `stops`, y el id destino (`reviewerUserId`, `driverId`, `vehicleId`, `targetBatchId`) |
+| `dispatch.rescheduled` | `operation` (`reschedule`, `return`, `priority`), `reasonCode` o `priority` |
+
+`entity_id` sale del parámetro de la ruta; en las altas (`user.created`, `catalog.changed` create, `vehicle.changed` create) del `id` de la respuesta, y en `auth.*` es el propio usuario. `planning.run` y `PUT /settings/alert-thresholds` no tienen id. Una alta que falla no tiene respuesta, así que su evento queda sin id.
 
 Fuera del catálogo: los endpoints operativos del repartidor (estado, incidencias, evidencias, GPS) y los públicos del cliente; su traza es el historial del despacho (`dispatch_events`).

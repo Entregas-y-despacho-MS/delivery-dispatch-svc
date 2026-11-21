@@ -42,7 +42,7 @@ export class CustomerChangeRequestsController {
     }
 
     @Post(':id/tracking-link')
-    @AuditAction('tracking_link.revealed', { metadata: { idOf: 'change_request' } })
+    @AuditAction('tracking_link.revealed')
     @HttpCode(HttpStatus.OK)
     @Header('Cache-Control', 'no-store')
     @CoordinatorOnly()

@@ -1,6 +1,9 @@
 // RF-A35 / ST-68.2: audit trail of the sensitive handlers of the "dispatch decisions" family (dispatch.cancelled,
-// dispatch.rescheduled, tracking_link.revealed): one allowed and one denied operation of each, against the real
-// AppModule and database. The dispatches it creates are deleted in afterAll.
+// dispatch.rescheduled, tracking_link.revealed), against the real AppModule and database. Succeeding operations are
+// checked for the priority change, the cancellation of a dispatch and the reveal of the tracking link; reschedule,
+// return and the cancellation of a pickup order are checked as denied and as failed (a missing dispatch), because
+// their success fixtures (delivery slots, a real pickup) live in their own e2e files. The dispatches it creates are
+// deleted in afterAll.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AuditE2eHarness } from './helpers/audit-e2e.harness.js';
 import { withEventPurge } from './helpers/purge-append-only-events.js';
@@ -12,16 +15,16 @@ describe('audit of dispatch decisions (ST-68.2)', () => {
     let sequence = 0;
     const trackingBase = Date.now() % 90_000; // the outbound message needs a DSP-YYYY-NNNNN tracking code
     let typeId = 0;
-    let pendingStatusId = 0;
+    const statusIds: Record<string, number> = {};
 
-    const insertDispatch = async (): Promise<number> => {
+    const insertDispatch = async (status = 'pending'): Promise<number> => {
         const n = ++sequence;
         const [{ dispatch_id }] = await h.db.query(
             `INSERT INTO dispatches (dispatch_type_id, dispatch_status_id, source_order_ref, priority, delivery_address, contact_name, tracking_code,
                                      scheduled_window_start, scheduled_window_end)
              VALUES ($1, $2, $3, 'normal', 'Dirección de prueba', $4, $5, NOW() + INTERVAL '2 days', NOW() + INTERVAL '2 days 3 hours')
              RETURNING dispatch_id`,
-            [typeId, pendingStatusId, `${tag}-${String(n).padStart(3, '0')}`, `${tag} Cliente ${n}`, `DSP-2042-${String(trackingBase + n).padStart(5, '0')}`],
+            [typeId, statusIds[status], `${tag}-${String(n).padStart(3, '0')}`, `${tag} Cliente ${n}`, `DSP-2042-${String(trackingBase + n).padStart(5, '0')}`],
         );
         return dispatch_id as number;
     };
@@ -33,7 +36,7 @@ describe('audit of dispatch decisions (ST-68.2)', () => {
     beforeAll(async () => {
         await h.start(['admin', 'coordinator', 'supervisor', 'driver']);
         [{ dispatch_type_id: typeId }] = await h.db.query(`SELECT dispatch_type_id FROM dispatch_types WHERE name = 'delivery'`);
-        [{ dispatch_status_id: pendingStatusId }] = await h.db.query(`SELECT dispatch_status_id FROM dispatch_statuses WHERE name = 'pending'`);
+        for (const row of await h.db.query('SELECT dispatch_status_id, name FROM dispatch_statuses')) statusIds[row.name] = row.dispatch_status_id;
     }, 30_000);
     afterAll(async () => {
         if (h.db?.isInitialized) {
@@ -82,10 +85,10 @@ describe('audit of dispatch decisions (ST-68.2)', () => {
 
                 const missing = h.call('post', `/dispatches/${MISSING}/${path}`, h.users.coordinator.token, body);
                 const missingRes = await missing.response;
-                expect([404, 409, 422]).toContain(missingRes.status);
+                expect(missingRes.status).toBe(404);
                 expect(await h.eventsOf(missing.correlationId)).toEqual([expect.objectContaining({
                     actor_user_id: h.users.coordinator.id, action: 'dispatch.rescheduled', entity_id: String(MISSING),
-                    result: 'failed', status_code: missingRes.status, metadata: expect.objectContaining({ operation }),
+                    result: 'failed', status_code: 404, metadata: expect.objectContaining({ operation }),
                 })]);
             }
             expect(await statusOf(id)).toBe('pending');
@@ -102,7 +105,7 @@ describe('audit of dispatch decisions (ST-68.2)', () => {
             const rows = await h.eventsOf(correlationId);
             expect(rows).toEqual([expect.objectContaining({
                 actor_user_id: h.users.coordinator.id, action: 'dispatch.cancelled', entity_type: 'dispatch',
-                entity_id: String(id), result: 'success', status_code: 200, metadata: { idOf: 'dispatch' },
+                entity_id: String(id), result: 'success', status_code: 200, metadata: {},
             })]);
             expect(JSON.stringify(rows)).not.toContain(reason);
             expect(await statusOf(id)).toBe('cancelled');
@@ -123,15 +126,15 @@ describe('audit of dispatch decisions (ST-68.2)', () => {
             expect((await denied.response).status).toBe(403);
             expect(await h.eventsOf(denied.correlationId)).toEqual([expect.objectContaining({
                 actor_user_id: h.users.supervisor.id, action: 'dispatch.cancelled', entity_id: String(MISSING),
-                result: 'denied', status_code: 403, metadata: { idOf: 'pickup_order' },
+                result: 'denied', status_code: 403, metadata: {},
             })]);
 
             const missing = h.call('patch', `/pickup-orders/${MISSING}/cancel`, h.users.coordinator.token, { reason: 'e2e' });
             const missingRes = await missing.response;
-            expect([404, 409]).toContain(missingRes.status);
+            expect(missingRes.status).toBe(404);
             expect(await h.eventsOf(missing.correlationId)).toEqual([expect.objectContaining({
                 actor_user_id: h.users.coordinator.id, action: 'dispatch.cancelled', entity_id: String(MISSING),
-                result: 'failed', status_code: missingRes.status, metadata: { idOf: 'pickup_order' },
+                result: 'failed', status_code: 404, metadata: {},
             })]);
         });
     });
@@ -142,18 +145,38 @@ describe('audit of dispatch decisions (ST-68.2)', () => {
             expect((await response).status).toBe(403);
             expect(await h.eventsOf(correlationId)).toEqual([expect.objectContaining({
                 actor_user_id: h.users.supervisor.id, action: 'tracking_link.revealed', entity_type: 'dispatch',
-                entity_id: String(MISSING), result: 'denied', status_code: 403, metadata: { idOf: 'change_request' },
+                entity_id: String(MISSING), result: 'denied', status_code: 403, metadata: {},
             })]);
         });
 
-        it('records the attempt of the coordinator on a request without a pending change as failed, never with a link', async () => {
+        it('records the reveal by the coordinator as success, with the dispatch as the entity and never the link or the token', async () => {
+            const id = await insertDispatch('scheduled');
+            const token = `${tag.toLowerCase()}-token-${id}`;
+            await h.db.query(
+                `UPDATE dispatches SET customer_confirmation = 'change_requested', contact_email = NULL, tracking_token = $2, tracking_token_expires_at = NOW() + INTERVAL '1 day' WHERE dispatch_id = $1`,
+                [id, token],
+            );
+            const { correlationId, response } = h.call('post', `/dispatches/change-requests/${id}/tracking-link`, h.users.coordinator.token);
+            const res = await response;
+            expect(res.status).toBe(200);
+            expect(res.body.trackingUrl).toContain(token); // the coordinator does get the link...
+            const rows = await h.eventsOf(correlationId);
+            expect(rows).toEqual([expect.objectContaining({
+                actor_user_id: h.users.coordinator.id, actor_role: 'coordinator', action: 'tracking_link.revealed', entity_type: 'dispatch',
+                entity_id: String(id), result: 'success', status_code: 200, metadata: {},
+            })]);
+            expect(JSON.stringify(rows)).not.toContain(token); // ...and the audit trail never does
+            expect(JSON.stringify(rows)).not.toMatch(/seguimiento|http/);
+        });
+
+        it('records the attempt of the coordinator on a dispatch that does not exist as failed, never with a link', async () => {
             const { correlationId, response } = h.call('post', `/dispatches/change-requests/${MISSING}/tracking-link`, h.users.coordinator.token);
             const res = await response;
-            expect([404, 409]).toContain(res.status);
+            expect(res.status).toBe(404);
             const rows = await h.eventsOf(correlationId);
             expect(rows).toEqual([expect.objectContaining({
                 actor_user_id: h.users.coordinator.id, action: 'tracking_link.revealed', entity_id: String(MISSING),
-                result: 'failed', status_code: res.status, metadata: { idOf: 'change_request' },
+                result: 'failed', status_code: 404, metadata: {},
             })]);
             expect(JSON.stringify(rows)).not.toMatch(/trackingUrl|\/public\/tracking|https?:\/\//);
         });

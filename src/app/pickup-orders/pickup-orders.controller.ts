@@ -71,7 +71,7 @@ export class PickupOrdersController {
     }
 
     @Patch(':id/cancel')
-    @AuditAction('dispatch.cancelled', { metadata: { idOf: 'pickup_order' } })
+    @AuditAction('dispatch.cancelled')
     @CoordinatorOnly()
     @ApiOperation({
         summary: 'Cancel a customer pickup order before the route starts (coordinator)',
