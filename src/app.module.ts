@@ -40,6 +40,7 @@ import { SalesOrderIntakeModule } from './modules/messaging/sales-order-intake/s
 import { IncompleteOrderRecoveryModule } from './modules/messaging/incomplete-order-recovery/incomplete-order-recovery.module.js';
 import { RmaPickupIntakeModule } from './modules/messaging/rma-pickup-intake/rma-pickup-intake.module.js';
 import { WarehouseReceiptIntakeModule } from './modules/messaging/warehouse-receipt-intake/warehouse-receipt-intake.module.js';
+import { ComplaintIntakeModule } from './modules/messaging/complaint-intake/complaint-intake.module.js';
 import { SchedulerModule } from './app/scheduler/scheduler.module.js';
 import { PlanningModule } from './app/planning/planning.module.js';
 import { PromiseFirmingModule } from './app/promise-firming/promise-firming.module.js';
@@ -80,6 +81,7 @@ import { FleetReportsModule } from './app/fleet-reports/fleet-reports.module.js'
     IncompleteOrderRecoveryModule,
     RmaPickupIntakeModule,
     WarehouseReceiptIntakeModule,
+    ComplaintIntakeModule,
     HealthModule,
     DatabaseModule,
     SettingsModule,

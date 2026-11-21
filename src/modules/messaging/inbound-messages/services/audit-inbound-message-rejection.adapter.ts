@@ -3,6 +3,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import {
+    INBOUND_MESSAGE_REJECTED_EVENT,
     InboundMessageRejection,
     type InboundRejectionNotice,
 } from '../../../../plugins/messaging/inbound-message-rejection.port.js';
@@ -47,5 +48,7 @@ export class AuditInboundMessageRejectionAdapter extends InboundMessageRejection
             reasonCode,
             rejectedAt,
         });
+        // Listeners that must answer the producer (ST-298.3). Awaited, so the alert and the acknowledgement happen in order.
+        await this.events.emitAsync(INBOUND_MESSAGE_REJECTED_EVENT, notice);
     }
 }
