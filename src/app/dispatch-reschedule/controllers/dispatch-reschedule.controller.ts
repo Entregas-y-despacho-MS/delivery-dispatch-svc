@@ -1,6 +1,7 @@
 import { Body, Controller, HttpCode, HttpStatus, Param, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CoordinatorOnly } from '../../auth/decorators/index.js';
+import { AuditAction } from '../../../modules/audit/admin-audit-events/decorators/audit-action.decorator.js';
 import { CurrentUser } from '../../../shared/decorators/current-user.decorator.js';
 import { ParseIdPipe } from '../../../shared/pipes/index.js';
 import { ApiBadRequests, ApiConflict, ApiForbidden, ApiIdParam, ApiNotFound, ApiUnauthorized } from '../../../shared/utils/swagger/index.js';
@@ -32,6 +33,7 @@ export class DispatchRescheduleController {
     ) {}
 
     @Post(':id/reschedule')
+    @AuditAction('dispatch.rescheduled', { bodyFields: ['reasonCode'], metadata: { operation: 'reschedule' } })
     @HttpCode(HttpStatus.OK)
     @CoordinatorOnly()
     @ApiOperation({
@@ -67,6 +69,7 @@ export class DispatchRescheduleController {
     }
 
     @Post(':id/return')
+    @AuditAction('dispatch.rescheduled', { metadata: { operation: 'return' } })
     @HttpCode(HttpStatus.OK)
     @CoordinatorOnly()
     @ApiOperation({
@@ -93,6 +96,7 @@ export class DispatchRescheduleController {
     }
 
     @Post(':id/cancel')
+    @AuditAction('dispatch.cancelled', { metadata: { idOf: 'dispatch' } })
     @HttpCode(HttpStatus.OK)
     @CoordinatorOnly()
     @ApiOperation({

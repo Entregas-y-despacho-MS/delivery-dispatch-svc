@@ -10,6 +10,7 @@ import { UpdateDispatchPriorityDto } from '../dto/update-dispatch-priority.dto.j
 import { DispatchPriorityDto } from '../dto/dispatch-priority.dto.js';
 import { todayInOperatingTimeZone } from '../utils/operating-date.util.js';
 import { DriverOnly, Roles } from '../../../../app/auth/decorators/index.js';
+import { AuditAction } from '../../../audit/admin-audit-events/decorators/audit-action.decorator.js';
 import { CurrentUser } from '../../../../shared/decorators/current-user.decorator.js';
 import { ParseIdPipe } from '../../../../shared/pipes/index.js';
 import { RoleEnum } from '../../../../shared/enums/index.js';
@@ -120,6 +121,7 @@ export class DispatchesController {
     }
 
     @Patch(':id/priority')
+    @AuditAction('dispatch.rescheduled', { bodyFields: ['priority'], metadata: { operation: 'priority' } })
     @Roles(RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR)
     @ApiOperation({
         summary:     'Change the priority of a dispatch (urgent / normal)',
