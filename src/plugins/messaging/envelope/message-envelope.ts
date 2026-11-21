@@ -1,7 +1,7 @@
 import { generateMessageId } from './uuid-v7.js';
 
 /** Services that emit messages (docs/interoperabilidad-y-flujos.md, section 1.3). */
-export type MessageSource = 'marketplace' | 'inventory' | 'procurement' | 'dispatch';
+export type MessageSource = 'marketplace' | 'inventory' | 'procurement' | 'dispatch' | 'crm';
 
 /** Standard envelope of every message exchanged with the ERP. `data` is specific to each topic. */
 export interface MessageEnvelope<TData = Record<string, unknown>> {

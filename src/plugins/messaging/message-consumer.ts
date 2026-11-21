@@ -16,7 +16,7 @@ export type DeadLetterPublisher = (deadLetterTopic: string, payload: DeadLetterP
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_VARCHAR = 100;
 const UNKNOWN_SOURCE = 'unknown';
-const KNOWN_SOURCES = new Set(['marketplace', 'inventory', 'procurement', 'dispatch']);
+const KNOWN_SOURCES = new Set(['marketplace', 'inventory', 'procurement', 'dispatch', 'crm']);
 
 /**
  * Receive pipeline shared by every adapter: ignore repeated messages, validate against the schema
@@ -124,6 +124,7 @@ export class MessageConsumer {
                 reasonCode,
                 rejectedAt: deadLetter.rejectedAt,
                 errors,
+                message,
             });
         } catch (error) {
             this.logger.error(
