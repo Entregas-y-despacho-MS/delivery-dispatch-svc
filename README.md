@@ -120,6 +120,7 @@ src/
 | `npm run simulate:inventory` | ERP simulator: scenarios of Almacén |
 | `npm run simulate:procurement` | ERP simulator: scenarios of Compras |
 | `npm run simulate:demo-returns` | ERP simulator: RMA / pickup followed by Almacén's receipt (see «Demo de recepción») |
+| `npm run simulate:crm` | CRM simulator: publishes a delivery complaint and checks the acknowledgement (see «Simulador de CRM») |
 | `npm run simulate:listen` | Simulated consumer: prints what Despachos publishes |
 
 ## Docker
@@ -313,6 +314,7 @@ Google Cloud real.
 | `npm run simulate:marketplace -- --scenario <nombre>` | Publica el escenario. |
 | `npm run simulate:inventory` / `simulate:procurement` | Igual, para Almacén y Compras. |
 | `npm run simulate:demo-returns` | Igual, para la recepción de Almacén (`ES-240`); ver «Demo de recepción». |
+| `npm run simulate:crm` | Publica un reclamo de CRM (`ES-298`) y verifica el acuse; ver «Simulador de CRM». |
 | `npm run simulate:listen` | Escucha los tópicos `dispatch.*` y escribe cada mensaje en consola. |
 
 Opciones de `simulate:*`: `--all` (todos los escenarios del origen que no esperan una solicitud),
@@ -374,6 +376,42 @@ su descripción y el resultado esperado. En cada corrida el simulador:
 | demo-returns | `receipt-duplicate` | RMA + la misma recepción entregada dos veces: la segunda se ignora (una recepción, un cambio de estado). |
 
 Para ver un dead-letter: `npm run simulate:listen -- --dead-letters` en otra terminal.
+
+### Simulador de CRM — reclamos de entrega (`ES-298`)
+
+`npm run simulate:crm` hace de CRM: publica un reclamo en `crm.delivery_complaint.opened` y **espera el acuse**
+que Despachos debe publicar en `dispatch.delivery_complaint.received` o `.rejected`, emparejado por
+`correlationMessageId`. Imprime una línea por paso (✔ / ✘) y sale con código 1 si algún paso no recibió lo esperado.
+No hay dashboard: todo es salida de consola. Usa suscripciones propias (`<tópico>.simulator-crm-<hex>`) que borra al
+terminar, así que no le quita mensajes al servicio ni a `simulate:listen`.
+
+Requisitos: los de «Simulador ERP» (emulador con los tópicos y el backend corriendo con `MESSAGING_ADAPTER=pubsub`).
+Para comprobar antes que el emulador tiene todo lo del reclamo (tópico, dead-letter, suscripciones y los dos tópicos de
+acuse), sin crear nada: `node scripts/pubsub/bootstrap.mjs --check`. Si el puerto lo ocupa otro programa, el bootstrap lo
+dice («no es el emulador de Pub/Sub») en vez de dar por creados los recursos.
+
+| Escenario | Necesita despacho real | Acuse esperado |
+|---|---|---|
+| `complaint-opened` | Sí | `received` |
+| `complaint-dispatch-not-found` | No | `rejected` / `dispatch_not_found` |
+| `complaint-invalid` | No | `rejected` / `schema_invalid` (campo `/data/affectedItems`) y el mensaje llega a `crm.delivery_complaint.opened.dead-letter` |
+| `complaint-repeated-version` | Sí | versión 1 `received`; la misma versión con otro `messageId` **sin acuse**; versión 2 `received` |
+
+Los escenarios que se aceptan reclaman una entrega que debe existir y estar `delivered`: pásala con
+`--dispatch-id <n>` y/o `--tracking-code DSP-AAAA-NNNNN` (si das ambos deben ser el mismo despacho; si das uno, el
+simulador quita el otro del mensaje). Sin ellos, `--scenario complaint-opened` termina con error y `--all` los omite y lo
+dice al final («Ejecutados 2 de 4»): en ese caso el camino `received` no se probó.
+
+```bash
+npm run simulate:crm                                   # lista los escenarios
+npm run simulate:crm -- --all --dispatch-id 482 --tracking-code DSP-2026-00482
+npm run simulate:crm -- --scenario complaint-invalid   # no necesita despacho
+```
+
+Otras opciones: `--ack-timeout <s>` (espera de cada acuse, 20), `--delay <ms>`, `--run-id <texto>` y `--as-is`. El caso
+(`crmCaseId`) se sufija con el id de la corrida: dos corridas abren casos distintos y una no se ignora como versión
+repetida de la otra. Un paso que espera «sin acuse» solo es concluyente si un paso anterior sí recibió el suyo (si no,
+Despachos podría estar caído); al final se revisa de nuevo por si algún acuse llegó tarde.
 
 ### Escenario «mensaje perdido»
 `lost-delivery-data` (Marketplace) y `lost-shipment` (Almacén) publican **una sola mitad** del pedido y
