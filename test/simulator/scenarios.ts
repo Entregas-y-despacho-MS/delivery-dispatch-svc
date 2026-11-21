@@ -18,9 +18,11 @@ import type {
 export const FIXTURES_DIR = resolve(import.meta.dirname, 'fixtures');
 
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
-// `rmaId` first: an RMA may also carry the `salesOrderId` it comes from, but the RMA is what each run suffixes.
+// `crmCaseId` before everything: a CRM complaint also carries the `salesOrderId` it refers to, but the case is what
+// each run suffixes (a second run with the same case and version would be ignored as repeated).
+// `rmaId` next: an RMA may also carry the `salesOrderId` it comes from, but the RMA is what each run suffixes.
 // `referenceId` is the RMA / purchase order a warehouse receipt confirms (ST-240.4): it must carry the same suffix.
-const ORDER_ID_KEYS = ['rmaId', 'salesOrderId', 'purchaseOrderId', 'referenceId'] as const;
+const ORDER_ID_KEYS = ['crmCaseId', 'rmaId', 'salesOrderId', 'purchaseOrderId', 'referenceId'] as const;
 
 export function loadScenarios(dir: string = FIXTURES_DIR): ScenarioFixture[] {
     return readdirSync(dir)
@@ -70,6 +72,19 @@ function receiptIdOf(message: Record<string, unknown>): string {
     return typeof data['receiptId'] === 'string' ? data['receiptId'] : '';
 }
 
+/** Points a CRM complaint at the dispatch given: the placeholder reference is dropped and only what was passed stays. */
+function withDispatchReference(
+    envelope: Record<string, unknown>,
+    dispatch: { dispatchId?: number; trackingCode?: string },
+): Record<string, unknown> {
+    const data = { ...((envelope['data'] ?? {}) as Record<string, unknown>) };
+    delete data['dispatchId'];
+    delete data['trackingCode'];
+    if (dispatch.dispatchId !== undefined) data['dispatchId'] = dispatch.dispatchId;
+    if (dispatch.trackingCode !== undefined) data['trackingCode'] = dispatch.trackingCode;
+    return { ...envelope, data };
+}
+
 /**
  * Turns a fixture into what a run publishes: fresh `messageId`s (the same fixed id keeps the same new
  * one, so a repeated step is still a redelivery), order ids suffixed with the run, and every date
@@ -107,6 +122,9 @@ export function buildScenario(fixture: ScenarioFixture, options: BuildOptions = 
                 envelope = { ...envelope, messageId: messageIdFor(envelope['messageId']) };
             }
         }
+        if (!asIs && step.realDispatch === true && options.dispatch !== undefined) {
+            envelope = withDispatchReference(envelope, options.dispatch);
+        }
         return {
             label: step.label,
             topic: String(envelope['type']),
@@ -115,6 +133,8 @@ export function buildScenario(fixture: ScenarioFixture, options: BuildOptions = 
             respondsTo: step.respondsTo,
             pauseBefore: step.pauseBefore === true,
             expectInvalid: step.expectInvalid === true,
+            expectAck: step.expectAck,
+            realDispatch: step.realDispatch === true,
             orderId: orderIdOf(envelope),
         };
     });

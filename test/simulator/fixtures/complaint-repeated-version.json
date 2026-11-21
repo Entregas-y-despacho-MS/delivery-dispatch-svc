@@ -1,0 +1,93 @@
+{
+  "scenario": "complaint-repeated-version",
+  "script": "crm",
+  "description": "El mismo caso llega con la misma `caseVersion` dos veces (con otro messageId) y luego con una versión mayor. Requiere un despacho `delivered` real (--dispatch-id y --tracking-code).",
+  "expected": "La versión 1 se acusa con received; la repetida se ignora sin acuse (ni received ni rejected); la versión 2 actualiza el mismo caso y se acusa de nuevo con received.",
+  "anchor": "2026-11-21T12:00:00Z",
+  "steps": [
+    {
+      "label": "CRM abre el caso (versión 1)",
+      "realDispatch": true,
+      "expectAck": {
+        "outcome": "received"
+      },
+      "message": {
+        "messageId": "01930000-0000-7000-8000-000000000a04",
+        "type": "crm.delivery_complaint.opened",
+        "schemaVersion": 1,
+        "source": "crm",
+        "occurredAt": "2026-11-21T12:00:00Z",
+        "data": {
+          "crmCaseId": "CRM-CASE-SIM-0004",
+          "caseVersion": 1,
+          "dispatchId": 482,
+          "trackingCode": "DSP-2026-00482",
+          "reasonCode": "DAMAGED_ITEM",
+          "openedAt": "2026-11-21T11:58:00Z",
+          "affectedItems": [
+            {
+              "packageId": "PKG-SIM-0001-1",
+              "quantity": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "CRM reenvía la versión 1 con otro messageId",
+      "realDispatch": true,
+      "expectAck": {
+        "outcome": "ignored"
+      },
+      "message": {
+        "messageId": "01930000-0000-7000-8000-000000000a05",
+        "type": "crm.delivery_complaint.opened",
+        "schemaVersion": 1,
+        "source": "crm",
+        "occurredAt": "2026-11-21T12:01:00Z",
+        "data": {
+          "crmCaseId": "CRM-CASE-SIM-0004",
+          "caseVersion": 1,
+          "dispatchId": 482,
+          "trackingCode": "DSP-2026-00482",
+          "reasonCode": "DAMAGED_ITEM",
+          "openedAt": "2026-11-21T11:58:00Z",
+          "affectedItems": [
+            {
+              "packageId": "PKG-SIM-0001-1",
+              "quantity": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "label": "CRM actualiza el caso (versión 2)",
+      "realDispatch": true,
+      "expectAck": {
+        "outcome": "received"
+      },
+      "message": {
+        "messageId": "01930000-0000-7000-8000-000000000a06",
+        "type": "crm.delivery_complaint.opened",
+        "schemaVersion": 1,
+        "source": "crm",
+        "occurredAt": "2026-11-21T12:02:00Z",
+        "data": {
+          "crmCaseId": "CRM-CASE-SIM-0004",
+          "caseVersion": 2,
+          "dispatchId": 482,
+          "trackingCode": "DSP-2026-00482",
+          "reasonCode": "DAMAGED_ITEM",
+          "openedAt": "2026-11-21T11:58:00Z",
+          "affectedItems": [
+            {
+              "packageId": "PKG-SIM-0001-1",
+              "quantity": 1
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

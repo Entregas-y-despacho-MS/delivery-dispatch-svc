@@ -1,0 +1,34 @@
+{
+  "scenario": "complaint-invalid",
+  "script": "crm",
+  "description": "Mensaje inválido por contrato: `affectedItems` llega vacío.",
+  "expected": "El mensaje va a crm.delivery_complaint.opened.dead-letter (schema_invalid), se emite integration.message_rejected, no se crea caso y Despachos publica rejected/schema_invalid con field /data/affectedItems.",
+  "anchor": "2026-11-21T12:00:00Z",
+  "steps": [
+    {
+      "label": "CRM abre un reclamo sin bultos afectados",
+      "expectInvalid": true,
+      "expectAck": {
+        "outcome": "rejected",
+        "rejectionCode": "schema_invalid",
+        "field": "/data/affectedItems"
+      },
+      "message": {
+        "messageId": "01930000-0000-7000-8000-000000000a03",
+        "type": "crm.delivery_complaint.opened",
+        "schemaVersion": 1,
+        "source": "crm",
+        "occurredAt": "2026-11-21T12:00:00Z",
+        "data": {
+          "crmCaseId": "CRM-CASE-SIM-0003",
+          "caseVersion": 1,
+          "dispatchId": 482,
+          "trackingCode": "DSP-2026-00482",
+          "reasonCode": "DAMAGED_ITEM",
+          "openedAt": "2026-11-21T11:58:00Z",
+          "affectedItems": []
+        }
+      }
+    }
+  ]
+}

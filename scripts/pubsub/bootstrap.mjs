@@ -3,7 +3,9 @@
 //
 // Sin dependencias: usa la API REST del emulador con el `fetch` de Node. Los tópicos se derivan de los
 // archivos `<tópico>.schema.json` de contracts/messages/schemas, que es la fuente única del catálogo.
-// Es idempotente: crear algo que ya existe (409) no es un error.
+// Es idempotente: crear algo que ya existe (409) no es un error. Al terminar valida que cada recurso exista
+// (y que las suscripciones apunten a su tópico y a su dead-letter); si falta algo, sale con error.
+// `--check` solo valida, sin crear nada.
 //
 // Variables de entorno:
 //   PUBSUB_EMULATOR_HOST  host:puerto del emulador          (por defecto localhost:8085)
@@ -16,6 +18,7 @@
 import { readdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildPlan, findProblems, topicOfSchemaFile, topicPath } from './resources.mjs';
 
 const HOST = process.env.PUBSUB_EMULATOR_HOST ?? 'localhost:8085';
 const PROJECT = process.env.PUBSUB_PROJECT_ID ?? 'delivery-dispatch-local';
@@ -23,28 +26,29 @@ const SCHEMAS_DIR =
     process.env.SCHEMAS_DIR ??
     resolve(dirname(fileURLToPath(import.meta.url)), '../../contracts/messages/schemas');
 const MAX_DELIVERY_ATTEMPTS = Number(process.env.PUBSUB_MAX_DELIVERY_ATTEMPTS ?? 5);
-
-const SCHEMA_SUFFIX = '.schema.json';
-/** Los tópicos que publica Despachos no tienen suscripción propia: la crea quien los consume. */
-const OUTBOUND_PREFIX = 'dispatch.';
 const SERVICE_SUBSCRIBER = process.env.PUBSUB_SUBSCRIPTION_SUFFIX ?? 'dispatch-svc';
 // Sin retryPolicy el broker reentrega de inmediato y las entregas se agotan en milisegundos: una caída
 // breve de la base de datos mandaría al dead-letter mensajes válidos.
 const MIN_BACKOFF = process.env.PUBSUB_MIN_BACKOFF ?? '10s';
 const MAX_BACKOFF = process.env.PUBSUB_MAX_BACKOFF ?? '600s';
-const DEAD_LETTER_SUFFIX = '.dead-letter';
-const DEAD_LETTER_INSPECT = 'inspect';
+const CHECK_ONLY = process.argv.includes('--check');
 
 const BASE_URL = `http://${HOST}/v1/projects/${PROJECT}`;
-const topicPath = (topic) => `projects/${PROJECT}/topics/${topic}`;
-const subscriptionPath = (name) => `projects/${PROJECT}/subscriptions/${name}`;
+
+class NotEmulatorError extends Error {}
 
 async function waitForEmulator(attempts = 30, delayMs = 1000) {
     for (let i = 1; i <= attempts; i++) {
         try {
-            const res = await fetch(`http://${HOST}/`);
-            if (res.ok) return;
-        } catch {
+            // El emulador contesta «Ok» en la raíz. Cualquier otra cosa (p. ej. otro programa que ya usa el
+            // puerto y contesta con una redirección) no es el emulador: crear recursos ahí «funcionaría» sin crear nada.
+            const res = await fetch(`http://${HOST}/`, { redirect: 'manual' });
+            if (res.ok && (await res.text()).trim() === 'Ok') return;
+            if (res.status >= 300) {
+                throw new NotEmulatorError(`${HOST} responde HTTP ${res.status}: no es el emulador de Pub/Sub (¿otro programa usa el puerto?).`);
+            }
+        } catch (error) {
+            if (error instanceof NotEmulatorError) throw error;
             // el emulador todavía no acepta conexiones
         }
         await new Promise((done) => setTimeout(done, delayMs));
@@ -69,21 +73,42 @@ async function put(url, body, label) {
     console.log(`+ ${label}`);
 }
 
-const createTopic = (topic) => put(`${BASE_URL}/topics/${topic}`, {}, `tópico ${topic}`);
-
-const createSubscription = (name, topic, extra = {}) =>
-    put(
-        `${BASE_URL}/subscriptions/${name}`,
-        { topic: topicPath(topic), ackDeadlineSeconds: 30, ...extra },
-        `suscripción ${name}`,
-    );
+/** GET que devuelve el recurso o `undefined` si no existe (404). */
+async function get(url, label) {
+    const res = await fetch(url);
+    if (res.status === 404) return undefined;
+    if (!res.ok) throw new Error(`${label}: HTTP ${res.status} ${await res.text()}`);
+    return await res.json();
+}
 
 async function listTopics() {
     const files = await readdir(SCHEMAS_DIR);
-    return files
-        .filter((file) => file.endsWith(SCHEMA_SUFFIX))
-        .map((file) => file.slice(0, -SCHEMA_SUFFIX.length))
-        .sort();
+    return files.map(topicOfSchemaFile).filter((topic) => topic !== undefined);
+}
+
+async function create(plan) {
+    for (const topic of plan.topics) {
+        await put(`${BASE_URL}/topics/${topic}`, {}, `tópico ${topic}`);
+    }
+    for (const subscription of plan.subscriptions) {
+        await put(
+            `${BASE_URL}/subscriptions/${subscription.name}`,
+            { topic: topicPath(PROJECT, subscription.topic), ackDeadlineSeconds: 30, ...subscription.body },
+            `suscripción ${subscription.name}`,
+        );
+    }
+}
+
+async function verify(plan) {
+    const existing = { topics: new Set(), subscriptions: new Map() };
+    for (const topic of plan.topics) {
+        if ((await get(`${BASE_URL}/topics/${topic}`, `tópico ${topic}`)) !== undefined) existing.topics.add(topic);
+    }
+    for (const { name } of plan.subscriptions) {
+        const found = await get(`${BASE_URL}/subscriptions/${name}`, `suscripción ${name}`);
+        if (found !== undefined) existing.subscriptions.set(name, found);
+    }
+    return findProblems(plan, existing, PROJECT);
 }
 
 async function main() {
@@ -91,28 +116,23 @@ async function main() {
     if (topics.length === 0) {
         throw new Error(`No hay esquemas en ${SCHEMAS_DIR}: no hay tópicos que crear.`);
     }
+    const plan = buildPlan(topics, {
+        project: PROJECT,
+        subscriber: SERVICE_SUBSCRIBER,
+        maxDeliveryAttempts: MAX_DELIVERY_ATTEMPTS,
+        minBackoff: MIN_BACKOFF,
+        maxBackoff: MAX_BACKOFF,
+    });
 
-    console.log(`Emulador ${HOST}, proyecto ${PROJECT}, ${topics.length} tópicos.`);
+    console.log(`Emulador ${HOST}, proyecto ${PROJECT}, ${topics.length} tópicos${CHECK_ONLY ? ' (solo validación)' : ''}.`);
     await waitForEmulator();
+    if (!CHECK_ONLY) await create(plan);
 
-    for (const topic of topics) {
-        await createTopic(topic);
-        if (topic.startsWith(OUTBOUND_PREFIX)) continue;
-
-        // Tópico de entrada: dead-letter propio (con una suscripción de inspección para retener los
-        // rechazados) y la suscripción del servicio, que lo usa para los mensajes que el manejador no logra procesar.
-        const deadLetter = `${topic}${DEAD_LETTER_SUFFIX}`;
-        await createTopic(deadLetter);
-        await createSubscription(`${deadLetter}.${DEAD_LETTER_INSPECT}`, deadLetter);
-        await createSubscription(`${topic}.${SERVICE_SUBSCRIBER}`, topic, {
-            retryPolicy: { minimumBackoff: MIN_BACKOFF, maximumBackoff: MAX_BACKOFF },
-            deadLetterPolicy: {
-                deadLetterTopic: topicPath(deadLetter),
-                maxDeliveryAttempts: MAX_DELIVERY_ATTEMPTS,
-            },
-        });
+    const problems = await verify(plan);
+    if (problems.length > 0) {
+        throw new Error(`Recursos de Pub/Sub incompletos:${problems.map((problem) => `\n- ${problem}`).join('')}`);
     }
-
+    console.log(`Validado: ${plan.topics.length} tópicos y ${plan.subscriptions.length} suscripciones.`);
     console.log('Listo.');
 }
 
