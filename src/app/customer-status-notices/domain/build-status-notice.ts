@@ -1,3 +1,4 @@
+import { normalizeRecipient } from './idempotency.js';
 import { STATUS_NOTICE_DISPATCH_TYPE, STATUS_NOTICE_TABLE, type StatusNoticeEntry } from './status-notice-table.js';
 
 /**
@@ -48,7 +49,7 @@ export function eligibleStatusNotice(event: Pick<StatusTransition, 'status' | 'p
 export function buildStatusNotice(event: StatusTransition, dispatch: StatusNoticeDispatch): StatusNotice | null {
     const entry = eligibleStatusNotice(event);
     if (!entry || dispatch.type !== STATUS_NOTICE_DISPATCH_TYPE) return null;
-    const recipient = dispatch.contactEmail?.trim();
+    const recipient = normalizeRecipient(dispatch.contactEmail ?? '');
     if (!recipient) return null;
     const occurred = new Date(event.updatedAt);
     if (Number.isNaN(occurred.getTime())) return null;
@@ -61,6 +62,35 @@ export function buildStatusNotice(event: StatusTransition, dispatch: StatusNotic
         subject: entry.subject,
         occurredAt: occurred.toISOString(),
         recipient,
+    };
+}
+
+/** What the recovery task keeps of an email it has to send again. */
+export interface StoredNotification {
+    dispatchId: number;
+    dispatchStatus: string;
+    /** ISO instant of the transition. */
+    occurredAt: string;
+    /** As it was registered. */
+    recipient: string;
+}
+
+/**
+ * The same email as the first attempt built it, from what was stored: the text of the status comes from the table
+ * and the code from the dispatch. `null` when the status is no longer in the table (nothing to say about it).
+ */
+export function rebuildStatusNotice(stored: StoredNotification, dispatch: Pick<StatusNoticeDispatch, 'trackingCode'>): StatusNotice | null {
+    if (!Object.hasOwn(STATUS_NOTICE_TABLE, stored.dispatchStatus)) return null;
+    const entry = STATUS_NOTICE_TABLE[stored.dispatchStatus]!;
+    return {
+        dispatchId: stored.dispatchId,
+        trackingCode: dispatch.trackingCode,
+        status: stored.dispatchStatus,
+        statusLabel: entry.statusLabel,
+        message: entry.message,
+        subject: entry.subject,
+        occurredAt: stored.occurredAt,
+        recipient: stored.recipient,
     };
 }
 
