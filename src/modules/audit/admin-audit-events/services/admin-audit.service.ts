@@ -39,30 +39,48 @@ export class AdminAuditService {
         return this.reflector.get<AuditActionMetadata | undefined>(AUDIT_ACTION_KEY, context.getHandler()) ?? null;
     }
 
-    /** Records the outcome of a request to a sensitive handler; `status` is the HTTP status it ended with. */
-    async recordOutcome(context: ExecutionContext, status: number): Promise<void> {
+    /**
+     * Records the outcome of a request to a sensitive handler; `status` is the HTTP status it ended with and
+     * `responseBody` what the handler returned (only read by actions that take the entity id from the response).
+     */
+    async recordOutcome(context: ExecutionContext, status: number, responseBody?: unknown): Promise<void> {
         let event: AdminAuditEvent;
         try {
             const declared = this.auditedAction(context);
             if (!declared) return;
             const request = context.switchToHttp().getRequest<AuditedRequest>();
-            const entityParam = declared.entityIdParam === undefined ? 'id' : declared.entityIdParam;
-            const param = entityParam ? request.params?.[entityParam] : undefined;
             event = buildAuditEvent({
                 action: declared.action,
                 actor: request.user ? { id: request.user.id, role: request.user.role } : null,
-                entityId: typeof param === 'string' ? param : null,
+                entityId: this.entityId(declared, request, responseBody),
                 result: resultForStatus(status),
                 statusCode: status,
                 correlationId: request.correlationId,
                 ip: request.ip,
-                metadata: pickBodyFields(request.body, declared.bodyFields ?? []),
+                metadata: { ...pickBodyFields(request.body, declared.bodyFields ?? []), ...declared.metadata },
             });
         } catch (error) {
             this.logger.error({ event: 'admin_audit_build_failed', status, error: error instanceof Error ? error.name : 'unknown' });
             return;
         }
         await this.record(event);
+    }
+
+    /** The id of the affected entity according to the action's declared source; `null` when it cannot be known. */
+    private entityId(declared: AuditActionMetadata, request: AuditedRequest, responseBody: unknown): string | null {
+        switch (declared.entityIdFrom ?? 'param') {
+            case 'actor':
+                return request.user ? String(request.user.id) : null;
+            case 'response': {
+                const id = responseBody && typeof responseBody === 'object' ? (responseBody as { id?: unknown }).id : undefined;
+                return typeof id === 'string' || typeof id === 'number' ? String(id) : null;
+            }
+            default: {
+                const name = declared.entityIdParam === undefined ? 'id' : declared.entityIdParam;
+                const param = name ? request.params?.[name] : undefined;
+                return typeof param === 'string' ? param : null;
+            }
+        }
     }
 
     /** Same as `recordOutcome`, from the error that ended the request. */

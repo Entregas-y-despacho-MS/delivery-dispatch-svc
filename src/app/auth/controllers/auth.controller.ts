@@ -18,6 +18,7 @@ import { Public, AdminOnly, AllowWhilePasswordChangeRequired } from '../decorato
 import { CurrentUser } from '../../../shared/decorators/current-user.decorator.js';
 import type { AuthUser } from '../strategies/jwt.strategy.js';
 import { ApiUnauthorized, ApiConflict, ApiBadRequests } from '../../../shared/utils/swagger/index.js';
+import { AuditAction } from '../../../modules/audit/admin-audit-events/decorators/audit-action.decorator.js';
 
 /**
  * Error dictionary for this module:
@@ -61,6 +62,7 @@ export class AuthController {
     }
 
     @AdminOnly()
+    @AuditAction('user.created', { entityIdFrom: 'response', bodyFields: ['roleId'] })
     @ApiBearerAuth('access-token')
     @Post('register')
     @HttpCode(HttpStatus.CREATED)
@@ -111,6 +113,7 @@ export class AuthController {
 
     // No @Roles() — any authenticated user changes their own password.
     @AllowWhilePasswordChangeRequired()
+    @AuditAction('auth.password_changed', { entityIdFrom: 'actor' })
     @Throttle({ default: { limit: SENSITIVE_LIMIT, ttl: SENSITIVE_TTL_MS } })
     @ApiBearerAuth('access-token')
     @Patch('change-password')

@@ -4,14 +4,30 @@ import { isForbiddenMetadataKey } from '../domain/admin-audit-event.js';
 
 export const AUDIT_ACTION_KEY = 'adminAuditAction';
 
+/**
+ * Where the id of the affected entity comes from:
+ * - `param` (default): the route param named by `entityIdParam`.
+ * - `response`: the `id` of the object the handler returns (creations: the id does not exist before the call).
+ *   A failed call has no response, so its event carries no entity id.
+ * - `actor`: the authenticated user (actions a user performs on its own account, e.g. its password or 2FA).
+ */
+export type AuditEntityIdSource = 'param' | 'response' | 'actor';
+
 export interface AuditActionOptions {
     /** Route param that identifies the affected entity (default `id`). `null`: the action has no entity id. */
     entityIdParam?: string | null;
+    /** Source of the entity id (default `param`). `entityIdParam` only applies to `param`. */
+    entityIdFrom?: AuditEntityIdSource;
     /**
      * Request body fields copied to `metadata` (allow-list). Secrets and personal data are refused when the
      * decorator is applied, so a wrong declaration fails at startup instead of leaking.
      */
     bodyFields?: readonly string[];
+    /**
+     * Fixed values the handler adds to `metadata` (which of the operations of an action ran: `{ step: 'enable' }`).
+     * Declared in code, never from the request; the same key rules as `bodyFields` apply.
+     */
+    metadata?: Readonly<Record<string, string | number | boolean>>;
 }
 
 export interface AuditActionMetadata extends AuditActionOptions {
@@ -24,9 +40,12 @@ export interface AuditActionMetadata extends AuditActionOptions {
  * With `@Res()` the handler must send the response before it returns, so the recorded status is the real one.
  */
 export const AuditAction = (action: AuditActionName, options: AuditActionOptions = {}): MethodDecorator => {
-    const forbidden = (options.bodyFields ?? []).filter(isForbiddenMetadataKey);
+    if (options.entityIdFrom && options.entityIdFrom !== 'param' && options.entityIdParam !== undefined) {
+        throw new Error(`@AuditAction('${action}'): entityIdParam only applies when the entity id comes from the route (entityIdFrom 'param').`);
+    }
+    const forbidden = [...(options.bodyFields ?? []), ...Object.keys(options.metadata ?? {})].filter(isForbiddenMetadataKey);
     if (forbidden.length > 0) {
-        throw new Error(`@AuditAction('${action}'): bodyFields cannot include secrets or personal data (${forbidden.join(', ')}).`);
+        throw new Error(`@AuditAction('${action}'): bodyFields and metadata cannot include secrets or personal data (${forbidden.join(', ')}).`);
     }
     return SetMetadata(AUDIT_ACTION_KEY, { action, ...options } satisfies AuditActionMetadata);
 };

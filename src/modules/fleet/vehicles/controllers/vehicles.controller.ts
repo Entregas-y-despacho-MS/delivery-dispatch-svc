@@ -19,6 +19,7 @@ import { ApiNotFound, ApiUnauthorized, ApiConflict, ApiBadRequests, ApiIdParam, 
 import { Roles } from '../../../../app/auth/decorators/index.js';
 import { CurrentUser } from '../../../../shared/decorators/index.js';
 import { ChangeVehicleStatusDto } from '../dto/change-vehicle-status.dto.js';
+import { AuditAction } from '../../../audit/admin-audit-events/decorators/audit-action.decorator.js';
 
 /**
  * Error dictionary for this module:
@@ -66,6 +67,7 @@ export class VehiclesController {
     }
 
     @Post()
+    @AuditAction('vehicle.changed', { entityIdFrom: 'response', metadata: { operation: 'create' } })
     @Roles(RoleEnum.SUPERVISOR, RoleEnum.COORDINATOR)
     @HttpCode(HttpStatus.CREATED)
     @ApiOperation({
@@ -81,6 +83,7 @@ export class VehiclesController {
     }
 
     @Patch(':id/status')
+    @AuditAction('vehicle.changed', { bodyFields: ['status'], metadata: { operation: 'status' } })
     @Roles(RoleEnum.SUPERVISOR, RoleEnum.COORDINATOR)
     @ApiOperation({
         summary: 'Change a vehicle operational status',
@@ -124,6 +127,7 @@ export class VehiclesController {
     }
 
     @Put(':id')
+    @AuditAction('vehicle.changed', { metadata: { operation: 'update' } })
     @Roles(RoleEnum.SUPERVISOR, RoleEnum.COORDINATOR)
     @ApiOperation({
         summary:     'Update a vehicle',
@@ -143,6 +147,7 @@ export class VehiclesController {
     }
 
     @Delete(':id')
+    @AuditAction('vehicle.changed', { metadata: { operation: 'delete' } })
     @Roles(RoleEnum.SUPERVISOR, RoleEnum.COORDINATOR)
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({

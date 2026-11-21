@@ -16,6 +16,7 @@ import { ParseIdPipe } from '../../../../shared/pipes/index.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
 import { ApiNotFound, ApiUnauthorized, ApiConflict, ApiBadRequests, ApiIdParam } from '../../../../shared/utils/swagger/index.js';
 import { CoordinatorOnly } from '../../../../app/auth/decorators/index.js';
+import { AuditAction } from '../../../audit/admin-audit-events/decorators/audit-action.decorator.js';
 
 /**
  * Error dictionary for this module:
@@ -61,6 +62,7 @@ export class DeliveryZonesController {
     }
 
     @Post()
+    @AuditAction('catalog.changed', { entityIdFrom: 'response', metadata: { catalog: 'delivery-zones', operation: 'create' } })
     @CoordinatorOnly()
     @HttpCode(HttpStatus.CREATED)
     @ApiOperation({
@@ -76,6 +78,7 @@ export class DeliveryZonesController {
     }
 
     @Put(':id')
+    @AuditAction('catalog.changed', { metadata: { catalog: 'delivery-zones', operation: 'update' } })
     @CoordinatorOnly()
     @ApiOperation({
         summary:     'Update a delivery zone',
@@ -95,6 +98,7 @@ export class DeliveryZonesController {
     }
 
     @Delete(':id')
+    @AuditAction('catalog.changed', { metadata: { catalog: 'delivery-zones', operation: 'delete' } })
     @CoordinatorOnly()
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({

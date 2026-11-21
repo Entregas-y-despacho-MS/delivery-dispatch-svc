@@ -21,7 +21,7 @@ export class AdminAuditInterceptor implements NestInterceptor {
     intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
         if (!this.audit.auditedAction(context)) return next.handle();
         return next.handle().pipe(
-            mergeMap((value) => from(this.audit.recordOutcome(context, this.successStatus(context)).then(() => value))),
+            mergeMap((value) => from(this.audit.recordOutcome(context, this.successStatus(context), value).then(() => value))),
             catchError((error: unknown) =>
                 from(this.audit.recordError(context, error)).pipe(mergeMap(() => throwError(() => error)))),
         );

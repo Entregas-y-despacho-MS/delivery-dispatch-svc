@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiCreatedResponse, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CoordinatorOnly, Roles } from '../auth/decorators/index.js';
+import { AuditAction } from '../../modules/audit/admin-audit-events/decorators/audit-action.decorator.js';
 import { CurrentUser } from '../../shared/decorators/current-user.decorator.js';
 import { RoleEnum } from '../../shared/enums/index.js';
 import { ParseIdPipe } from '../../shared/pipes/index.js';
@@ -70,6 +71,7 @@ export class PickupOrdersController {
     }
 
     @Patch(':id/cancel')
+    @AuditAction('dispatch.cancelled')
     @CoordinatorOnly()
     @ApiOperation({
         summary: 'Cancel a customer pickup order before the route starts (coordinator)',

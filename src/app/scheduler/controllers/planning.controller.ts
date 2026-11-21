@@ -1,6 +1,7 @@
 import { Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiInternalServerErrorResponse, ApiOkResponse, ApiOperation, ApiServiceUnavailableResponse, ApiTags } from '@nestjs/swagger';
 import { CoordinatorOnly } from '../../auth/decorators/index.js';
+import { AuditAction } from '../../../modules/audit/admin-audit-events/decorators/audit-action.decorator.js';
 import { ApiConflict, ApiUnauthorized, ApiUnprocessableEntity, errorBody } from '../../../shared/utils/swagger/index.js';
 import { TaskRunResultDto } from '../dto/task-run-result.dto.js';
 import { PLAN_GENERATION_TASK, ROUTE_CUTOFF_TASK } from '../scheduled-task-names.js';
@@ -37,6 +38,7 @@ export class PlanningController {
     constructor(private readonly trigger: ManualTaskTriggerService) {}
 
     @Post('generate')
+    @AuditAction('planning.run', { entityIdParam: null, metadata: { task: 'generate' } })
     @HttpCode(HttpStatus.OK)
     @CoordinatorOnly()
     @ApiOperation({
@@ -60,6 +62,7 @@ export class PlanningController {
     }
 
     @Post('cutoff')
+    @AuditAction('planning.run', { entityIdParam: null, metadata: { task: 'cutoff' } })
     @HttpCode(HttpStatus.OK)
     @CoordinatorOnly()
     @ApiOperation({

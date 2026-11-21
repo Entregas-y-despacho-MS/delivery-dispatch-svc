@@ -1,6 +1,7 @@
 import { Controller, Get, Header, HttpCode, HttpStatus, Param, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CoordinatorOnly, Roles } from '../../auth/decorators/index.js';
+import { AuditAction } from '../../../modules/audit/admin-audit-events/decorators/audit-action.decorator.js';
 import { CurrentUser } from '../../../shared/decorators/current-user.decorator.js';
 import { RoleEnum } from '../../../shared/enums/index.js';
 import { ParseIdPipe } from '../../../shared/pipes/index.js';
@@ -41,6 +42,7 @@ export class CustomerChangeRequestsController {
     }
 
     @Post(':id/tracking-link')
+    @AuditAction('tracking_link.revealed')
     @HttpCode(HttpStatus.OK)
     @Header('Cache-Control', 'no-store')
     @CoordinatorOnly()

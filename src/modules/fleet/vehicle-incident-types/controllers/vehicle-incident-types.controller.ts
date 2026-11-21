@@ -17,6 +17,7 @@ import { ApiNotFound, ApiUnauthorized, ApiBadRequests, ApiIdParam, ApiConflict }
 import { Roles } from '../../../../app/auth/decorators/index.js';
 import { ParseIdPipe } from '../../../../shared/pipes/index.js';
 import { RoleEnum } from '../../../../shared/enums/index.js';
+import { AuditAction } from '../../../audit/admin-audit-events/decorators/audit-action.decorator.js';
 
 /**
  * Error dictionary for this module:
@@ -63,6 +64,7 @@ export class VehicleIncidentTypesController {
     }
 
     @Post()
+    @AuditAction('catalog.changed', { entityIdFrom: 'response', metadata: { catalog: 'vehicle-incident-types', operation: 'create' } })
     @Roles(RoleEnum.SUPERVISOR, RoleEnum.COORDINATOR)
     @HttpCode(HttpStatus.CREATED)
     @ApiOperation({
@@ -78,6 +80,7 @@ export class VehicleIncidentTypesController {
     }
 
     @Put(':id')
+    @AuditAction('catalog.changed', { metadata: { catalog: 'vehicle-incident-types', operation: 'update' } })
     @Roles(RoleEnum.SUPERVISOR, RoleEnum.COORDINATOR)
     @ApiOperation({
         summary:     'Update a vehicle incident type',

@@ -14,6 +14,7 @@ import type { AuthUser } from '../strategies/jwt.strategy.js';
 import { InvalidCredentialsException, InvalidTotpCodeException, TwoFactorAlreadyEnabledException } from '../exceptions/index.js';
 import { comparePassword } from '../../../shared/utils/crypto.util.js';
 import { ApiUnauthorized, ApiBadRequests, ApiConflict } from '../../../shared/utils/swagger/index.js';
+import { AuditAction } from '../../../modules/audit/admin-audit-events/decorators/audit-action.decorator.js';
 
 /**
  * Error dictionary for this module:
@@ -37,6 +38,7 @@ export class TwoFactorController {
     ) {}
 
     @Post('enable')
+    @AuditAction('auth.two_factor_changed', { entityIdFrom: 'actor', metadata: { step: 'enable' } })
     @HttpCode(HttpStatus.OK)
     @ApiOperation({
         summary:     'Start 2FA enrollment',
@@ -63,6 +65,7 @@ export class TwoFactorController {
     }
 
     @Post('confirm')
+    @AuditAction('auth.two_factor_changed', { entityIdFrom: 'actor', metadata: { step: 'confirm' } })
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({
         summary:     'Confirm 2FA enrollment',
@@ -83,6 +86,7 @@ export class TwoFactorController {
     }
 
     @Post('disable')
+    @AuditAction('auth.two_factor_changed', { entityIdFrom: 'actor', metadata: { step: 'disable' } })
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({
         summary:     'Disable 2FA',
