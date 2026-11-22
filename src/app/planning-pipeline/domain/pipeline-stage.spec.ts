@@ -35,6 +35,16 @@ describe('classifyDispatch', () => {
         expect(classifyDispatch(input({ status: 'pickup_scheduled' })).stage).toBe(PipelineStage.READY_UNBATCHED);
     });
 
+    it('treats a rescheduled delivery without batch as ready, like a pending one', () => {
+        expect(classifyDispatch(input({ status: 'rescheduled' })).stage).toBe(PipelineStage.READY_UNBATCHED);
+        expect(classifyDispatch(input({ status: 'rescheduled', planExceptionReason: 'rescheduled_date_not_plannable' })).exceptionCodes).toEqual(['rescheduled_date_not_plannable']);
+    });
+
+    it('keeps a pickup inside a batch in the stage of its batch: it stays pickup_scheduled there (D-56)', () => {
+        expect(classifyDispatch(input({ status: 'pickup_scheduled', batchStatus: 'provisional' })).stage).toBe(PipelineStage.PROVISIONAL_REVIEW);
+        expect(classifyDispatch(input({ status: 'pickup_scheduled', batchStatus: 'confirmed' })).stage).toBe(PipelineStage.CONFIRMED_ASSIGNED);
+    });
+
     it('puts dispatches of a provisional batch and of a batch in final review in provisional_review', () => {
         for (const batchStatus of ['provisional', 'pending_final_review']) {
             expect(classifyDispatch(input({ status: 'in_planning', batchStatus, batchCapacity: fitting })).stage).toBe(PipelineStage.PROVISIONAL_REVIEW);
@@ -58,7 +68,7 @@ describe('classifyDispatch', () => {
     });
 
     it('leaves out the dispatches that are not in the pipeline', () => {
-        for (const status of ['delivered', 'cancelled', 'returned', 'returned_to_warehouse', 'rescheduled', 'incident', 'not_delivered', 'picked_up_in_transit']) {
+        for (const status of ['delivered', 'cancelled', 'returned', 'returned_to_warehouse', 'incident', 'not_delivered', 'picked_up_in_transit']) {
             expect(classifyDispatch(input({ status, batchStatus: 'closed' }))).toEqual({ stage: null, exceptionCodes: [] });
         }
     });
@@ -108,11 +118,12 @@ describe('classifyDispatch', () => {
             expect(classifyDispatch(input({ status: 'assigned', batchStatus: null })).exceptionCodes).toEqual(['inconsistent_state']);
             expect(classifyDispatch(input({ status: 'assigned', batchStatus: 'closed' })).exceptionCodes).toEqual(['inconsistent_state']);
             expect(classifyDispatch(input({ status: 'pending', batchStatus: 'provisional' })).exceptionCodes).toEqual(['inconsistent_state']);
+            expect(classifyDispatch(input({ status: 'rescheduled', batchStatus: 'provisional' })).exceptionCodes).toEqual(['inconsistent_state']);
         });
     });
 
     it('never puts one dispatch in two stages: every combination has a single stage', () => {
-        const statuses = ['pending', 'pickup_scheduled', 'address_review', 'in_planning', 'scheduled', 'assigned', 'out_for_delivery', 'in_transit'];
+        const statuses = ['pending', 'rescheduled', 'pickup_scheduled', 'address_review', 'in_planning', 'scheduled', 'assigned', 'out_for_delivery', 'in_transit'];
         const batches = [null, 'provisional', 'pending_final_review', 'confirmed', 'in_execution', 'closed', 'cancelled'];
         const reasons = [null, 'no_vehicle_available'];
         for (const status of statuses) {

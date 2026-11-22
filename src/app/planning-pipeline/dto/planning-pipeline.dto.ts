@@ -1,4 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiExtraModels, ApiProperty } from '@nestjs/swagger';
+import { nullableRef } from '../../../modules/dispatch/route-batches/dto/nullable-ref.js';
 import { PaginationResponseDto } from '../../../shared/dto/pagination-response.dto.js';
 import { PipelineStage } from '../domain/pipeline-stage.js';
 
@@ -67,6 +68,7 @@ export class PipelineCapacityDto {
     dimensionViolationCount!: number;
 }
 
+@ApiExtraModels(NamedRefDto, PipelineCapacityDto)
 export class PipelineBatchDto {
     @ApiProperty({ type: 'integer', description: 'Route batch ID' })
     id!: number;
@@ -80,13 +82,13 @@ export class PipelineBatchDto {
     @ApiProperty({ type: String, format: 'date', description: 'Shift date of the batch (YYYY-MM-DD)' })
     shiftDate!: string;
 
-    @ApiProperty({ type: NamedRefDto, nullable: true, description: 'Assigned vehicle (`name` is the plate), `null` while there is none' })
+    @ApiProperty({ ...nullableRef(NamedRefDto), description: 'Assigned vehicle (`name` is the plate), `null` while there is none' })
     vehicle!: NamedRefDto | null;
 
-    @ApiProperty({ type: NamedRefDto, nullable: true, description: 'Driver, or the proposed driver before the second approval; `null` while there is none' })
+    @ApiProperty({ ...nullableRef(NamedRefDto), description: 'Driver, or the proposed driver before the second approval; `null` while there is none' })
     driver!: NamedRefDto | null;
 
-    @ApiProperty({ type: PipelineCapacityDto, nullable: true, description: 'Load against the vehicle, kg and m³ separately. `null` when the batch has no vehicle: no capacity is invented' })
+    @ApiProperty({ ...nullableRef(PipelineCapacityDto), description: 'Load against the vehicle, kg and m³ separately. `null` when the batch has no vehicle: no capacity is invented' })
     capacity!: PipelineCapacityDto | null;
 
     @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches the batch carries, of any status (informational detail, not a KPI)' })
@@ -101,6 +103,7 @@ export class PipelineExceptionDto {
     reason!: string | null;
 }
 
+@ApiExtraModels(NamedRefDto, PipelineExceptionDto)
 export class PipelineDispatchDto {
     @ApiProperty({ type: 'integer', description: 'Dispatch ID: the unit of every count of the pipeline' })
     dispatchId!: number;
@@ -114,10 +117,10 @@ export class PipelineDispatchDto {
     @ApiProperty({ type: 'integer', nullable: true, description: 'Batch of the dispatch (detail, see `batches`); `null` without batch' })
     routeBatchId!: number | null;
 
-    @ApiProperty({ type: NamedRefDto, nullable: true, description: 'Delivery zone, `null` when the dispatch has none' })
+    @ApiProperty({ ...nullableRef(NamedRefDto), description: 'Delivery zone, `null` when the dispatch has none' })
     zone!: NamedRefDto | null;
 
-    @ApiProperty({ type: NamedRefDto, nullable: true, description: 'Origin warehouse, `null` when unknown' })
+    @ApiProperty({ ...nullableRef(NamedRefDto), description: 'Origin warehouse, `null` when unknown' })
     warehouse!: NamedRefDto | null;
 
     @ApiProperty({ type: String, format: 'date', nullable: true, description: 'Operating day (YYYY-MM-DD), `null` without batch and without window' })
@@ -126,13 +129,13 @@ export class PipelineDispatchDto {
     @ApiProperty({ type: String, enum: ['morning', 'afternoon'], nullable: true, description: 'Shift derived from the start of the promise window, `null` without window' })
     shift!: 'morning' | 'afternoon' | null;
 
-    @ApiProperty({ type: NamedRefDto, nullable: true, description: 'Vehicle of the batch (`name` is the plate)' })
+    @ApiProperty({ ...nullableRef(NamedRefDto), description: 'Vehicle of the batch (`name` is the plate)' })
     vehicle!: NamedRefDto | null;
 
-    @ApiProperty({ type: NamedRefDto, nullable: true, description: 'Driver or proposed driver of the batch' })
+    @ApiProperty({ ...nullableRef(NamedRefDto), description: 'Driver or proposed driver of the batch' })
     driver!: NamedRefDto | null;
 
-    @ApiProperty({ type: PipelineExceptionDto, nullable: true, description: 'Why the dispatch is an exception; `null` for any other stage' })
+    @ApiProperty({ ...nullableRef(PipelineExceptionDto), description: 'Why the dispatch is an exception; `null` for any other stage' })
     exception!: PipelineExceptionDto | null;
 
     @ApiProperty({ type: String, example: '/dispatches/42/detail', description: 'Path (under the API prefix) of the dispatch detail, where the coordinator solves the exception. Only the coordinator reaches this endpoint, and the coordinator can open it' })

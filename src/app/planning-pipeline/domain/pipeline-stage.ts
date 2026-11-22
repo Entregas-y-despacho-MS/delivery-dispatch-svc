@@ -42,8 +42,10 @@ export interface PipelineClassification {
 }
 
 const PLAN_REASONS: ReadonlySet<string> = new Set(['deadline_exceeded', 'no_vehicle_fits', 'no_vehicle_available', 'rescheduled_date_not_plannable']);
-/** Statuses that wait for a batch: a pickup with zone enters the generator like a `pending` delivery (D-56). */
-const UNBATCHED_STATUSES: ReadonlySet<string> = new Set(['pending', 'pickup_scheduled']);
+/** Statuses that wait for a batch: a `rescheduled` delivery and a pickup with zone enter the generator like a `pending` one (D-56). */
+const UNBATCHED_STATUSES: ReadonlySet<string> = new Set(['pending', 'rescheduled', 'pickup_scheduled']);
+/** A delivery that is in a batch has moved on to `in_planning`; a pickup keeps `pickup_scheduled` inside its batch (D-56). */
+const WAITING_DELIVERY_STATUSES: ReadonlySet<string> = new Set(['pending', 'rescheduled']);
 const BATCHED_STATUSES: ReadonlySet<string> = new Set(['in_planning', 'scheduled', 'assigned']);
 const ROUTE_STATUSES: ReadonlySet<string> = new Set(['out_for_delivery', 'in_transit']);
 /** Batches whose load can still be corrected: once the route runs a capacity excess is history, not an exception. */
@@ -85,7 +87,7 @@ export function classifyDispatch(input: PipelineDispatchInput): PipelineClassifi
     }
 
     // The dispatch has a batch: its status says the stage, but a batch that is closed or cancelled cannot hold an active dispatch.
-    if (!EDITABLE_BATCH_STATUSES.has(batchStatus) || UNBATCHED_STATUSES.has(status)) return exception('inconsistent_state');
+    if (!EDITABLE_BATCH_STATUSES.has(batchStatus) || WAITING_DELIVERY_STATUSES.has(status)) return exception('inconsistent_state');
 
     const capacityCodes = capacityExceptionCodes(input.batchCapacity);
     if (capacityCodes.length > 0) return exception(...capacityCodes);

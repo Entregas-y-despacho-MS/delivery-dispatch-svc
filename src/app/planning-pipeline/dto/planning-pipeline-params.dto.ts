@@ -31,11 +31,11 @@ export class PlanningPipelineParamsDto extends PaginationParamsDto {
     @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: DATE_MESSAGE })
     date?: string;
 
-    @ApiPropertyOptional({ type: 'integer', minimum: 1, description: 'Only dispatches of this delivery zone (ID)' })
+    @ApiPropertyOptional({ type: 'integer', minimum: 1, maximum: INT4_MAX, description: 'Only dispatches of this delivery zone (ID)' })
     @positiveInt('zoneId')
     zoneId?: number;
 
-    @ApiPropertyOptional({ type: 'integer', minimum: 1, description: 'Only dispatches of this origin warehouse (ID)' })
+    @ApiPropertyOptional({ type: 'integer', minimum: 1, maximum: INT4_MAX, description: 'Only dispatches of this origin warehouse (ID)' })
     @positiveInt('warehouseId')
     warehouseId?: number;
 

@@ -50,6 +50,12 @@ describe('PipelineRepository.findCandidates', () => {
         expect(PIPELINE_CANDIDATES_SQL).toContain('c.operating_date IS NULL AND c.route_batch_id IS NULL AND c.created_day <= $1::date');
     });
 
+    it('drops a plan exception once a status change came after it, and ignores a deleted vehicle', () => {
+        expect(PIPELINE_CANDIDATES_SQL).toContain("s.event_type = 'status_changed' AND s.dispatch_event_id > e.dispatch_event_id");
+        expect(PIPELINE_CANDIDATES_SQL).toContain('v.deleted_at IS NULL');
+        expect(PIPELINE_STATUSES).toContain('rescheduled');
+    });
+
     it('takes only the latest plan exception of each dispatch, and the shift from the window start in La Paz', () => {
         expect(PIPELINE_CANDIDATES_SQL).toContain("e.event_type = 'plan_exception'");
         expect(PIPELINE_CANDIDATES_SQL).toContain('LIMIT 1');

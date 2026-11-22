@@ -9,8 +9,8 @@ import {
 import { toPipelineCapacity, type PipelineCapacity } from '../domain/pipeline-capacity.js';
 import type { PipelineShift } from '../dto/planning-pipeline-params.dto.js';
 
-/** Statuses a dispatch can have while it is part of the pipeline (the others are finished, cancelled, returned, rescheduled or in incident). */
-export const PIPELINE_STATUSES = ['address_review', 'pending', 'pickup_scheduled', 'in_planning', 'scheduled', 'assigned', 'out_for_delivery', 'in_transit'] as const;
+/** Statuses a dispatch can have while it is part of the pipeline (the others are finished, cancelled, returned or in incident). */
+export const PIPELINE_STATUSES = ['address_review', 'pending', 'rescheduled', 'pickup_scheduled', 'in_planning', 'scheduled', 'assigned', 'out_for_delivery', 'in_transit'] as const;
 
 /** The first hour of the afternoon shift (America/La_Paz). There is no shift table (D-20): the shift comes from the start of the promise window. */
 export const AFTERNOON_SHIFT_START_HOUR = 12;
@@ -38,7 +38,7 @@ export interface PipelineCandidate {
     shift: PipelineShift | null;
     vehicle: { id: number; name: string } | null;
     driver: { id: number; name: string } | null;
-    /** Reason of the latest `plan_exception` of the dispatch (not yet judged open or solved), `null` when it never had one. */
+    /** Reason of the latest `plan_exception` with no status change after it, `null` when there is none (a solved exception is not returned). */
     planExceptionReason: string | null;
     planExceptionDetail: string | null;
 }
@@ -120,12 +120,16 @@ export const PIPELINE_CANDIDATES_SQL = `
           LEFT JOIN route_batches rb ON rb.route_batch_id = d.route_batch_id
           LEFT JOIN delivery_zones z ON z.delivery_zone_id = COALESCE(d.delivery_zone_id, rb.delivery_zone_id)
           LEFT JOIN warehouses w ON w.warehouse_id = COALESCE(rb.origin_warehouse_id, d.origin_warehouse_id)
-          LEFT JOIN vehicles v ON v.vehicle_id = rb.vehicle_id
+          LEFT JOIN vehicles v ON v.vehicle_id = rb.vehicle_id AND v.deleted_at IS NULL
           LEFT JOIN users driver ON driver.user_id = COALESCE(rb.driver_id, rb.proposed_driver_id)
           LEFT JOIN LATERAL (
               SELECT e.reason, e.detail
                 FROM dispatch_events e
                WHERE e.dispatch_id = d.dispatch_id AND e.event_type = 'plan_exception'
+                 AND NOT EXISTS (
+                     SELECT 1 FROM dispatch_events s
+                      WHERE s.dispatch_id = e.dispatch_id AND s.event_type = 'status_changed' AND s.dispatch_event_id > e.dispatch_event_id
+                 )
                ORDER BY e.created_at DESC, e.dispatch_event_id DESC
                LIMIT 1
           ) pe ON TRUE
