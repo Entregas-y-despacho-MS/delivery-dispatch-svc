@@ -97,7 +97,7 @@ export class PipelineExceptionDto {
     @ApiProperty({ type: [String], example: ['capacity_exceeded_kg'], description: 'Exception codes: `address_invalid`, `zone_missing`, `deadline_exceeded`, `no_vehicle_fits`, `no_vehicle_available`, `rescheduled_date_not_plannable`, `capacity_exceeded_kg`, `capacity_exceeded_m3`, `package_dimensions_exceeded`, `inconsistent_state`' })
     codes!: string[];
 
-    @ApiProperty({ type: String, nullable: true, description: 'Reason text recorded by the planner, `null` when it has none. Only coordinators and supervisors reach this endpoint' })
+    @ApiProperty({ type: String, nullable: true, description: 'Readable reason built from the codes (one sentence per code)' })
     reason!: string | null;
 }
 
@@ -134,6 +134,9 @@ export class PipelineDispatchDto {
 
     @ApiProperty({ type: PipelineExceptionDto, nullable: true, description: 'Why the dispatch is an exception; `null` for any other stage' })
     exception!: PipelineExceptionDto | null;
+
+    @ApiProperty({ type: String, example: '/dispatches/42/detail', description: 'Path (under the API prefix) of the dispatch detail, where the coordinator solves the exception. Only the coordinator reaches this endpoint, and the coordinator can open it' })
+    detailPath!: string;
 }
 
 export class PipelineStageCountsDto {
