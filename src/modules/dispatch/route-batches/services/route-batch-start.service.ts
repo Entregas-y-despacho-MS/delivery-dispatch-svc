@@ -305,7 +305,7 @@ export class RouteBatchStartService {
         action: ORDER_DISPATCH_ACTIONS.DEPARTED,
         previousStatus: DispatchStatusEnum.ASSIGNED,
         newStatus: DispatchStatusEnum.OUT_FOR_DELIVERY,
-        detail: { clientEventId: dto.eventId },
+        detail: { clientEventId: dto.eventId, scope: 'route' },
         occurredAt: startedAt,
       }, { manager });
       const envelope = buildEnvelope({

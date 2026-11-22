@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DataSource } from 'typeorm';
 import type { ConsolidatedOrder } from '../../../messaging/sales-order-intake/domain/consolidated-order.types.js';
+import { OrderDispatchEventEntity } from '../../../audit/order-dispatch-events/entities/order-dispatch-event.entity.js';
 import { OrderDispatchEventsService } from '../../../audit/order-dispatch-events/services/order-dispatch-events.service.js';
 import { TypeOrmDispatchGenerator } from './typeorm-dispatch-generator.service.js';
 
@@ -35,6 +36,7 @@ describe.skipIf(process.env.ST49_INTEGRATION_DB !== '1')('TypeOrmDispatchGenerat
             port: Number(process.env.DB_PORT ?? 5432),
             username: process.env.DB_USER, password: process.env.DB_PASSWORD,
             database: process.env.DB_NAME,
+            entities: [OrderDispatchEventEntity],
         });
         await dataSource.initialize();
         await dataSource.query(
@@ -81,6 +83,16 @@ describe.skipIf(process.env.ST49_INTEGRATION_DB !== '1')('TypeOrmDispatchGenerat
             [first.dispatchId],
         );
         expect(packages).toEqual([{ external_package_id: 'PK-1', handling_conditions: ['fragile'] }]);
+
+        // ST-69.2: each creation left its history event in the same transaction, with the status it was created in.
+        const history = await dataSource.query(
+            `SELECT source_order_ref, dispatch_id, action, previous_status, new_status, actor_role, result
+               FROM order_dispatch_events WHERE source_order_ref IN ('ST49-SO-1', 'ST49-SO-2') ORDER BY dispatch_id`,
+        );
+        expect(history).toEqual([
+            { source_order_ref: 'ST49-SO-1', dispatch_id: first.dispatchId, action: 'dispatch.created', previous_status: null, new_status: 'pending', actor_role: 'system', result: 'success' },
+            { source_order_ref: 'ST49-SO-2', dispatch_id: second.dispatchId, action: 'dispatch.created', previous_status: null, new_status: 'address_review', actor_role: 'system', result: 'success' },
+        ]);
 
         await expect(dataSource.transaction((manager) =>
             generator.createFromConsolidated(order('ST49-SO-1'), { manager }))).rejects.toMatchObject({ code: '23505' });

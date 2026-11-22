@@ -213,7 +213,7 @@ describe('DispatchStatusService.update', () => {
         const ctx = setup();
         await ctx.service.update(12, dto(DispatchStatusEnum.IN_TRANSIT), 7);
         expect(ctx.orderEvents.recordForDispatch).toHaveBeenCalledWith(12, expect.objectContaining({
-            actor: { id: 7, role: 'driver' }, action: 'dispatch.departed', previousStatus: 'out_for_delivery', newStatus: 'in_transit',
+            actor: { id: 7, role: 'driver' }, action: 'dispatch.departed', previousStatus: 'out_for_delivery', newStatus: 'in_transit', detail: expect.objectContaining({ scope: 'stop' }),
             occurredAt: expect.any(Date),
         }), { manager: ctx.manager });
     });

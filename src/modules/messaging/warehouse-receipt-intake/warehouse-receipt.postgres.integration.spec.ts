@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { DataSource, type EntityManager, type QueryRunner } from 'typeorm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { OrderDispatchEventEntity } from '../../audit/order-dispatch-events/entities/order-dispatch-event.entity.js';
 import { OrderDispatchEventsService } from '../../audit/order-dispatch-events/services/order-dispatch-events.service.js';
 import { createDispatchStatusPublication } from '../../../../test/helpers/dispatch-status-publication.js';
 import { ProcurementPickupRepository } from '../procurement-pickup-intake/repositories/procurement-pickup.repository.js';
@@ -106,6 +107,8 @@ describe.skipIf(!PORT)('Warehouse receipt result publication against PostgreSQL 
             username: process.env.TEST_DB_USER,
             password: process.env.TEST_DB_PASSWORD,
             database: process.env.TEST_DB_NAME,
+            // The intake writes the order/dispatch history through `manager.getRepository(OrderDispatchEventEntity)` (ST-69.2).
+            entities: [OrderDispatchEventEntity],
         });
         await dataSource.initialize();
     });
@@ -167,6 +170,14 @@ describe.skipIf(!PORT)('Warehouse receipt result publication against PostgreSQL 
         const [queued] = await outboxOf('purchaseOrderId', pickup.orderId);
         expect(queued.payload.data).toMatchObject({ status: 'delivered', result: 'complete' });
         expect(queued.payload.data).not.toHaveProperty('items');
+        // ST-69.2: the receipt left its history event in the same transaction, written by the system.
+        const history = await manager().query(
+            `SELECT action, previous_status, new_status, actor_user_id, actor_role, result, dispatch_id
+               FROM order_dispatch_events WHERE dispatch_id = $1`, [pickup.id]);
+        expect(history).toEqual([{
+            action: 'dispatch.warehouse_received', previous_status: 'picked_up_in_transit', new_status: 'delivered',
+            actor_user_id: null, actor_role: 'system', result: 'success', dispatch_id: pickup.id,
+        }]);
     });
 
     it('an RMA that ends in incident is queued for Inventarios; a complete one is not queued', async () => {

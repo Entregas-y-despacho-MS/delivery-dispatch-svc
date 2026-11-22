@@ -236,7 +236,7 @@ export class DispatchStatusService {
                 action,
                 previousStatus: dispatch.status,
                 newStatus: dto.status,
-                detail: { clientEventId: dto.eventId },
+                detail: { clientEventId: dto.eventId, ...(dto.status === DispatchStatusEnum.IN_TRANSIT && { scope: 'stop' }) },
                 occurredAt,
             }, { manager });
         }

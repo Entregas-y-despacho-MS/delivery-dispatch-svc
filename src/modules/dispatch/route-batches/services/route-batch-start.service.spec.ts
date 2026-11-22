@@ -202,7 +202,7 @@ describe('RouteBatchStartService.start', () => {
     );
     expect(audit?.[0]).toContain('route_batch_events');
     expect(audit?.[1]?.[2]).toContain('PKG-22-B');
-    expect(orderEvents.recordForDispatch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: 'dispatch.departed', previousStatus: 'assigned', newStatus: 'out_for_delivery' }), expect.anything());
+    expect(orderEvents.recordForDispatch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: 'dispatch.departed', previousStatus: 'assigned', newStatus: 'out_for_delivery', detail: expect.objectContaining({ scope: 'route' }) }), expect.anything());
   });
 
   it('returns the original result for the same eventId without repeating writes', async () => {

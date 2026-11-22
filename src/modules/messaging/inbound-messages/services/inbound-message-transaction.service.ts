@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
+import { runWithCorrelationId } from '../../../audit/order-dispatch-events/context/correlation-context.js';
 import type { MessageEnvelope } from '../../../../plugins/messaging/envelope/message-envelope.js';
 import {
     InboundMessageTransaction,
@@ -39,7 +40,8 @@ export class InboundMessageTransactionService extends InboundMessageTransaction 
             );
             if (existing[0]?.status === 'processed') return 'duplicate';
 
-            await handle({ manager });
+            // Events the handler writes (order/dispatch history, ST-69.2) carry the message id as their correlation id.
+            await runWithCorrelationId(envelope.messageId, () => handle({ manager }));
             await manager.query(
                 `INSERT INTO inbound_messages (message_id, status, type, source, error_detail)
                  VALUES ($1, 'processed', $2, $3, NULL)
