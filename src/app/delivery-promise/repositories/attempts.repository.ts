@@ -22,7 +22,7 @@ const ATTEMPT_STATUSES_SQL = [IN_TRANSIT, DispatchStatusEnum.DELIVERED, Dispatch
  * for any other event. Only the filters are parameters (`$1`..`$5`): the cut is not needed, events are never in the future.
  */
 const ATTEMPT_SELECT_SQL = `
-    SELECT d.dispatch_id, d.scheduled_window_start AS window_start, d.scheduled_window_end AS window_end,
+    SELECT d.dispatch_id, s.name AS status, d.scheduled_window_start AS window_start, d.scheduled_window_end AS window_end,
            COALESCE(ev.events, '[]'::json) AS events
       FROM dispatches d
       JOIN dispatch_types t ON t.dispatch_type_id = d.dispatch_type_id AND t.name = 'delivery'
@@ -68,6 +68,8 @@ export const FIRST_INSTRUMENTED_SQL = `
 
 export interface DispatchAttemptSource {
     dispatchId: number;
+    /** Current status of the dispatch. */
+    status: string;
     windowStart: Date | null;
     windowEnd: Date | null;
     events: AttemptEvent[];
@@ -84,6 +86,7 @@ interface AttemptEventJson {
 
 interface AttemptRow {
     dispatch_id: number;
+    status: string;
     window_start: Date | null;
     window_end: Date | null;
     events: AttemptEventJson[];
@@ -95,6 +98,7 @@ export class AttemptsRepository {
     constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
     async listSources(filters: DeliveryPromiseFilters): Promise<DispatchAttemptSource[]> {
+        // `ATTEMPT_EVENTS_SQL` has no `$6` (the cut): sending the sixth parameter of `filterParams` would make PostgreSQL fail, hence the slice.
         const rows: AttemptRow[] = await this.dataSource.query(ATTEMPT_EVENTS_SQL, filterParams(filters, new Date()).slice(0, 5));
         return rows.map(toSource);
     }
@@ -117,6 +121,7 @@ export class AttemptsRepository {
 function toSource(row: AttemptRow): DispatchAttemptSource {
     return {
         dispatchId: row.dispatch_id,
+        status: row.status,
         windowStart: row.window_start ? new Date(row.window_start) : null,
         windowEnd: row.window_end ? new Date(row.window_end) : null,
         events: row.events.map((event) => ({ ...event, occurredAt: new Date(event.occurredAt) })),

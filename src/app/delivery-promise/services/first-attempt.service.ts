@@ -20,13 +20,13 @@ export class FirstAttemptService {
 
     async getFirstAttempt(filters: DeliveryPromiseFilters): Promise<FirstAttemptDto> {
         const [sources, coverage] = await Promise.all([this.repository.listSources(filters), this.repository.findCoverage(filters.from)]);
-        const results = sources.map((source) => classifyFirstAttempt(normalizeAttempts(source.events), windowOf(source)));
+        const results = sources.map((source) => classifyFirstAttempt(normalizeAttempts(source.events), windowOf(source), source.status));
         return buildFirstAttempt(tallyFirstAttempts(results), coverage);
     }
 
     /** Attempts used and first result of each given dispatch (the open overdue list). */
     async summarize(dispatchIds: number[]): Promise<Map<number, DispatchAttemptSummary>> {
         const sources = await this.repository.listSourcesByIds(dispatchIds);
-        return new Map(sources.map((source) => [source.dispatchId, summarizeAttempts(source.events, windowOf(source))]));
+        return new Map(sources.map((source) => [source.dispatchId, summarizeAttempts(source.events, windowOf(source), source.status)]));
     }
 }

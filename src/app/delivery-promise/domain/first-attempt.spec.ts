@@ -55,6 +55,10 @@ describe('normalizeAttempts', () => {
         expect(normalizeAttempts([event('delivered', 10)])).toEqual({ attempts: [], reconstructable: false });
     });
 
+    it('stays not reconstructable when a result with no trip came first, even if a valid attempt follows', () => {
+        expect(normalizeAttempts([event('not_delivered', 0), event('in_transit', 10), event('delivered', 20)])).toEqual({ attempts: [], reconstructable: false });
+    });
+
     it('skips events with no status', () => {
         expect(normalizeAttempts([event('in_transit', 0), { ...event('x', 1), status: null }, event('delivered', 2)]).attempts).toHaveLength(1);
     });
@@ -65,21 +69,27 @@ describe('classifyFirstAttempt', () => {
     const delivered = (minutes: number) => normalizeAttempts([event('in_transit', 0), event('delivered', minutes)]);
 
     it('tells on time (both ends included), late, failed and not yet apart', () => {
-        expect(classifyFirstAttempt(delivered(60), window)).toBe(FirstAttemptResult.ON_TIME);
-        expect(classifyFirstAttempt(delivered(61), window)).toBe(FirstAttemptResult.LATE);
-        expect(classifyFirstAttempt(normalizeAttempts([event('in_transit', 0), event('not_delivered', 5)]), window)).toBe(FirstAttemptResult.FAILED);
-        expect(classifyFirstAttempt(normalizeAttempts([event('assigned', 0)]), window)).toBe(FirstAttemptResult.NO_ATTEMPT_YET);
-        expect(classifyFirstAttempt(normalizeAttempts([event('delivered', 5)]), window)).toBe(FirstAttemptResult.NOT_RECONSTRUCTABLE);
+        expect(classifyFirstAttempt(delivered(60), window, 'delivered')).toBe(FirstAttemptResult.ON_TIME);
+        expect(classifyFirstAttempt(delivered(61), window, 'delivered')).toBe(FirstAttemptResult.LATE);
+        expect(classifyFirstAttempt(normalizeAttempts([event('in_transit', 0), event('not_delivered', 5)]), window, 'not_delivered')).toBe(FirstAttemptResult.FAILED);
+        expect(classifyFirstAttempt(normalizeAttempts([event('assigned', 0)]), window, 'assigned')).toBe(FirstAttemptResult.NO_ATTEMPT_YET);
+        expect(classifyFirstAttempt(normalizeAttempts([event('delivered', 5)]), window, 'delivered')).toBe(FirstAttemptResult.NOT_RECONSTRUCTABLE);
     });
 
     it('judges only the first attempt: a delivery on the second one does not rescue it', () => {
         const history = normalizeAttempts([event('in_transit', 0), event('not_delivered', 5), event('in_transit', 10), event('delivered', 20)]);
-        expect(classifyFirstAttempt(history, window)).toBe(FirstAttemptResult.FAILED);
+        expect(classifyFirstAttempt(history, window, 'delivered')).toBe(FirstAttemptResult.FAILED);
+    });
+
+    it('is not «not yet» for a dispatch that ended delivered or not delivered with no attempt to read', () => {
+        expect(classifyFirstAttempt(normalizeAttempts([]), window, 'delivered')).toBe(FirstAttemptResult.NOT_RECONSTRUCTABLE);
+        expect(classifyFirstAttempt(normalizeAttempts([]), window, 'not_delivered')).toBe(FirstAttemptResult.NOT_RECONSTRUCTABLE);
+        expect(classifyFirstAttempt(normalizeAttempts([]), window, 'returned')).toBe(FirstAttemptResult.NO_ATTEMPT_YET);
     });
 
     it('does not call late a delivery that has no valid window', () => {
-        expect(classifyFirstAttempt(delivered(10), { start: null, end: null })).toBe(FirstAttemptResult.DELIVERED_NO_WINDOW);
-        expect(classifyFirstAttempt(delivered(10), { start: at(60), end: at(0) })).toBe(FirstAttemptResult.DELIVERED_NO_WINDOW);
+        expect(classifyFirstAttempt(delivered(10), { start: null, end: null }, 'delivered')).toBe(FirstAttemptResult.DELIVERED_NO_WINDOW);
+        expect(classifyFirstAttempt(delivered(10), { start: at(60), end: at(0) }, 'delivered')).toBe(FirstAttemptResult.DELIVERED_NO_WINDOW);
     });
 });
 
@@ -88,15 +98,15 @@ describe('summarizeAttempts', () => {
 
     it('gives the valid attempts used and how the first one went', () => {
         const events = [event('in_transit', 0), event('not_delivered', 5), event('in_transit', 10), event('delivered', 20)];
-        expect(summarizeAttempts(events, window)).toEqual({ attemptsUsed: 2, firstAttemptResult: FirstAttemptResult.FAILED });
+        expect(summarizeAttempts(events, window, 'delivered')).toEqual({ attemptsUsed: 2, firstAttemptResult: FirstAttemptResult.FAILED });
     });
 
     it('has used none when nothing happened yet', () => {
-        expect(summarizeAttempts([], window)).toEqual({ attemptsUsed: 0, firstAttemptResult: FirstAttemptResult.NO_ATTEMPT_YET });
+        expect(summarizeAttempts([], window, 'assigned')).toEqual({ attemptsUsed: 0, firstAttemptResult: FirstAttemptResult.NO_ATTEMPT_YET });
     });
 
     it('does not know how many it used when the history cannot be rebuilt', () => {
-        expect(summarizeAttempts([event('delivered', 5)], window)).toEqual({ attemptsUsed: null, firstAttemptResult: FirstAttemptResult.NOT_RECONSTRUCTABLE });
+        expect(summarizeAttempts([event('delivered', 5)], window, 'delivered')).toEqual({ attemptsUsed: null, firstAttemptResult: FirstAttemptResult.NOT_RECONSTRUCTABLE });
     });
 });
 

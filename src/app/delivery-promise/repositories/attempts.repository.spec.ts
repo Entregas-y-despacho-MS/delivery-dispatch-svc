@@ -18,6 +18,7 @@ describe('AttemptsRepository.listSources', () => {
         const { repository } = repositoryAnswering([
             {
                 dispatch_id: 7,
+                status: 'assigned',
                 window_start: '2026-11-10T12:00:00.000Z',
                 window_end: '2026-11-10T14:00:00.000Z',
                 events: [{ eventId: 1, clientEventId: null, occurredAt: '2026-11-10T12:30:00.000Z', previousStatus: 'out_for_delivery', status: 'in_transit', countsAsAttempt: false }],
@@ -30,8 +31,8 @@ describe('AttemptsRepository.listSources', () => {
     });
 
     it('keeps a dispatch without window and without events', async () => {
-        const { repository } = repositoryAnswering([{ dispatch_id: 8, window_start: null, window_end: null, events: [] }]);
-        expect(await repository.listSources({ from: '2026-11-01', to: '2026-11-30' })).toEqual([{ dispatchId: 8, windowStart: null, windowEnd: null, events: [] }]);
+        const { repository } = repositoryAnswering([{ dispatch_id: 8, status: 'pending', window_start: null, window_end: null, events: [] }]);
+        expect(await repository.listSources({ from: '2026-11-01', to: '2026-11-30' })).toEqual([{ dispatchId: 8, status: 'pending', windowStart: null, windowEnd: null, events: [] }]);
     });
 
     it('reads both forms of the new status and only delivery dispatches, ordered by time', () => {
@@ -44,7 +45,7 @@ describe('AttemptsRepository.listSources', () => {
 
 describe('AttemptsRepository.listSourcesByIds', () => {
     it('asks for the given dispatches and does not touch the database for an empty list', async () => {
-        const { repository, query } = repositoryAnswering([{ dispatch_id: 4, window_start: null, window_end: null, events: [] }]);
+        const { repository, query } = repositoryAnswering([{ dispatch_id: 4, status: 'assigned', window_start: null, window_end: null, events: [] }]);
         expect(await repository.listSourcesByIds([4, 9])).toHaveLength(1);
         expect(query).toHaveBeenCalledWith(ATTEMPT_EVENTS_BY_IDS_SQL, [[4, 9]]);
         query.mockClear();

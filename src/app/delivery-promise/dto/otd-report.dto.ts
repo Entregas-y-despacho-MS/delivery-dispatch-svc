@@ -53,12 +53,12 @@ export class AttemptCoverageDto {
     @ApiProperty({ type: String, format: 'date-time', nullable: true, description: 'First moment the attempts can be rebuilt from (the first status event the backend wrote with the previous status). null when there is none yet' })
     from!: string | null;
 
-    @ApiProperty({ type: Boolean, description: 'true when the whole range starts on or after `from`. false: the rate is N/D because part of the range is not instrumented' })
+    @ApiProperty({ type: Boolean, description: 'true when the whole range starts on or after `from`. false when it starts earlier, or when `from` is null (nothing instrumented yet): the rate is then N/D' })
     complete!: boolean;
 }
 
 export class FirstAttemptDto {
-    @ApiProperty({ type: Boolean, example: true, description: 'false when the first-attempt rate is N/D: the range starts before the instrumented period (`coverage.complete` false) or it was not computed. true with a null `percentage` means "Sin datos" (nothing to measure)' })
+    @ApiProperty({ type: Boolean, example: false, description: 'false when the first-attempt rate is N/D: the range starts before the instrumented period (`coverage.complete` false) or it was not computed. true with a null `percentage` means "Sin datos" (nothing to measure)' })
     available!: boolean;
 
     @ApiProperty({ type: String, nullable: true, example: 'attempt_coverage_incomplete', description: 'Why the rate is N/D (`attempt_coverage_incomplete`, `attempt_not_normalized`); null when it is available' })
@@ -88,7 +88,7 @@ export class FirstAttemptDto {
     @ApiProperty({ type: 'integer', minimum: 0, description: 'First attempt failed (`not_delivered` or an incident whose reason consumes an attempt)' })
     failedCount!: number;
 
-    @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches whose first chance has not happened yet: out of the denominator' })
+    @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches with no attempt to measure: their first chance has not happened yet, or they were cancelled or returned before any attempt. Out of the denominator' })
     noAttemptYetCount!: number;
 
     @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches whose event history does not allow rebuilding their attempts: out of the denominator' })
@@ -126,7 +126,7 @@ export class OtdReportDto {
     @ApiProperty({ type: OtdMetricsDto, description: 'The rate with its numerator, denominator, sample size, invalid windows and excluded cancellations' })
     metrics!: OtdMetricsDto;
 
-    @ApiProperty({ type: FirstAttemptDto, description: 'First-attempt delivery: N/D with its reason until the attempt is normalized' })
+    @ApiProperty({ type: FirstAttemptDto, description: 'Delivery at the first attempt, rebuilt from the status events: the rate with its counts and the coverage of the instrumented period. N/D (`available` false, with its `reason`) when the range starts before that period, or when the attempts were not read' })
     firstAttempt!: FirstAttemptDto;
 
     @ApiProperty({ type: Boolean, description: 'true when the filters leave nothing to measure (denominator 0 and nothing excluded): the screen shows "Sin datos"' })

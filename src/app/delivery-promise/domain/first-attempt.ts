@@ -10,10 +10,12 @@ import type { FirstAttemptDto } from '../dto/otd-report.dto.js';
  *   whose reason consumes an attempt (D-48). The event that starts it is the change to `in_transit`.
  * - **Correlation.** Results with no `in_transit` between them are the same attempt: a `not_delivered` and the incident
  *   that caused it count once. The first result is the one that stands.
- * - **Idempotency.** An event that repeats the status of the one before it is dropped; the attempt's id is the event's
- *   `client_event_id` when the device sent one (the unique index already stops a retry), else its `dispatch_event_id`.
+ * - **Idempotency.** A result only opens an attempt if a trip started after the previous one, so a repeated event (the same
+ *   status written again, or a retry) adds nothing. The attempt's id is the event's `client_event_id` when the device sent
+ *   one (the unique index already stops a retry), else its `dispatch_event_id`.
  * - **Not rebuildable.** A first result with no `in_transit` before it cannot be told apart from an old event written
- *   before the instrumentation: the dispatch is `reconstructable = false` and exposes no attempt.
+ *   before the instrumentation: the dispatch is `reconstructable = false` and exposes no attempt. The same goes for a
+ *   dispatch that already ended `delivered` or `not_delivered` but has no attempt at all (its events were never written).
  *
  * This is NOT the rule of `max_delivery_attempts` (`DeliveryAttemptsService`, A-9): that one limits retries, this one measures.
  */
@@ -62,14 +64,9 @@ export function normalizeAttempts(events: AttemptEvent[]): DispatchAttempts {
     const attempts: NormalizedAttempt[] = [];
     let reconstructable = true;
     let tripStarted = false;
-    let lastStatus: string | null = null;
 
     for (const event of ordered) {
         if (!event.status) continue;
-        const repeated = event.status === lastStatus || event.previousStatus === event.status;
-        lastStatus = event.status;
-        if (repeated) continue;
-
         if (event.status === IN_TRANSIT) {
             tripStarted = true;
             continue;
@@ -100,11 +97,14 @@ export interface CommittedWindow {
     end: Date | null;
 }
 
-/** The first attempt of a dispatch against the window in force (both ends included, as the OTD measures it). */
-export function classifyFirstAttempt(history: DispatchAttempts, window: CommittedWindow): FirstAttemptResult {
+/** A dispatch in one of these statuses has had its result: with no attempt rebuilt, it is history we cannot read, not «not yet». */
+const RESULT_STATUSES: ReadonlySet<string> = new Set([AttemptOutcome.DELIVERED, AttemptOutcome.NOT_DELIVERED]);
+
+/** The first attempt of a dispatch against the window in force (both ends included, as the OTD measures it). `status` is its current status. */
+export function classifyFirstAttempt(history: DispatchAttempts, window: CommittedWindow, status: string): FirstAttemptResult {
     if (!history.reconstructable) return FirstAttemptResult.NOT_RECONSTRUCTABLE;
     const first = history.attempts[0];
-    if (!first) return FirstAttemptResult.NO_ATTEMPT_YET;
+    if (!first) return RESULT_STATUSES.has(status) ? FirstAttemptResult.NOT_RECONSTRUCTABLE : FirstAttemptResult.NO_ATTEMPT_YET;
     if (first.outcome !== AttemptOutcome.DELIVERED) return FirstAttemptResult.FAILED;
     const { start, end } = window;
     if (!start || !end || end.getTime() < start.getTime()) return FirstAttemptResult.DELIVERED_NO_WINDOW;
@@ -179,7 +179,8 @@ export interface DispatchAttemptSummary {
     firstAttemptResult: FirstAttemptResult;
 }
 
-export function summarizeAttempts(events: AttemptEvent[], window: CommittedWindow): DispatchAttemptSummary {
+export function summarizeAttempts(events: AttemptEvent[], window: CommittedWindow, status: string): DispatchAttemptSummary {
     const history = normalizeAttempts(events);
-    return { attemptsUsed: history.reconstructable ? history.attempts.length : null, firstAttemptResult: classifyFirstAttempt(history, window) };
+    const firstAttemptResult = classifyFirstAttempt(history, window, status);
+    return { attemptsUsed: firstAttemptResult === FirstAttemptResult.NOT_RECONSTRUCTABLE ? null : history.attempts.length, firstAttemptResult };
 }

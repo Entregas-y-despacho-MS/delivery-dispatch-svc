@@ -73,10 +73,10 @@ export class OpenOverdueDispatchDto {
     @ApiProperty({ enum: NextAction, description: 'What the coordinator has to do next, derived from the stage the dispatch is stuck in' })
     nextAction!: NextAction;
 
-    @ApiProperty({ type: 'integer', nullable: true, minimum: 0, example: 1, description: 'Valid delivery attempts the dispatch has used (a trip that ended in a result; a `not_delivered` and the incident that caused it count once). null when its history does not allow rebuilding them' })
+    @ApiProperty({ type: 'integer', nullable: true, minimum: 0, example: 1, description: 'Valid delivery attempts the dispatch has used (a trip that ended in a result; a `not_delivered` and the incident that caused it count once); 0 when its first chance has not happened. null when its history does not allow rebuilding them' })
     attemptsUsed!: number | null;
 
-    @ApiProperty({ enum: FirstAttemptResult, description: 'How the first attempt went: `on_time`, `late`, `delivered_no_window`, `failed`, `no_attempt_yet` (its first chance has not happened) or `not_reconstructable`' })
+    @ApiProperty({ enum: FirstAttemptResult, enumName: 'FirstAttemptResult', example: 'no_attempt_yet', description: 'How the first attempt went: `on_time`, `late`, `delivered_no_window`, `failed`, `no_attempt_yet` (its first chance has not happened) or `not_reconstructable`' })
     firstAttemptResult!: FirstAttemptResult;
 }
 
