@@ -3,6 +3,8 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { DispatchEventsService } from '../../../modules/dispatch/dispatch-events/services/dispatch-events.service.js';
+import { OrderDispatchEventsService } from '../../../modules/audit/order-dispatch-events/services/order-dispatch-events.service.js';
+import { ORDER_DISPATCH_ACTIONS } from '../../../modules/audit/order-dispatch-events/domain/order-dispatch-event-actions.js';
 import { SettingsService } from '../../../modules/settings/services/settings.service.js';
 import { DispatchStatusEnum } from '../../../shared/enums/dispatch-status.enum.js';
 import { DISPATCH_STATUS_CHANGED_EVENT, type DispatchStatusChangedEvent } from '../../dispatch-status/dispatch-status-changed.event.js';
@@ -59,6 +61,7 @@ export class DispatchReschedulingService {
         private readonly dispatchEvents: DispatchEventsService,
         private readonly settings: SettingsService,
         private readonly events: EventEmitter2,
+        private readonly orderEvents: OrderDispatchEventsService,
     ) {}
 
     async reschedule(dispatchId: number, dto: RescheduleDispatchDto, userId: number, now: Date = new Date()): Promise<RescheduleDispatchResultDto> {
@@ -169,6 +172,15 @@ export class DispatchReschedulingService {
                 instructions: dto.instructions ?? null,
                 ...batchMetadata,
             },
+        }, { manager });
+        await this.orderEvents.recordForDispatch(dispatchId, {
+            actor: { id: userId },
+            action: ORDER_DISPATCH_ACTIONS.RESCHEDULED,
+            // The dispatch already left its batch (route_batch_id is NULL now): the history keeps the one it left.
+            routeBatchId: batch?.id ?? null,
+            previousStatus: dispatch.status,
+            newStatus: DispatchStatusEnum.RESCHEDULED,
+            detail: { rescheduleId, reasonCode: dto.reasonCode, attemptsUsed: attempts.used },
         }, { manager });
 
         return {

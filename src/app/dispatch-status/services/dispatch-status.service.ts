@@ -3,6 +3,8 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { DispatchEventsService } from '../../../modules/dispatch/dispatch-events/services/dispatch-events.service.js';
+import { OrderDispatchEventsService } from '../../../modules/audit/order-dispatch-events/services/order-dispatch-events.service.js';
+import { ORDER_DISPATCH_ACTIONS, type OrderDispatchAction } from '../../../modules/audit/order-dispatch-events/domain/order-dispatch-event-actions.js';
 import { DeliveryEvidencesService } from '../../../modules/dispatch/delivery-evidences/services/delivery-evidences.service.js';
 import { DispatchNotFoundException } from '../../../modules/dispatch/dispatches/exceptions/dispatch-not-found.exception.js';
 import { FINAL_STATUSES } from '../../../modules/dispatch/dispatches/services/dispatches.service.js';
@@ -50,6 +52,13 @@ interface TransitionResult {
     event?: DispatchStatusChangedEvent;
 }
 
+/** The driver transitions that leave a business event: leaving for the stop and the delivery outcome (ST-69.2). */
+function orderEventAction(status: string): OrderDispatchAction | null {
+    if (status === DispatchStatusEnum.IN_TRANSIT) return ORDER_DISPATCH_ACTIONS.DEPARTED;
+    if (status === DispatchStatusEnum.DELIVERED || status === DispatchStatusEnum.NOT_DELIVERED) return ORDER_DISPATCH_ACTIONS.DELIVERY_RESULT;
+    return null;
+}
+
 const MAX_FUTURE_MS = 60 * 60 * 1000;
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -68,6 +77,7 @@ export class DispatchStatusService {
         private readonly events: EventEmitter2,
         private readonly statusPublication: DispatchStatusPublicationService,
         private readonly batchClosing: RouteBatchClosingService,
+        private readonly orderEvents: OrderDispatchEventsService,
     ) {}
 
     async update(dispatchId: number, dto: UpdateDispatchStatusDto, driverId: number): Promise<DispatchStatusResponseDto> {
@@ -219,6 +229,17 @@ export class DispatchStatusService {
             },
             occurredAt,
         }, { manager });
+        const action = orderEventAction(dto.status);
+        if (action) {
+            await this.orderEvents.recordForDispatch(dispatchId, {
+                actor: { id: driverId, role: 'driver' },
+                action,
+                previousStatus: dispatch.status,
+                newStatus: dto.status,
+                detail: { clientEventId: dto.eventId },
+                occurredAt,
+            }, { manager });
+        }
 
         await this.batchClosing.closeIfComplete(manager, batch.id, { dispatchId, dispatchStatus: dto.status });
 

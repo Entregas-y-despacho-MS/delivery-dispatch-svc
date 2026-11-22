@@ -121,7 +121,7 @@ function circuit(dispatch: Partial<State['dispatch']> = {}) {
     const dispatchEvents = { create: vi.fn(async (data: { metadata: Record<string, unknown> }) => { store.state.events.push({ metadata: data.metadata }); }) };
     const dispatchIncidents = { create: vi.fn(async (data: { id: string; dispatchId: number }) => { store.state.incidents.push({ id: data.id, dispatchId: data.dispatchId }); }) };
     const batchClosing = { closeIfComplete: vi.fn() };
-    const intake = new WarehouseReceiptIntakeService(dispatchEvents as never, dispatchIncidents as never, publication, batchClosing as never);
+    const intake = new WarehouseReceiptIntakeService(dispatchEvents as never, dispatchIncidents as never, publication, batchClosing as never, { recordForDispatch: vi.fn(), record: vi.fn() } as never);
     const consumer = new WarehouseReceiptConsumer(bus, new StoreTransaction(memoryTransaction, store), intake, events as never);
     return { store, bus, consumer, events };
 }

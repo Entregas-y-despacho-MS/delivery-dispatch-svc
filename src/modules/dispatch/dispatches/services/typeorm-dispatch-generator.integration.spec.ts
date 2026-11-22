@@ -1,13 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DataSource } from 'typeorm';
 import type { ConsolidatedOrder } from '../../../messaging/sales-order-intake/domain/consolidated-order.types.js';
+import { OrderDispatchEventsService } from '../../../audit/order-dispatch-events/services/order-dispatch-events.service.js';
 import { TypeOrmDispatchGenerator } from './typeorm-dispatch-generator.service.js';
 
 // Run only against a disposable database loaded from delivery-dispatch-db/db-output.sql.
 // Example: ST49_INTEGRATION_DB=1 DB_NAME=<disposable-db> npm run test -- <this file>
 describe.skipIf(process.env.ST49_INTEGRATION_DB !== '1')('TypeOrmDispatchGenerator with PostgreSQL', () => {
     let dataSource: DataSource;
-    const generator = new TypeOrmDispatchGenerator();
+    const generator = new TypeOrmDispatchGenerator(new OrderDispatchEventsService(undefined as never));
 
     const order = (salesOrderId: string, location = true): ConsolidatedOrder => ({
         salesOrderId,

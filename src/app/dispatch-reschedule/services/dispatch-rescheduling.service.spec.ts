@@ -9,6 +9,8 @@ import type { BatchExitService, LockedBatch } from './batch-exit.service.js';
 import type { DeliveryAttempts, DeliveryAttemptsService } from './delivery-attempts.service.js';
 import type { DispatchLockService, LockedDispatch } from './dispatch-lock.service.js';
 
+const orderEvents = { recordForDispatch: vi.fn(), record: vi.fn() };
+
 // Monday 2026-10-19, 11:00 in La Paz. The slot 09:00-11:00 of the 21st is 13:00Z-15:00Z.
 const dto: RescheduleDispatchDto = { reasonCode: 'RES-OPS', windowStart: '2026-10-21T13:00:00Z', windowEnd: '2026-10-21T15:00:00Z', instructions: 'Call first' };
 const previousStart = new Date('2026-10-20T13:00:00Z');
@@ -49,6 +51,7 @@ function build(opts: { dispatch?: Partial<LockedDispatch>; batch?: LockedBatch |
         dispatchEvents as unknown as DispatchEventsService,
         settings as unknown as SettingsService,
         events as unknown as EventEmitter2,
+        orderEvents as never,
     );
     return { service, query, dataSource, locks, attempts, batchExit, dispatchEvents, events };
 }
@@ -74,6 +77,7 @@ describe('DispatchReschedulingService.reschedule', () => {
         expect(update[1]).toEqual([5, 'rescheduled', new Date(dto.windowStart), new Date(dto.windowEnd), 0]);
         expect(ctx.events.emit).toHaveBeenCalledWith('dispatch.status_changed', expect.objectContaining({ dispatchId: 5, status: 'rescheduled', previousStatus: 'not_delivered', version: 5 }));
         expect(ctx.events.emit).toHaveBeenCalledWith('dispatch.rescheduled', expect.objectContaining({ dispatchId: 5, rescheduleId: 17, rescheduledBy: 'coordinator', reasonCode: 'RES-OPS' }));
+        expect(orderEvents.recordForDispatch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: 'dispatch.rescheduled', newStatus: 'rescheduled', routeBatchId: expect.any(Number) }), expect.anything());
     });
 
     it('writes the audit event with the instructions, the attempts and the batch outcome', async () => {

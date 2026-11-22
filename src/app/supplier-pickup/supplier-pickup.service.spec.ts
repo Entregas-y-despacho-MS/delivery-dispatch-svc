@@ -31,6 +31,7 @@ describe('SupplierPickupService', () => {
     let outbox: { enqueue: ReturnType<typeof vi.fn> };
     let service: SupplierPickupService;
     let manager: { query: ReturnType<typeof vi.fn> };
+    let orderEvents: { recordForDispatch: ReturnType<typeof vi.fn> };
 
     const items = [{ itemCode: 'SKU-1', receivedQuantity: 2 }, { itemCode: 'SKU-2', receivedQuantity: 3 }];
     const expectedItems = [{ item_code: 'SKU-1', expected_quantity: '2' }, { item_code: 'SKU-2', expected_quantity: '3' }];
@@ -39,6 +40,7 @@ describe('SupplierPickupService', () => {
 
     beforeEach(() => {
         manager = { query: vi.fn() };
+        orderEvents = { recordForDispatch: vi.fn().mockResolvedValue('event-id') };
         dataSource = { transaction: vi.fn((work: (manager: unknown) => Promise<unknown>) => work(manager)) };
         dispatchEvents = { findByClientEventId: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue(undefined) };
         evidences = { findById: vi.fn(async (id: string) => (id === SIGNATURE_ID ? { dispatchId: DISPATCH_ID, type: 'signature', fileUrl: 'https://files.test/sig.png' } : null)) };
@@ -46,7 +48,7 @@ describe('SupplierPickupService', () => {
         statusPublication = { publishTransferUpdate: vi.fn().mockResolvedValue(1) };
         outbox = { enqueue: vi.fn().mockResolvedValue(true) };
         service = new SupplierPickupService(
-            dataSource as never, dispatchEvents as never, evidences as never, incidents as never, statusPublication as never, outbox as never,
+            dataSource as never, dispatchEvents as never, evidences as never, incidents as never, statusPublication as never, outbox as never, orderEvents as never,
         );
     });
 
@@ -136,6 +138,30 @@ describe('SupplierPickupService', () => {
             items: [{ itemCode: 'SKU-1', receivedQuantity: 1 }, { itemCode: 'SKU-2', receivedQuantity: 3 }],
             receivedBoxes: 5, occurredAt: new Date().toISOString(), reasonCode: 'INC-QTY', photoId: uuidv7(), signatureId: SIGNATURE_ID, ...gps,
         })).rejects.toBeInstanceOf(SupplierPickupEvidenceRequiredException);
+    });
+
+    it('collects a complete supplier pickup and writes it to the order/dispatch history in the same transaction (ST-69.2)', async () => {
+        const dispatch = baseDispatch();
+        manager.query.mockImplementation(async (sql: string) => {
+            if (sql.includes('SELECT route_batch_id FROM dispatches')) return [{ route_batch_id: dispatch.route_batch_id }];
+            if (sql.includes('SELECT route_batch_id, driver_id FROM route_batches')) return [{ route_batch_id: ROUTE_BATCH_ID, driver_id: DRIVER_ID }];
+            if (sql.includes('FROM dispatches d') && sql.includes('JOIN dispatch_types')) return [dispatch];
+            if (sql.includes('FROM dispatch_pickup_items')) return expectedItems;
+            if (sql.includes('SELECT dispatch_status_id FROM dispatch_statuses')) return [{ dispatch_status_id: 11 }];
+            if (sql.includes('WITH updated AS')) return [{ custody_received_at: new Date('2026-11-21T10:00:00.000Z') }];
+            return [];
+        });
+        const occurredAt = new Date().toISOString();
+
+        const result = await service.registerCollection(DISPATCH_ID, DRIVER_ID, {
+            eventId: uuidv7(), items, receivedBoxes: 5, occurredAt, signatureId: SIGNATURE_ID, ...gps,
+        });
+
+        expect(result).toMatchObject({ dispatchId: DISPATCH_ID, status: 'picked_up_in_transit', hasDiscrepancy: false });
+        expect(orderEvents.recordForDispatch).toHaveBeenCalledWith(DISPATCH_ID, expect.objectContaining({
+            actor: { id: DRIVER_ID, role: 'driver' }, action: 'dispatch.pickup_collected',
+            previousStatus: 'in_transit', newStatus: 'picked_up_in_transit', occurredAt: new Date(occurredAt),
+        }), { manager });
     });
 
     it('does not re-run the handler for a replayed eventId, and returns the current custody time', async () => {

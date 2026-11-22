@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { DispatchEventsService } from '../../modules/dispatch/dispatch-events/services/dispatch-events.service.js';
+import { ORDER_DISPATCH_ACTIONS } from '../../modules/audit/order-dispatch-events/domain/order-dispatch-event-actions.js';
+import { OrderDispatchEventsService } from '../../modules/audit/order-dispatch-events/services/order-dispatch-events.service.js';
 import { DeliveryEvidencesService } from '../../modules/dispatch/delivery-evidences/services/delivery-evidences.service.js';
 import { RegisterReturnPickupDto } from './dto/register-return-pickup.dto.js';
 import { ReturnPickupResponseDto } from './dto/supplier-pickup-response.dto.js';
@@ -22,6 +24,7 @@ export class ReturnPickupService {
         @InjectDataSource() private readonly dataSource: DataSource,
         private readonly dispatchEvents: DispatchEventsService,
         private readonly evidences: DeliveryEvidencesService,
+        private readonly orderEvents: OrderDispatchEventsService,
     ) {}
 
     async registerCollection(dispatchId: number, driverId: number, dto: RegisterReturnPickupDto): Promise<ReturnPickupResponseDto> {
@@ -96,6 +99,14 @@ export class ReturnPickupService {
                 photoId: dto.photoId, signatureId: dto.signatureId,
                 lat: dto.lat, lng: dto.lng, accuracy: dto.accuracy,
             },
+            occurredAt,
+        }, { manager });
+        await this.orderEvents.recordForDispatch(dispatchId, {
+            actor: { id: driverId, role: 'driver' },
+            action: ORDER_DISPATCH_ACTIONS.PICKUP_COLLECTED,
+            previousStatus: 'in_transit',
+            newStatus: 'picked_up_in_transit',
+            detail: { kind: RETURN_PICKUP_COLLECTION_KIND, checklistComplete, clientEventId: dto.eventId },
             occurredAt,
         }, { manager });
 

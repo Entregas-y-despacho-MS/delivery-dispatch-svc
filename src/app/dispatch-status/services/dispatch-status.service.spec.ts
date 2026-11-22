@@ -109,6 +109,7 @@ function setup(options: {
     const deliveryEvidences = { existsByDispatchAndType: vi.fn().mockResolvedValue(options.evidence ?? true) };
     const statusPublication = { publish: vi.fn().mockResolvedValue(1) };
     const events = { emit: vi.fn() };
+    const orderEvents = { recordForDispatch: vi.fn().mockResolvedValue('event-id'), record: vi.fn() };
     const service = new DispatchStatusService(
         dataSource as never,
         dispatchEvents as unknown as DispatchEventsService,
@@ -116,8 +117,9 @@ function setup(options: {
         events as unknown as EventEmitter2,
         statusPublication as unknown as DispatchStatusPublicationService,
         new RouteBatchClosingService(),
+        orderEvents as never,
     );
-    return { service, manager, dataSource, dispatchEvents, deliveryEvidences, events, statusPublication, saved };
+    return { service, manager, dataSource, dispatchEvents, deliveryEvidences, events, statusPublication, saved, orderEvents };
 }
 
 describe('DispatchStatusService.update', () => {
@@ -204,6 +206,31 @@ describe('DispatchStatusService.update', () => {
         await expect(ctx.service.update(12, dto(DispatchStatusEnum.DELIVERED), 7)).rejects.toBeInstanceOf(UnprocessableEntityException);
         expect(ctx.deliveryEvidences.existsByDispatchAndType).toHaveBeenCalledWith(12, 'signature', { manager: ctx.manager });
         expect(ctx.dispatchEvents.create).not.toHaveBeenCalled();
+        expect(ctx.events.emit).not.toHaveBeenCalled();
+    });
+
+    it('writes the departure to the order/dispatch history in the same transaction (ST-69.2)', async () => {
+        const ctx = setup();
+        await ctx.service.update(12, dto(DispatchStatusEnum.IN_TRANSIT), 7);
+        expect(ctx.orderEvents.recordForDispatch).toHaveBeenCalledWith(12, expect.objectContaining({
+            actor: { id: 7, role: 'driver' }, action: 'dispatch.departed', previousStatus: 'out_for_delivery', newStatus: 'in_transit',
+            occurredAt: expect.any(Date),
+        }), { manager: ctx.manager });
+    });
+
+    it.each([DispatchStatusEnum.DELIVERED, DispatchStatusEnum.NOT_DELIVERED])('writes the delivery result %s to the history, with no batch-closing event of its own (ST-69.2)', async (status) => {
+        const ctx = setup({ current: DispatchStatusEnum.IN_TRANSIT });
+        await ctx.service.update(12, dto(status), 7);
+        expect(ctx.orderEvents.recordForDispatch).toHaveBeenCalledTimes(1);
+        expect(ctx.orderEvents.recordForDispatch).toHaveBeenCalledWith(12, expect.objectContaining({
+            action: 'dispatch.delivery_result', previousStatus: 'in_transit', newStatus: status,
+        }), { manager: ctx.manager });
+    });
+
+    it('fails the transition and emits nothing when the history cannot be written (ST-69.2)', async () => {
+        const ctx = setup();
+        ctx.orderEvents.recordForDispatch.mockRejectedValue(new Error('order_dispatch_events insert failed'));
+        await expect(ctx.service.update(12, dto(DispatchStatusEnum.IN_TRANSIT), 7)).rejects.toThrow('insert failed');
         expect(ctx.events.emit).not.toHaveBeenCalled();
     });
 

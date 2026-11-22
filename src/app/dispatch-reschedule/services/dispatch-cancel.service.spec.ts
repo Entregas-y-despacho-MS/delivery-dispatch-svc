@@ -3,6 +3,8 @@ import { DISPATCH_STATUS_CHANGED_EVENT } from '../../dispatch-status/dispatch-st
 import { DispatchCancelNotAllowedException, DispatchTypeNotSupportedException } from '../exceptions/index.js';
 import { COORDINATOR_CANCELLED_REASON_CODE, DispatchCancelService } from './dispatch-cancel.service.js';
 
+const orderEvents = { recordForDispatch: vi.fn(), record: vi.fn() };
+
 const NOW = new Date('2026-11-03T15:00:00.000Z');
 const batch = { id: 9, status: 'provisional', version: 3, stops: [] };
 
@@ -20,7 +22,7 @@ function build(opts: { status: string; type?: string; batch?: typeof batch | nul
         leave: vi.fn().mockResolvedValue({ batchId: 9, batchStatusBefore: 'provisional', batchStatusAfter: 'provisional', batchVersion: 4, dispatchVersion: 3, cancelled: false, closed: false, shiftedDispatchIds: [] }),
     };
     const events = { emit: vi.fn() };
-    const service = new DispatchCancelService(dataSource as never, locks as never, publication as never, dispatchEvents as never, closing as never, batchExit as never, events as never);
+    const service = new DispatchCancelService(dataSource as never, locks as never, publication as never, dispatchEvents as never, closing as never, batchExit as never, events as never, orderEvents as never);
     return { service, manager, publication, dispatchEvents, closing, batchExit, events };
 }
 
@@ -74,6 +76,7 @@ describe('DispatchCancelService', () => {
 
         expect(batchExit.leave).not.toHaveBeenCalled();
         expect(result).toMatchObject({ routeBatchId: 9, routeBatchClosed: true });
+        expect(orderEvents.recordForDispatch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: 'dispatch.cancelled', newStatus: 'cancelled', routeBatchId: expect.any(Number) }), expect.anything());
     });
 
     it.each(['out_for_delivery', 'in_transit', 'delivered', 'incident', 'not_delivered', 'rescheduled', 'returned', 'cancelled'])('%s → DISPATCH_CANCEL_NOT_ALLOWED sin escribir nada', async (status) => {

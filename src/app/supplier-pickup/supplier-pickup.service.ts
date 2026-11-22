@@ -5,6 +5,8 @@ import { v7 as uuidv7 } from 'uuid';
 import { buildEnvelope } from '../../plugins/messaging/envelope/message-envelope.js';
 import { OutboxService } from '../../modules/messaging/outbound-messages/services/outbox.service.js';
 import { DispatchEventsService } from '../../modules/dispatch/dispatch-events/services/dispatch-events.service.js';
+import { ORDER_DISPATCH_ACTIONS } from '../../modules/audit/order-dispatch-events/domain/order-dispatch-event-actions.js';
+import { OrderDispatchEventsService } from '../../modules/audit/order-dispatch-events/services/order-dispatch-events.service.js';
 import { DeliveryEvidencesService } from '../../modules/dispatch/delivery-evidences/services/delivery-evidences.service.js';
 import { DispatchIncidentsService } from '../../modules/dispatch/dispatch-incidents/services/dispatch-incidents.service.js';
 import { loadOwnedDispatch } from './owned-dispatch.js';
@@ -36,6 +38,7 @@ export class SupplierPickupService {
         private readonly incidents: DispatchIncidentsService,
         private readonly statusPublication: DispatchStatusPublicationService,
         private readonly outbox: OutboxService,
+        private readonly orderEvents: OrderDispatchEventsService,
     ) {}
 
     async registerCollection(dispatchId: number, driverId: number, dto: RegisterSupplierPickupDto): Promise<SupplierPickupResponseDto> {
@@ -151,6 +154,14 @@ export class SupplierPickupService {
                 lat: dto.lat, lng: dto.lng, accuracy: dto.accuracy,
                 ...(hasDiscrepancy && { reasonCode: dto.reasonCode, photoId: dto.photoId }),
             },
+            occurredAt,
+        }, { manager });
+        await this.orderEvents.recordForDispatch(dispatchId, {
+            actor: { id: driverId, role: 'driver' },
+            action: ORDER_DISPATCH_ACTIONS.PICKUP_COLLECTED,
+            previousStatus: 'in_transit',
+            newStatus: 'picked_up_in_transit',
+            detail: { kind: SUPPLIER_PICKUP_COLLECTION_KIND, receivedBoxes: dto.receivedBoxes, quantityDifference: hasDiscrepancy, clientEventId: dto.eventId },
             occurredAt,
         }, { manager });
 

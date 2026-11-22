@@ -190,5 +190,5 @@ export function createReceiptIntake(store: MemoryWarehouseReceiptStore, validato
         }),
     };
     const batchClosing = { closeIfComplete: vi.fn() };
-    return new WarehouseReceiptIntakeService(dispatchEvents as never, dispatchIncidents as never, publication, batchClosing as never);
+    return new WarehouseReceiptIntakeService(dispatchEvents as never, dispatchIncidents as never, publication, batchClosing as never, { recordForDispatch: vi.fn() } as never);
 }

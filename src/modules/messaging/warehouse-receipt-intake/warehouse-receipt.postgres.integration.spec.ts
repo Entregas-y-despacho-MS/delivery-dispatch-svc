@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { DataSource, type EntityManager, type QueryRunner } from 'typeorm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { OrderDispatchEventsService } from '../../audit/order-dispatch-events/services/order-dispatch-events.service.js';
 import { createDispatchStatusPublication } from '../../../../test/helpers/dispatch-status-publication.js';
 import { ProcurementPickupRepository } from '../procurement-pickup-intake/repositories/procurement-pickup.repository.js';
 import { toReceiptData } from './domain/warehouse-receipt-message.types.js';
@@ -52,6 +53,7 @@ describe.skipIf(!PORT)('Warehouse receipt result publication against PostgreSQL 
         const batchClosing = { closeIfComplete: vi.fn() };
         return new WarehouseReceiptIntakeService(
             dispatchEvents as never, dispatchIncidents as never, createDispatchStatusPublication(dataSource), batchClosing as never,
+            new OrderDispatchEventsService(undefined as never),
         );
     };
 

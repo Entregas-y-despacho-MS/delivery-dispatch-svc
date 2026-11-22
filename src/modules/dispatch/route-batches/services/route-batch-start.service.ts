@@ -8,6 +8,8 @@ import {
   DispatchStatusEnum,
   RouteBatchStatusEnum,
 } from '../../../../shared/enums/index.js';
+import { ORDER_DISPATCH_ACTIONS } from '../../../audit/order-dispatch-events/domain/order-dispatch-event-actions.js';
+import { OrderDispatchEventsService } from '../../../audit/order-dispatch-events/services/order-dispatch-events.service.js';
 import { PlanningAlertsService } from '../../../../app/planning/services/planning-alerts.service.js';
 import { OutboxService } from '../../../messaging/outbound-messages/services/outbox.service.js';
 import { RouteBatchNotFoundException } from '../exceptions/route-batch-not-found.exception.js';
@@ -60,6 +62,7 @@ export class RouteBatchStartService {
     private readonly outbox: OutboxService,
     private readonly events: EventEmitter2,
     private readonly alerts: PlanningAlertsService,
+    private readonly orderEvents: OrderDispatchEventsService,
   ) {}
 
   async start(
@@ -297,6 +300,14 @@ export class RouteBatchStartService {
           }),
         ],
       );
+      await this.orderEvents.recordForDispatch(dispatch.id, {
+        actor: { id: actorUserId },
+        action: ORDER_DISPATCH_ACTIONS.DEPARTED,
+        previousStatus: DispatchStatusEnum.ASSIGNED,
+        newStatus: DispatchStatusEnum.OUT_FOR_DELIVERY,
+        detail: { clientEventId: dto.eventId },
+        occurredAt: startedAt,
+      }, { manager });
       const envelope = buildEnvelope({
         type: 'dispatch.shipment.departed',
         source: 'dispatch',
