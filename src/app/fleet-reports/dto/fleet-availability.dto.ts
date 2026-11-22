@@ -7,6 +7,8 @@ export enum FleetUnavailableReason {
     NO_STATUS_HISTORY = 'no_status_history',
     /** The vehicle has no route in the period, so no load can be attributed to it. */
     NO_ROUTE_IN_PERIOD = 'no_route_in_period',
+    /** The routes of the period have no weight / volume estimate on their dispatches. */
+    NO_ESTIMATE = 'no_estimate',
     /** The role may only see aggregates. */
     ROLE_RESTRICTED = 'role_restricted',
 }
@@ -48,27 +50,36 @@ export class FleetMaintenanceSummaryDto {
 }
 
 export class FleetLoadFigureDto {
-    @ApiProperty({ type: 'number', minimum: 0, description: 'Estimated load attributed to the vehicle from its routes in the period' })
+    @ApiProperty({ type: 'number', minimum: 0, description: 'Estimated load of the heaviest route of the vehicle in the period, from the estimates of its dispatches (the ones without estimate are not counted: see `withoutWeight` / `withoutVolume`)' })
     used!: number;
 
     @ApiProperty({ type: 'number', minimum: 0, description: 'Capacity of the vehicle in the same unit' })
     capacity!: number;
 
-    @ApiProperty({ type: 'number', minimum: 0, description: 'used / capacity, not rounded up to 100: above 1 means over capacity' })
+    @ApiProperty({ type: 'number', minimum: 0, description: 'used / capacity, not capped at 1: above 1 means over capacity' })
     ratio!: number;
 }
 
 export class FleetLoadDto {
-    @ApiProperty({ type: FleetLoadFigureDto, nullable: true, description: 'Kilograms against `capacity_kg`. null when there is no attribution' })
+    @ApiProperty({ type: FleetLoadFigureDto, nullable: true, description: 'Kilograms against `capacity_kg`, peak of one route. null (N/D) when there is no attribution' })
     kg!: FleetLoadFigureDto | null;
 
-    @ApiProperty({ type: FleetLoadFigureDto, nullable: true, description: 'Cubic metres against `capacity_m3`. Independent from kg. null when there is no attribution' })
+    @ApiProperty({ type: FleetLoadFigureDto, nullable: true, description: 'Cubic metres against `capacity_m3`, peak of one route; independent from kg (the peaks may come from different routes). null (N/D) when there is no attribution' })
     m3!: FleetLoadFigureDto | null;
 
-    @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches of the vehicle routes counted (n)' })
+    @ApiProperty({ type: 'integer', minimum: 0, description: 'Routes of the vehicle attributed in the period: approved routes (confirmed, in execution or closed) whose vehicle is this one, never inferred from the current status' })
+    routes!: number;
+
+    @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches of those routes, cancelled ones excluded (n)' })
     n!: number;
 
-    @ApiProperty({ enum: FleetUnavailableReason, nullable: true, description: 'Why kg and m3 are N/D; null when they are numbers' })
+    @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches counted without a weight estimate: when above 0, `kg.used` is a lower bound' })
+    withoutWeight!: number;
+
+    @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches counted without a volume estimate: when above 0, `m3.used` is a lower bound' })
+    withoutVolume!: number;
+
+    @ApiProperty({ enum: FleetUnavailableReason, nullable: true, description: 'Why kg and m3 are both N/D (`no_route_in_period` or `no_estimate`); null when at least one is a number' })
     unavailableReason!: FleetUnavailableReason | null;
 }
 

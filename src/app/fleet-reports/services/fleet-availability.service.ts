@@ -2,8 +2,9 @@ import { Injectable } from '@nestjs/common';
 import { todayInOperatingTimeZone } from '../../../modules/dispatch/dispatches/utils/operating-date.util.js';
 import { summarizeAvailability, type FleetVehicleStatusRow } from '../domain/fleet-availability.js';
 import { resolveCutoff } from '../domain/fleet-cutoff.js';
+import { buildVehicleLoad } from '../domain/fleet-load.js';
 import { summarizeFleetMaintenance } from '../domain/fleet-maintenance.js';
-import type { FleetAvailabilityCutoffDto, FleetAvailabilitySummaryDto } from '../dto/fleet-availability.dto.js';
+import type { FleetAvailabilityCutoffDto, FleetAvailabilitySummaryDto, FleetLoadDto } from '../dto/fleet-availability.dto.js';
 import type { FleetAvailabilityParamsDto } from '../dto/fleet-availability-params.dto.js';
 import { FleetAvailabilityRepository } from '../repositories/fleet-availability.repository.js';
 
@@ -46,5 +47,14 @@ export class FleetAvailabilityService {
         if (vehicleIds.length === 0) return summarizeFleetMaintenance([], [], period.from, period.to);
         const intervals = await this.repository.listMaintenanceIntervals(period.from, period.to, { vehicleIds, maintenanceTypeId: filter.maintenanceTypeId, routine: filter.routine });
         return summarizeFleetMaintenance(intervals, vehicleIds, period.from, period.to);
+    }
+
+    /**
+     * Load of each vehicle in the period, attributed only from its approved routes (see `listRouteLoads`). A vehicle
+     * with no route answers N/D, never an inferred value.
+     */
+    async load(vehicles: FleetVehicleStatusRow[], period: { from: string; to: string }): Promise<Map<number, FleetLoadDto>> {
+        const routes = vehicles.length === 0 ? [] : await this.repository.listRouteLoads(period.from, period.to, vehicles.map((v) => v.vehicleId));
+        return new Map(vehicles.map((v) => [v.vehicleId, buildVehicleLoad(routes.filter((route) => route.vehicleId === v.vehicleId), v.capacityKg, v.capacityM3)]));
     }
 }

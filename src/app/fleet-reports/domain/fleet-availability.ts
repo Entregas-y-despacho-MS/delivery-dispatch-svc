@@ -6,6 +6,8 @@ export interface FleetVehicleStatusRow {
     vehicleId: number;
     plate: string;
     status: VehicleStatusEnum;
+    capacityKg: number;
+    capacityM3: number;
 }
 
 /**

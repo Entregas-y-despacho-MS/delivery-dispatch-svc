@@ -4,7 +4,7 @@ import { FutureCutoffException } from '../exceptions/index.js';
 import { summarizeAvailability, type FleetVehicleStatusRow } from './fleet-availability.js';
 import { resolveCutoff } from './fleet-cutoff.js';
 
-const row = (vehicleId: number, status: VehicleStatusEnum): FleetVehicleStatusRow => ({ vehicleId, plate: `P-${vehicleId}`, status });
+const row = (vehicleId: number, status: VehicleStatusEnum): FleetVehicleStatusRow => ({ vehicleId, plate: `P-${vehicleId}`, status, capacityKg: 1000, capacityM3: 10 });
 
 describe('resolveCutoff', () => {
     it('defaults to today and is current', () => {
