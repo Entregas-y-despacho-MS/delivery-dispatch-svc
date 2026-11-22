@@ -25,7 +25,7 @@ function positiveInt(name: string) {
 /** Filters of the planning pipeline (ST-302.1). The batch is not a filter: it is only detail of each dispatch. */
 export class PlanningPipelineParamsDto extends PaginationParamsDto {
     // No `example` on the query parameters: Swagger UI would send it on "Try it out" (guarded by test/swagger.e2e-spec.ts).
-    @ApiPropertyOptional({ type: String, format: 'date', description: 'Operating day in YYYY-MM-DD (America/La_Paz): the shift date of the batch, or the day of the promise window for a dispatch without batch. Default: today' })
+    @ApiPropertyOptional({ type: String, format: 'date', description: 'Operating day in YYYY-MM-DD (America/La_Paz): the shift date of the batch, or the day of the promise window for a dispatch without batch. A dispatch with neither carries over: it shows from the day it was created. Default: today' })
     @IsOptional()
     @IsDateString({ strict: true }, { message: DATE_MESSAGE })
     @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: DATE_MESSAGE })

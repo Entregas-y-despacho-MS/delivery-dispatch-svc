@@ -89,7 +89,7 @@ export class PipelineBatchDto {
     @ApiProperty({ type: PipelineCapacityDto, nullable: true, description: 'Load against the vehicle, kg and m³ separately. `null` when the batch has no vehicle: no capacity is invented' })
     capacity!: PipelineCapacityDto | null;
 
-    @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches of the batch that are part of the pipeline (informational, not a KPI)' })
+    @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches the batch carries, of any status (informational detail, not a KPI)' })
     dispatchCount!: number;
 }
 
