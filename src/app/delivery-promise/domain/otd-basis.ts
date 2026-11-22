@@ -19,5 +19,13 @@ export const OTD_DATE_BASIS: Record<OtdBasis, string> = {
 /** Why a cancelled dispatch is left out of the OTD: only a cancellation before the promise expired does not count against it. */
 export const CANCELLATION_EXCLUSION_REASON = 'cancelled_before_promise_expired';
 
+/** With `basis=deliveredAt` a cancellation is not a completed delivery, so it is left out of the universe (as ES-54 does). */
+export const DELIVERED_AT_CANCELLATION_EXCLUSION_REASON = 'cancelled_not_a_completed_delivery';
+
+export const CANCELLATION_EXCLUSION_REASON_BY_BASIS: Record<OtdBasis, string> = {
+    [OtdBasis.PROMISE]:      CANCELLATION_EXCLUSION_REASON,
+    [OtdBasis.DELIVERED_AT]: DELIVERED_AT_CANCELLATION_EXCLUSION_REASON,
+};
+
 /** First-attempt delivery needs a normalized attempt (there is no attempts table yet): the rate is N/D until it exists. */
 export const FIRST_ATTEMPT_UNAVAILABLE_REASON = 'attempt_not_normalized';

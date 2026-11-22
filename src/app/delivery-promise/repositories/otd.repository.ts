@@ -87,6 +87,33 @@ export const OTD_COHORT_SQL = `
        AND a.anchor < ${TO_TS}
        AND a.anchor < $6::timestamptz`;
 
+/**
+ * The historic punctuality of the completed deliveries (`basis=deliveredAt`): the delivered dispatches closed inside the
+ * range, measured against the window in force when they were delivered. It is the ES-54 rule (`/reports/sla`, left
+ * untouched) with one difference: a delivery without a valid window is shown apart (`invalid`), not counted as late.
+ * Cancellations are not completed deliveries: they are only counted, with their reason. `$6` caps the closing time at the cut.
+ */
+export const OTD_DELIVERED_AT_SQL = `
+    SELECT COUNT(*) FILTER (WHERE s.name = '${DispatchStatusEnum.DELIVERED}' AND ${VALID_WINDOW_SQL})::int AS eligible,
+           COUNT(*) FILTER (
+               WHERE s.name = '${DispatchStatusEnum.DELIVERED}' AND ${VALID_WINDOW_SQL} AND d.closed_at BETWEEN d.scheduled_window_start AND d.scheduled_window_end
+           )::int AS on_time,
+           COUNT(*) FILTER (WHERE s.name = '${DispatchStatusEnum.DELIVERED}' AND NOT ${VALID_WINDOW_SQL})::int AS invalid_window,
+           COUNT(*) FILTER (WHERE s.name = '${DispatchStatusEnum.CANCELLED}')::int AS excluded_cancellations,
+           0::int AS unreconstructable_cancellations,
+           COUNT(*) FILTER (
+               WHERE s.name = '${DispatchStatusEnum.DELIVERED}' AND ${VALID_WINDOW_SQL}
+                 AND EXISTS (SELECT 1 FROM dispatch_reschedules r WHERE r.dispatch_id = d.dispatch_id AND r.previous_window_end IS NOT NULL)
+           )::int AS rescheduled_promise
+      FROM dispatches d
+      JOIN dispatch_types t ON t.dispatch_type_id = d.dispatch_type_id AND t.name = 'delivery'
+      JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
+     WHERE ${FILTERS_SQL}
+       AND s.name IN ('${DispatchStatusEnum.DELIVERED}', '${DispatchStatusEnum.CANCELLED}')
+       AND d.closed_at >= ${FROM_TS}
+       AND d.closed_at < ${TO_TS}
+       AND d.closed_at <= $6::timestamptz`;
+
 interface OtdCohortRow {
     eligible: number;
     on_time: number;
@@ -103,7 +130,16 @@ export class OtdRepository {
 
     /** `filters.from` and `filters.to` are Bolivia days (`YYYY-MM-DD`), both included; the caller has already validated the range. */
     async countCohort(filters: DeliveryPromiseFilters, now: Date): Promise<OtdCounts> {
-        const rows: OtdCohortRow[] = await this.dataSource.query(OTD_COHORT_SQL, filterParams(filters, now));
+        return await this.count(OTD_COHORT_SQL, filters, now);
+    }
+
+    /** The counts of the historic punctuality by closing time (`basis=deliveredAt`), same shape and same filters. */
+    async countDeliveredAt(filters: DeliveryPromiseFilters, now: Date): Promise<OtdCounts> {
+        return await this.count(OTD_DELIVERED_AT_SQL, filters, now);
+    }
+
+    private async count(sql: string, filters: DeliveryPromiseFilters, now: Date): Promise<OtdCounts> {
+        const rows: OtdCohortRow[] = await this.dataSource.query(sql, filterParams(filters, now));
         const row = rows[0];
         return {
             eligible: row?.eligible ?? 0,

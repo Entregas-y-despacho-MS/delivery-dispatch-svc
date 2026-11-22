@@ -39,3 +39,10 @@ describe('buildOtdMetrics', () => {
         expect(metrics.unreconstructableCancellationCount).toBe(1);
     });
 });
+
+describe('buildOtdMetrics per basis', () => {
+    it('gives each basis its own reason for the cancellations left out', () => {
+        expect(buildOtdMetrics(counts({ excludedCancellations: 1 })).excludedCancellations.reason).toBe('cancelled_before_promise_expired');
+        expect(buildOtdMetrics(counts({ excludedCancellations: 1 }), 'deliveredAt' as never).excludedCancellations.reason).toBe('cancelled_not_a_completed_delivery');
+    });
+});

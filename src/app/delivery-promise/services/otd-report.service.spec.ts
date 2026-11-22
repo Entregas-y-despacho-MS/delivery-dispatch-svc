@@ -5,7 +5,7 @@ const NOW = new Date('2026-11-20T15:00:00Z');
 const COUNTS = { eligible: 10, onTime: 8, invalidWindow: 1, excludedCancellations: 2, unreconstructableCancellations: 0, rescheduledPromise: 3 };
 
 function service(counts = COUNTS) {
-    const repository = { countCohort: vi.fn().mockResolvedValue(counts) };
+    const repository = { countCohort: vi.fn().mockResolvedValue(counts), countDeliveredAt: vi.fn().mockResolvedValue(counts) };
     return { service: new OtdReportService(repository as never), repository };
 }
 
@@ -47,5 +47,31 @@ describe('OtdReportService.getPromiseOtd', () => {
         await expect(svc.getPromiseOtd({ from: '2026-11-30', to: '2026-11-01' }, NOW)).rejects.toMatchObject({ response: { error: 'INVALID_DATE_RANGE' } });
         await expect(svc.getPromiseOtd({ from: '2025-01-01', to: '2026-11-01' }, NOW)).rejects.toMatchObject({ response: { error: 'DATE_RANGE_TOO_LARGE' } });
         expect(repository.countCohort).not.toHaveBeenCalled();
+    });
+});
+
+describe('OtdReportService.getDeliveredAtOtd / getOtd', () => {
+    it('answers the historic punctuality labelled with its own basis, date and exclusion reason', async () => {
+        const { service: svc, repository } = service();
+        const report = await svc.getDeliveredAtOtd({ from: '2026-11-01', to: '2026-11-30' }, NOW);
+        expect(report).toMatchObject({ basis: 'deliveredAt', dateBasis: 'closed_at', metrics: { numerator: 8, denominator: 10 } });
+        expect(report.metrics.excludedCancellations.reason).toBe('cancelled_not_a_completed_delivery');
+        expect(repository.countDeliveredAt).toHaveBeenCalledTimes(1);
+        expect(repository.countCohort).not.toHaveBeenCalled();
+    });
+
+    it('chooses the query by basis, the cohort of promise by default', async () => {
+        const { service: svc, repository } = service();
+        const filters = { from: '2026-11-01', to: '2026-11-30' };
+        expect((await svc.getOtd(filters, undefined, NOW)).basis).toBe('promise');
+        expect((await svc.getOtd(filters, 'deliveredAt' as never, NOW)).basis).toBe('deliveredAt');
+        expect(repository.countCohort).toHaveBeenCalledTimes(1);
+        expect(repository.countDeliveredAt).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects an invalid range without touching the database', async () => {
+        const { service: svc, repository } = service();
+        await expect(svc.getDeliveredAtOtd({ from: '2026-11-30', to: '2026-11-01' }, NOW)).rejects.toMatchObject({ response: { error: 'INVALID_DATE_RANGE' } });
+        expect(repository.countDeliveredAt).not.toHaveBeenCalled();
     });
 });

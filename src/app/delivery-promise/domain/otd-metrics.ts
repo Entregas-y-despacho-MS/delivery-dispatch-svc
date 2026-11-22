@@ -1,6 +1,6 @@
 import { round1 } from '../../sla-report/domain/sla-metrics.js';
 import { OPERATING_TIME_ZONE } from '../../../modules/dispatch/dispatches/utils/operating-date.util.js';
-import { CANCELLATION_EXCLUSION_REASON, FIRST_ATTEMPT_UNAVAILABLE_REASON, OTD_DATE_BASIS, type OtdBasis } from './otd-basis.js';
+import { CANCELLATION_EXCLUSION_REASON_BY_BASIS, FIRST_ATTEMPT_UNAVAILABLE_REASON, OTD_DATE_BASIS, OtdBasis } from './otd-basis.js';
 import type { AppliedFiltersDto, OtdMetricsDto, OtdReportDto } from '../dto/otd-report.dto.js';
 
 /** What PostgreSQL returns for one query: only counts, the rate is built here. */
@@ -36,7 +36,7 @@ export function appliedFilters(filters: { zoneId?: number; serviceLevelId?: numb
 
 /** The full answer of an OTD query: the rate with the date basis, the time zone and the cut it was measured at. */
 export function buildOtdReport(basis: OtdBasis, query: { from: string; to: string; zoneId?: number; serviceLevelId?: number; status?: string }, counts: OtdCounts, now: Date): OtdReportDto {
-    const metrics = buildOtdMetrics(counts);
+    const metrics = buildOtdMetrics(counts, basis);
     return {
         from: query.from,
         to: query.to,
@@ -51,7 +51,7 @@ export function buildOtdReport(basis: OtdBasis, query: { from: string; to: strin
     };
 }
 
-export function buildOtdMetrics(counts: OtdCounts): OtdMetricsDto {
+export function buildOtdMetrics(counts: OtdCounts, basis: OtdBasis = OtdBasis.PROMISE): OtdMetricsDto {
     return {
         numerator: counts.onTime,
         denominator: counts.eligible,
@@ -59,7 +59,7 @@ export function buildOtdMetrics(counts: OtdCounts): OtdMetricsDto {
         percentage: percentage(counts.onTime, counts.eligible),
         notOnTimeCount: counts.eligible - counts.onTime,
         invalidWindowCount: counts.invalidWindow,
-        excludedCancellations: { count: counts.excludedCancellations, reason: CANCELLATION_EXCLUSION_REASON },
+        excludedCancellations: { count: counts.excludedCancellations, reason: CANCELLATION_EXCLUSION_REASON_BY_BASIS[basis] },
         unreconstructableCancellationCount: counts.unreconstructableCancellations,
         rescheduledPromiseCount: counts.rescheduledPromise,
     };

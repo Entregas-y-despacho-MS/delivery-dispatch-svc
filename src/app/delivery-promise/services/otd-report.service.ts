@@ -21,4 +21,19 @@ export class OtdReportService {
         const counts = await this.repository.countCohort(filters, now);
         return buildOtdReport(OtdBasis.PROMISE, filters, counts, now);
     }
+
+    /**
+     * The historic punctuality of the completed deliveries by closing time (`deliveredAt`): the ES-54 indicator as its own
+     * query, with its own denominator (the delivered ones), never mixed with the OTD by cohort.
+     */
+    async getDeliveredAtOtd(filters: DeliveryPromiseFilters, now: Date = new Date()): Promise<OtdReportDto> {
+        assertSlaRange(filters.from, filters.to);
+        const counts = await this.repository.countDeliveredAt(filters, now);
+        return buildOtdReport(OtdBasis.DELIVERED_AT, filters, counts, now);
+    }
+
+    /** Either rate, as the `basis` of the request says; the OTD by cohort of promise when it does not say. */
+    async getOtd(filters: DeliveryPromiseFilters, basis: OtdBasis = OtdBasis.PROMISE, now: Date = new Date()): Promise<OtdReportDto> {
+        return basis === OtdBasis.DELIVERED_AT ? await this.getDeliveredAtOtd(filters, now) : await this.getPromiseOtd(filters, now);
+    }
 }
