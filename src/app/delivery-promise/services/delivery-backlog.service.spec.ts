@@ -8,7 +8,8 @@ function service() {
         countByStatus: vi.fn().mockResolvedValue([{ status: 'assigned', overdue: true, ageRange: 'under_1d', count: 2 }, { status: 'delivered', overdue: false, ageRange: null, count: 5 }]),
         listOpenOverdue: vi.fn().mockResolvedValue([]),
     };
-    return { service: new DeliveryBacklogService(repository as never), repository };
+    const firstAttempts = { summarize: vi.fn().mockResolvedValue(new Map()) };
+    return { service: new DeliveryBacklogService(repository as never, firstAttempts as never), repository, firstAttempts };
 }
 
 describe('DeliveryBacklogService.getBacklog', () => {
@@ -20,6 +21,17 @@ describe('DeliveryBacklogService.getBacklog', () => {
         expect(result.dateBasis).toBe('promise_window_end');
         expect(repository.countByStatus).toHaveBeenCalledWith(filters, NOW);
         expect(repository.listOpenOverdue).toHaveBeenCalledWith(filters, NOW, 10);
+    });
+
+    it('asks the attempts of the listed dispatches only', async () => {
+        const { service: svc, repository, firstAttempts } = service();
+        repository.listOpenOverdue.mockResolvedValue([
+            { dispatchId: 7, trackingCode: null, status: 'assigned', zoneId: null, serviceLevelId: null, promiseEnd: new Date('2026-11-19T16:00:00Z'), overdueMinutes: 30 },
+        ]);
+        firstAttempts.summarize.mockResolvedValue(new Map([[7, { attemptsUsed: 1, firstAttemptResult: 'failed' }]]));
+        const result = await svc.getBacklog({ from: '2026-11-01', to: '2026-11-30' }, 10, NOW);
+        expect(firstAttempts.summarize).toHaveBeenCalledWith([7]);
+        expect(result.openOverdue[0]).toMatchObject({ attemptsUsed: 1, firstAttemptResult: 'failed' });
     });
 
     it('uses the default size of the list', async () => {

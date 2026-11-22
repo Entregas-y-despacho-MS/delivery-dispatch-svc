@@ -173,7 +173,7 @@ describe('GET /reports/otd and /reports/otd/backlog (e2e, ST-301.1)', () => {
                 dateBasis: 'promise_window_end',
                 timeZone: 'America/La_Paz',
                 filters: { zoneId: ids.zone.MAR, serviceLevelId: null, status: null },
-                firstAttempt: { available: false, reason: 'attempt_not_normalized' },
+                firstAttempt: { available: expect.any(Boolean), coverage: { complete: expect.any(Boolean) } }, // measured in first-attempt.e2e-spec.ts
                 empty: false,
             });
             // Eligible: 1 (on time), 2 (late), 3 (open), 4 (failed), 5 (returned), 7 (cancelled after the promise), 11 (on time, rescheduled).

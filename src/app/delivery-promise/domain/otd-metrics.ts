@@ -1,7 +1,8 @@
-import { round1 } from '../../sla-report/domain/sla-metrics.js';
 import { OPERATING_TIME_ZONE } from '../../../modules/dispatch/dispatches/utils/operating-date.util.js';
-import { CANCELLATION_EXCLUSION_REASON_BY_BASIS, FIRST_ATTEMPT_UNAVAILABLE_REASON, OTD_DATE_BASIS, OtdBasis } from './otd-basis.js';
-import type { AppliedFiltersDto, OtdMetricsDto, OtdReportDto } from '../dto/otd-report.dto.js';
+import { CANCELLATION_EXCLUSION_REASON_BY_BASIS, OTD_DATE_BASIS, OtdBasis } from './otd-basis.js';
+import { unavailableFirstAttempt } from './first-attempt.js';
+import { percentage } from './percentage.js';
+import type { AppliedFiltersDto, FirstAttemptDto, OtdMetricsDto, OtdReportDto } from '../dto/otd-report.dto.js';
 
 /** What PostgreSQL returns for one query: only counts, the rate is built here. */
 export interface OtdCounts {
@@ -19,23 +20,13 @@ export interface OtdCounts {
     rescheduledPromise: number;
 }
 
-/**
- * Over the eligible ones, one decimal. 1999 of 2000 would round to 100.0 and it is shown as 99.9, so 100 always means
- * «none out of the window» (same rule as ES-54). With no eligible dispatch there is no rate: `null` is «Sin datos», not 0.
- */
-function percentage(onTime: number, eligible: number): number | null {
-    if (eligible === 0) return null;
-    const value = round1((onTime / eligible) * 100);
-    return onTime < eligible && value === 100 ? 99.9 : value;
-}
-
 /** The filters of a query as the answer repeats them: what was not asked is `null`, not missing. */
 export function appliedFilters(filters: { zoneId?: number; serviceLevelId?: number; status?: string }): AppliedFiltersDto {
     return { zoneId: filters.zoneId ?? null, serviceLevelId: filters.serviceLevelId ?? null, status: filters.status ?? null };
 }
 
 /** The full answer of an OTD query: the rate with the date basis, the time zone and the cut it was measured at. */
-export function buildOtdReport(basis: OtdBasis, query: { from: string; to: string; zoneId?: number; serviceLevelId?: number; status?: string }, counts: OtdCounts, now: Date): OtdReportDto {
+export function buildOtdReport(basis: OtdBasis, query: { from: string; to: string; zoneId?: number; serviceLevelId?: number; status?: string }, counts: OtdCounts, now: Date, firstAttempt: FirstAttemptDto = unavailableFirstAttempt()): OtdReportDto {
     const metrics = buildOtdMetrics(counts, basis);
     return {
         from: query.from,
@@ -46,7 +37,7 @@ export function buildOtdReport(basis: OtdBasis, query: { from: string; to: strin
         asOf: now.toISOString(),
         filters: appliedFilters(query),
         metrics,
-        firstAttempt: { available: false, reason: FIRST_ATTEMPT_UNAVAILABLE_REASON },
+        firstAttempt,
         empty: counts.eligible === 0 && counts.invalidWindow === 0 && counts.excludedCancellations === 0 && counts.unreconstructableCancellations === 0,
     };
 }

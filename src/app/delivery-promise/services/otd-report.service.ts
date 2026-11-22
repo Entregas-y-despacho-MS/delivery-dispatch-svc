@@ -4,6 +4,7 @@ import { OtdBasis } from '../domain/otd-basis.js';
 import { buildOtdReport } from '../domain/otd-metrics.js';
 import type { DeliveryPromiseFilters } from '../repositories/delivery-promise.sql.js';
 import { OtdRepository } from '../repositories/otd.repository.js';
+import { FirstAttemptService } from './first-attempt.service.js';
 import type { OtdReportDto } from '../dto/otd-report.dto.js';
 
 /**
@@ -13,13 +14,16 @@ import type { OtdReportDto } from '../dto/otd-report.dto.js';
  */
 @Injectable()
 export class OtdReportService {
-    constructor(private readonly repository: OtdRepository) {}
+    constructor(
+        private readonly repository: OtdRepository,
+        private readonly firstAttempts: FirstAttemptService,
+    ) {}
 
     /** The OTD by cohort of promise: delivered inside the window / eligible dispatches whose promise expired in the range, open ones included. */
     async getPromiseOtd(filters: DeliveryPromiseFilters, now: Date = new Date()): Promise<OtdReportDto> {
         assertSlaRange(filters.from, filters.to);
-        const counts = await this.repository.countCohort(filters, now);
-        return buildOtdReport(OtdBasis.PROMISE, filters, counts, now);
+        const [counts, firstAttempt] = await Promise.all([this.repository.countCohort(filters, now), this.firstAttempts.getFirstAttempt(filters)]);
+        return buildOtdReport(OtdBasis.PROMISE, filters, counts, now, firstAttempt);
     }
 
     /**
@@ -28,8 +32,8 @@ export class OtdReportService {
      */
     async getDeliveredAtOtd(filters: DeliveryPromiseFilters, now: Date = new Date()): Promise<OtdReportDto> {
         assertSlaRange(filters.from, filters.to);
-        const counts = await this.repository.countDeliveredAt(filters, now);
-        return buildOtdReport(OtdBasis.DELIVERED_AT, filters, counts, now);
+        const [counts, firstAttempt] = await Promise.all([this.repository.countDeliveredAt(filters, now), this.firstAttempts.getFirstAttempt(filters)]);
+        return buildOtdReport(OtdBasis.DELIVERED_AT, filters, counts, now, firstAttempt);
     }
 
     /** Either rate, as the `basis` of the request says; the OTD by cohort of promise when it does not say. */

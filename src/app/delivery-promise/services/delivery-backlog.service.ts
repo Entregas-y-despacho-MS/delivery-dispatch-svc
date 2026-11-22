@@ -6,6 +6,7 @@ import type { DeliveryBacklogDto } from '../dto/delivery-backlog.dto.js';
 import { OVERDUE_LIST_DEFAULT_LIMIT } from '../dto/delivery-promise-params.dto.js';
 import { BacklogRepository } from '../repositories/backlog.repository.js';
 import type { DeliveryPromiseFilters } from '../repositories/delivery-promise.sql.js';
+import { FirstAttemptService } from './first-attempt.service.js';
 
 /**
  * ST-301.1 — the volume of the backlog next to the OTD: delivered, open overdue, pending by exclusive stage and age,
@@ -14,12 +15,16 @@ import type { DeliveryPromiseFilters } from '../repositories/delivery-promise.sq
  */
 @Injectable()
 export class DeliveryBacklogService {
-    constructor(private readonly repository: BacklogRepository) {}
+    constructor(
+        private readonly repository: BacklogRepository,
+        private readonly firstAttempts: FirstAttemptService,
+    ) {}
 
     async getBacklog(filters: DeliveryPromiseFilters, limit: number = OVERDUE_LIST_DEFAULT_LIMIT, now: Date = new Date()): Promise<DeliveryBacklogDto> {
         assertSlaRange(filters.from, filters.to);
         // Both reads use the same cut, so the list is always a part of the `openOverdue` count.
         const [rows, overdueList] = await Promise.all([this.repository.countByStatus(filters, now), this.repository.listOpenOverdue(filters, now, limit)]);
-        return buildBacklogReport(filters, rows, overdueList, OTD_DATE_BASIS[OtdBasis.PROMISE], now);
+        const attempts = await this.firstAttempts.summarize(overdueList.map((row) => row.dispatchId));
+        return buildBacklogReport(filters, rows, overdueList, OTD_DATE_BASIS[OtdBasis.PROMISE], now, attempts);
     }
 }

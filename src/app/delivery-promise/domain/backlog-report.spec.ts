@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AgeRange } from './backlog-buckets.js';
+import { FirstAttemptResult } from './first-attempt.js';
 import { buildBacklogReport, type BacklogRow, type OpenOverdueRow } from './backlog-report.js';
 
 const NOW = new Date('2026-11-20T15:00:00Z');
@@ -56,8 +57,24 @@ describe('buildBacklogReport', () => {
             { dispatchId: 7, trackingCode: 'TR-7', status: 'assigned', zoneId: 3, serviceLevelId: null, promiseEnd: new Date('2026-11-19T16:00:00Z'), overdueMinutes: 1380 },
         ]);
         expect(result.openOverdue).toEqual([
-            { dispatchId: 7, trackingCode: 'TR-7', status: 'assigned', zoneId: 3, serviceLevelId: null, promiseEnd: '2026-11-19T16:00:00.000Z', overdueMinutes: 1380, nextAction: 'start_route' },
+            {
+                dispatchId: 7, trackingCode: 'TR-7', status: 'assigned', zoneId: 3, serviceLevelId: null, promiseEnd: '2026-11-19T16:00:00.000Z', overdueMinutes: 1380,
+                nextAction: 'start_route', attemptsUsed: 0, firstAttemptResult: 'no_attempt_yet',
+            },
         ]);
+    });
+
+    it('shows the attempts used and the first result of each open overdue dispatch', () => {
+        const list: OpenOverdueRow[] = [
+            { dispatchId: 7, trackingCode: 'TR-7', status: 'incident', zoneId: 3, serviceLevelId: null, promiseEnd: new Date('2026-11-19T16:00:00Z'), overdueMinutes: 60 },
+            { dispatchId: 8, trackingCode: null, status: 'assigned', zoneId: null, serviceLevelId: null, promiseEnd: new Date('2026-11-19T17:00:00Z'), overdueMinutes: 30 },
+        ];
+        const attempts = new Map([
+            [7, { attemptsUsed: 2, firstAttemptResult: FirstAttemptResult.FAILED }],
+            [8, { attemptsUsed: null, firstAttemptResult: FirstAttemptResult.NOT_RECONSTRUCTABLE }],
+        ]);
+        const result = buildBacklogReport(QUERY, [], list, 'promise_window_end', NOW, attempts);
+        expect(result.openOverdue.map((r) => [r.attemptsUsed, r.firstAttemptResult])).toEqual([[2, 'failed'], [null, 'not_reconstructable']]);
     });
 
     it('says «Sin datos» (empty, all zeros) when the filters leave nothing', () => {

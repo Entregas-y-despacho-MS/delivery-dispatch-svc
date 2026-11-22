@@ -250,10 +250,9 @@ describe('Dashboard 1 against the reference table (e2e, ST-301.4)', () => {
             }
         });
 
-        it('says N/D: first attempt not normalized, and «Sin datos» with no rate for a period with nothing', async () => {
+        it('never invents the first-attempt rate (these dispatches have no events: no rate), and says «Sin datos» for a period with nothing', async () => {
             const res = await otd(both('Z1'));
-            expect(res.body.firstAttempt).toEqual({ available: false, reason: expect.any(String) });
-            expect(res.body.firstAttempt.reason).not.toBe('');
+            expect(res.body.firstAttempt).toMatchObject({ numerator: 0, denominator: 0, percentage: null, coverage: { complete: expect.any(Boolean) } });
             const empty = await otd({ ...both('Z1'), from: '2019-06-01', to: '2019-06-30' });
             expect(empty.body).toMatchObject({ empty: true, metrics: { numerator: 0, denominator: 0, n: 0, percentage: null } });
         });
