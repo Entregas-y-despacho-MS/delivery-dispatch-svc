@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
+import { runWithCorrelationId } from '../../order-dispatch-events/context/correlation-context.js';
 import { normalizeCorrelationId } from '../domain/admin-audit-event.js';
 
 export const CORRELATION_HEADER = 'X-Request-Id';
@@ -12,5 +13,6 @@ export function correlationIdMiddleware(request: Request & { correlationId?: str
     const correlationId = normalizeCorrelationId(request.header(CORRELATION_HEADER)) ?? randomUUID();
     request.correlationId = correlationId;
     response.setHeader(CORRELATION_HEADER, correlationId);
-    next();
+    // The rest of the request runs inside the context, so order/dispatch events pick the same id up.
+    runWithCorrelationId(correlationId, next);
 }
