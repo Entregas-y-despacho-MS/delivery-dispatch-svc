@@ -40,7 +40,7 @@ export class FleetMaintenanceSummaryDto {
     @ApiProperty({ type: 'integer', minimum: 0, description: 'Maintenance records overlapping the period (n)' })
     count!: number;
 
-    @ApiProperty({ type: 'integer', minimum: 0, description: 'Calendar days (Bolivia) with at least one maintenance in the period: overlapping intervals of a vehicle are merged, never added twice. Calendar days, not operating hours' })
+    @ApiProperty({ type: 'integer', minimum: 0, description: 'Calendar days (Bolivia) in maintenance inside the period: overlapping intervals of a vehicle are merged, never added twice; open maintenance counts through the end of the period. In the overall summary it is the sum over the vehicles (vehicle-days). Calendar days, not operating hours' })
     calendarDays!: number;
 
     @ApiProperty({ type: Boolean, description: 'true when two maintenances of one vehicle overlap, so the records may need reconciliation' })

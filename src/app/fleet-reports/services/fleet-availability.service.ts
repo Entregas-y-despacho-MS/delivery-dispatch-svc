@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { todayInOperatingTimeZone } from '../../../modules/dispatch/dispatches/utils/operating-date.util.js';
 import { summarizeAvailability, type FleetVehicleStatusRow } from '../domain/fleet-availability.js';
 import { resolveCutoff } from '../domain/fleet-cutoff.js';
+import { summarizeFleetMaintenance } from '../domain/fleet-maintenance.js';
 import type { FleetAvailabilityCutoffDto, FleetAvailabilitySummaryDto } from '../dto/fleet-availability.dto.js';
 import type { FleetAvailabilityParamsDto } from '../dto/fleet-availability-params.dto.js';
 import { FleetAvailabilityRepository } from '../repositories/fleet-availability.repository.js';
@@ -31,5 +32,19 @@ export class FleetAvailabilityService {
             summary: summarizeAvailability(registered, 'current'),
             vehicles: params.fleetStatus === undefined ? registered : registered.filter((row) => row.status === params.fleetStatus),
         };
+    }
+
+    /**
+     * Maintenance of the given vehicles in the period (Bolivia days). It does not depend on the cut-off: maintenance
+     * records carry their own dates, so a past period is real data, unlike the vehicle status.
+     */
+    async maintenance(
+        vehicleIds: number[],
+        period: { from: string; to: string },
+        filter: Pick<FleetAvailabilityParamsDto, 'maintenanceTypeId' | 'routine'>,
+    ): Promise<ReturnType<typeof summarizeFleetMaintenance>> {
+        if (vehicleIds.length === 0) return summarizeFleetMaintenance([], [], period.from, period.to);
+        const intervals = await this.repository.listMaintenanceIntervals(period.from, period.to, { vehicleIds, maintenanceTypeId: filter.maintenanceTypeId, routine: filter.routine });
+        return summarizeFleetMaintenance(intervals, vehicleIds, period.from, period.to);
     }
 }

@@ -11,8 +11,8 @@ const rows = [
     { vehicleId: 3, plate: 'C-3', status: VehicleStatusEnum.OUT_OF_SERVICE },
 ];
 
-function build(result = rows) {
-    const repository = { listRegistered: vi.fn().mockResolvedValue(result) };
+function build(result = rows, intervals: Array<{ vehicleId: number; startDay: string; endDay: string | null }> = []) {
+    const repository = { listRegistered: vi.fn().mockResolvedValue(result), listMaintenanceIntervals: vi.fn().mockResolvedValue(intervals) };
     return { repository, service: new FleetAvailabilityService(repository as never) };
 }
 
@@ -46,6 +46,25 @@ describe('FleetAvailabilityService.atCutoff', () => {
         expect(answer.cutoff.kind).toBe('past');
         expect(answer.summary.assignable).toBeNull();
         expect(answer.vehicles).toEqual([]);
+    });
+
+    it('merges the maintenance of the given vehicles and passes the filters to the query', async () => {
+        const { service, repository } = build(rows, [
+            { vehicleId: 2, startDay: '2026-11-03', endDay: '2026-11-08' },
+            { vehicleId: 2, startDay: '2026-11-06', endDay: '2026-11-10' },
+        ]);
+        const result = await service.maintenance([1, 2], { from: '2026-11-01', to: '2026-11-30' }, { routine: true });
+        expect(repository.listMaintenanceIntervals).toHaveBeenCalledWith('2026-11-01', '2026-11-30', { vehicleIds: [1, 2], maintenanceTypeId: undefined, routine: true });
+        expect(result.byVehicle.get(2)).toEqual({ count: 2, calendarDays: 8, overlapsDetected: true });
+        expect(result.byVehicle.get(1)).toEqual({ count: 0, calendarDays: 0, overlapsDetected: false });
+        expect(result.total).toEqual({ count: 2, calendarDays: 8, overlapsDetected: true });
+    });
+
+    it('does not query the maintenance when there are no vehicles', async () => {
+        const { service, repository } = build();
+        const result = await service.maintenance([], { from: '2026-11-01', to: '2026-11-30' }, {});
+        expect(repository.listMaintenanceIntervals).not.toHaveBeenCalled();
+        expect(result.total).toEqual({ count: 0, calendarDays: 0, overlapsDetected: false });
     });
 
     it('uses the Bolivia day, not the UTC one, for today', async () => {
