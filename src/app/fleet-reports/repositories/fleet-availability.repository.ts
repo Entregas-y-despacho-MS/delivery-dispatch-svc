@@ -1,10 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
+import { OPERATING_TIME_ZONE } from '../../../modules/dispatch/dispatches/utils/operating-date.util.js';
 import { DispatchStatusEnum, RouteBatchStatusEnum, VehicleStatusEnum } from '../../../shared/enums/index.js';
+import { SLA_CLOSED_STATUSES } from '../../sla-report/repositories/sla-report.repository.js';
 import type { FleetVehicleStatusRow } from '../domain/fleet-availability.js';
 import type { RouteLoad } from '../domain/fleet-load.js';
 import type { MaintenanceInterval } from '../domain/fleet-maintenance.js';
+import type { DriverProductivityRow } from '../domain/fleet-productivity.js';
 
 const CREATED_DAY = "(vm.created_at AT TIME ZONE 'America/La_Paz')::date";
 const COMPLETED_DAY = "(vm.completed_at AT TIME ZONE 'America/La_Paz')::date";
@@ -89,5 +92,36 @@ export class FleetAvailabilityRepository {
             withoutWeight: row.without_weight,
             withoutVolume: row.without_volume,
         }));
+    }
+
+    /**
+     * Delivery dispatches closed in the Bolivia days `from`..`to`, by the driver of their route. «Closed» means what it
+     * means for the SLA report (ST-54.2): terminal statuses but cancelled. A dispatch without driver comes with a null
+     * `driverId`. `vehicleId` / `driverId` narrow it to the routes of that vehicle or driver.
+     */
+    async listDriverProductivity(from: string, to: string, filter: { vehicleId?: number; driverId?: number }): Promise<DriverProductivityRow[]> {
+        const values: unknown[] = [from, to];
+        let where = '';
+        if (filter.vehicleId !== undefined) where += ` AND rb.vehicle_id = $${values.push(filter.vehicleId)}`;
+        if (filter.driverId !== undefined) where += ` AND rb.driver_id = $${values.push(filter.driverId)}`;
+        const closed = SLA_CLOSED_STATUSES.map((status) => `'${status}'`).join(', ');
+        const rows: Array<{ driver_id: number | null; driver_name: string | null; closed_count: number; delivered_count: number }> = await this.dataSource.query(
+            `SELECT rb.driver_id, u.full_name AS driver_name,
+                    COUNT(*)::int AS closed_count,
+                    COUNT(*) FILTER (WHERE s.name = '${DispatchStatusEnum.DELIVERED}')::int AS delivered_count
+               FROM dispatches d
+               JOIN dispatch_types t ON t.dispatch_type_id = d.dispatch_type_id AND t.name = 'delivery'
+               JOIN dispatch_statuses s ON s.dispatch_status_id = d.dispatch_status_id
+               LEFT JOIN route_batches rb ON rb.route_batch_id = d.route_batch_id
+               LEFT JOIN users u ON u.user_id = rb.driver_id
+              WHERE s.name IN (${closed})
+                AND d.closed_at IS NOT NULL
+                AND d.closed_at >= ($1::date)::timestamp AT TIME ZONE '${OPERATING_TIME_ZONE}'
+                AND d.closed_at < (($2::date + 1)::timestamp AT TIME ZONE '${OPERATING_TIME_ZONE}')${where}
+              GROUP BY rb.driver_id, u.full_name
+              ORDER BY u.full_name NULLS LAST, rb.driver_id`,
+            values,
+        );
+        return rows.map((row) => ({ driverId: row.driver_id, driverName: row.driver_name, closedCount: row.closed_count, deliveredCount: row.delivered_count }));
     }
 }
