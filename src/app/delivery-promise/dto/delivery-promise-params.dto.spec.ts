@@ -38,8 +38,8 @@ describe('DeliveryBacklogParamsDto', () => {
     const valid = { from: '2026-11-01', to: '2026-11-30' };
 
     it('limits the size of the list', async () => {
-        expect(await messagesOf(DeliveryBacklogParamsDto, { ...valid, limit: '100' })).toEqual([]);
-        expect(await messagesOf(DeliveryBacklogParamsDto, { ...valid, limit: '101' })).toContain("The 'limit' parameter must be <= 100.");
-        expect(await messagesOf(DeliveryBacklogParamsDto, { ...valid, limit: '0' })).toContain("The 'limit' parameter must be >= 1.");
+        expect(await messagesOf(DeliveryBacklogParamsDto, { ...valid, overdueLimit: '100' })).toEqual([]);
+        expect(await messagesOf(DeliveryBacklogParamsDto, { ...valid, overdueLimit: '101' })).toContain("The 'overdueLimit' parameter must be <= 100.");
+        expect(await messagesOf(DeliveryBacklogParamsDto, { ...valid, overdueLimit: '0' })).toContain("The 'overdueLimit' parameter must be >= 1.");
     });
 });

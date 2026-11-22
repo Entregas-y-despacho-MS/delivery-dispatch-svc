@@ -61,8 +61,8 @@ export class DeliveryBacklogParamsDto extends DeliveryPromiseFiltersDto {
     @ApiPropertyOptional({ type: 'integer', minimum: 1, maximum: OVERDUE_LIST_MAX_LIMIT, default: OVERDUE_LIST_DEFAULT_LIMIT, description: 'How many open overdue dispatches the list returns, the oldest first' })
     @IsOptional()
     @Type(() => Number)
-    @IsInt({ message: "The 'limit' parameter must be an integer." })
-    @Min(1, { message: "The 'limit' parameter must be >= 1." })
-    @Max(OVERDUE_LIST_MAX_LIMIT, { message: `The 'limit' parameter must be <= ${OVERDUE_LIST_MAX_LIMIT}.` })
-    limit?: number;
+    @IsInt({ message: "The 'overdueLimit' parameter must be an integer." })
+    @Min(1, { message: "The 'overdueLimit' parameter must be >= 1." })
+    @Max(OVERDUE_LIST_MAX_LIMIT, { message: `The 'overdueLimit' parameter must be <= ${OVERDUE_LIST_MAX_LIMIT}.` })
+    overdueLimit?: number;
 }
