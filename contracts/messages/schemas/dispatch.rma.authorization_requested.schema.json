@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.delivery-dispatch.local/messages/schemas/dispatch.rma.authorization_requested.schema.json",
+  "title": "dispatch.rma.authorization_requested",
+  "description": "Despachos pide a Inventarios autorizar una devolución (RMA) tras el dictamen `request_RMA` de un reclamo sobre una entrega finalizada. No crea recojo ni parada: solo Inventarios aprueba o rechaza, y el recojo nace después con `inventory.return.requested`. `authorizationRequestId` es el `messageId` de este mensaje y la referencia con la que Inventarios responde. Sin datos personales, tracking_token ni evidencia.",
+  "type": "object",
+  "allOf": [{ "$ref": "../envelope.schema.json" }],
+  "properties": {
+    "type": { "const": "dispatch.rma.authorization_requested" },
+    "source": { "const": "dispatch" },
+    "schemaVersion": { "const": 1 },
+    "data": { "$ref": "#/$defs/data" }
+  },
+  "$defs": {
+    "data": {
+      "type": "object",
+      "required": ["authorizationRequestId", "crmCaseId", "caseVersion", "dispatchId", "trackingCode", "salesOrderId", "reasonCode", "decisionReason", "affectedItems", "requestedAt"],
+      "properties": {
+        "authorizationRequestId": {
+          "description": "Referencia de la solicitud; igual al `messageId` del mensaje. Un reenvío con el mismo `messageId` es la misma solicitud.",
+          "$ref": "../envelope.schema.json#/$defs/messageId"
+        },
+        "crmCaseId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
+        "caseVersion": {
+          "description": "Versión del caso de CRM sobre la que se emitió el dictamen.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "dispatchId": {
+          "description": "Despacho individual entregado al que se refiere el reclamo.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "trackingCode": { "$ref": "../envelope.schema.json#/$defs/trackingCode" },
+        "salesOrderId": {
+          "description": "Pedido de venta del despacho entregado.",
+          "$ref": "../envelope.schema.json#/$defs/entityId"
+        },
+        "reasonCode": {
+          "description": "Motivo del reclamo tal como lo envió CRM.",
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{1,39}$"
+        },
+        "decisionReason": {
+          "description": "Causal del dictamen, saneada y sin datos personales.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "affectedItems": {
+          "description": "Productos o bultos que el reclamo señala y para los que se pide la devolución.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/affectedItem" }
+        },
+        "requestedAt": {
+          "description": "Momento en que se emitió el dictamen `request_RMA`.",
+          "$ref": "../envelope.schema.json#/$defs/dateTimeUtc"
+        }
+      },
+      "additionalProperties": false
+    },
+    "affectedItem": {
+      "description": "Producto o bulto afectado, identificado por `packageId` o por `itemCode`, exactamente uno.",
+      "type": "object",
+      "required": ["quantity"],
+      "properties": {
+        "packageId": { "$ref": "../envelope.schema.json#/$defs/entityId" },
+        "itemCode": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "quantity": { "type": "integer", "minimum": 1 }
+      },
+      "oneOf": [
+        { "properties": { "packageId": true }, "required": ["packageId"] },
+        { "properties": { "itemCode": true }, "required": ["itemCode"] }
+      ],
+      "additionalProperties": false
+    }
+  }
+}

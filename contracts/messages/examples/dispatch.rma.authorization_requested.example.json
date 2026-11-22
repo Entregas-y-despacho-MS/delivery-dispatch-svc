@@ -1,0 +1,21 @@
+{
+  "messageId": "019a9a3e-6b21-7c48-9d15-3e8a4f1b7c52",
+  "type": "dispatch.rma.authorization_requested",
+  "schemaVersion": 1,
+  "source": "dispatch",
+  "occurredAt": "2026-11-22T15:20:10Z",
+  "data": {
+    "authorizationRequestId": "019a9a3e-6b21-7c48-9d15-3e8a4f1b7c52",
+    "crmCaseId": "CRM-CASE-2026-000871",
+    "caseVersion": 1,
+    "dispatchId": 482,
+    "trackingCode": "DSP-2026-00482",
+    "salesOrderId": "SO-2026-004711",
+    "reasonCode": "DAMAGED_ITEM",
+    "decisionReason": "Daño de fábrica confirmado con la evidencia de entrega; el producto requiere devolución.",
+    "affectedItems": [
+      { "itemCode": "SKU-1042", "quantity": 1 }
+    ],
+    "requestedAt": "2026-11-22T15:20:10Z"
+  }
+}
