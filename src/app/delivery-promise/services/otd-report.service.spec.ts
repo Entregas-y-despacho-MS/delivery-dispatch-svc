@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { unavailableFirstAttempt } from '../domain/first-attempt.js';
 import { OtdReportService } from './otd-report.service.js';
 
 const NOW = new Date('2026-11-20T15:00:00Z');
@@ -22,7 +23,7 @@ describe('OtdReportService.getPromiseOtd', () => {
             asOf: '2026-11-20T15:00:00.000Z',
             filters: { zoneId: 3, serviceLevelId: null, status: null },
             metrics: { numerator: 8, denominator: 10, n: 10, percentage: 80, invalidWindowCount: 1, rescheduledPromiseCount: 3 },
-            firstAttempt: { available: false, reason: 'attempt_not_normalized' },
+            firstAttempt: unavailableFirstAttempt(),
             empty: false,
         });
         expect(report.metrics.excludedCancellations).toEqual({ count: 2, reason: 'cancelled_before_promise_expired' });

@@ -49,12 +49,53 @@ export class OtdMetricsDto {
     rescheduledPromiseCount!: number;
 }
 
+export class AttemptCoverageDto {
+    @ApiProperty({ type: String, format: 'date-time', nullable: true, description: 'First moment the attempts can be rebuilt from (the first status event the backend wrote with the previous status). null when there is none yet' })
+    from!: string | null;
+
+    @ApiProperty({ type: Boolean, description: 'true when the whole range starts on or after `from`. false: the rate is N/D because part of the range is not instrumented' })
+    complete!: boolean;
+}
+
 export class FirstAttemptDto {
-    @ApiProperty({ type: Boolean, example: false, description: 'false while there is no normalized delivery attempt: first-attempt delivery is then N/D' })
+    @ApiProperty({ type: Boolean, example: true, description: 'false when the first-attempt rate is N/D: the range starts before the instrumented period (`coverage.complete` false) or it was not computed. true with a null `percentage` means "Sin datos" (nothing to measure)' })
     available!: boolean;
 
-    @ApiProperty({ type: String, nullable: true, example: 'attempt_not_normalized', description: 'Why the rate is N/D; null when it is available' })
+    @ApiProperty({ type: String, nullable: true, example: 'attempt_coverage_incomplete', description: 'Why the rate is N/D (`attempt_coverage_incomplete`, `attempt_not_normalized`); null when it is available' })
     reason!: string | null;
+
+    @ApiProperty({ type: 'integer', minimum: 0, example: 30, description: 'Numerator: dispatches whose first attempt ended delivered (on time, late, or with no valid window to tell)' })
+    numerator!: number;
+
+    @ApiProperty({ type: 'integer', minimum: 0, example: 40, description: 'Denominator: dispatches whose first attempt already happened and could be rebuilt. Those still waiting for their first chance are not in it' })
+    denominator!: number;
+
+    @ApiProperty({ type: 'integer', minimum: 0, example: 40, description: 'Sample size of the rate; the same figure as `denominator`' })
+    n!: number;
+
+    @ApiProperty({ type: 'number', format: 'double', nullable: true, minimum: 0, maximum: 100, example: 75, description: 'numerator / denominator as a percentage with one decimal; null (N/D or "Sin datos") when the coverage is incomplete or the denominator is 0, never 0' })
+    percentage!: number | null;
+
+    @ApiProperty({ type: 'integer', minimum: 0, description: 'First attempt delivered inside the committed window' })
+    onTimeCount!: number;
+
+    @ApiProperty({ type: 'integer', minimum: 0, description: 'First attempt delivered outside the committed window. It counts in the numerator and is shown apart so it is not mistaken for OTD' })
+    lateCount!: number;
+
+    @ApiProperty({ type: 'integer', minimum: 0, description: 'First attempt delivered but the dispatch has no valid window, so on time or late cannot be told' })
+    deliveredWithoutWindowCount!: number;
+
+    @ApiProperty({ type: 'integer', minimum: 0, description: 'First attempt failed (`not_delivered` or an incident whose reason consumes an attempt)' })
+    failedCount!: number;
+
+    @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches whose first chance has not happened yet: out of the denominator' })
+    noAttemptYetCount!: number;
+
+    @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches whose event history does not allow rebuilding their attempts: out of the denominator' })
+    notReconstructableCount!: number;
+
+    @ApiProperty({ type: AttemptCoverageDto, description: 'The period the attempts can be rebuilt for' })
+    coverage!: AttemptCoverageDto;
 }
 
 export class OtdReportDto {

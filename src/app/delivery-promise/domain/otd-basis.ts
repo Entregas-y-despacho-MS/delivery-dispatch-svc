@@ -27,5 +27,11 @@ export const CANCELLATION_EXCLUSION_REASON_BY_BASIS: Record<OtdBasis, string> = 
     [OtdBasis.DELIVERED_AT]: DELIVERED_AT_CANCELLATION_EXCLUSION_REASON,
 };
 
-/** First-attempt delivery needs a normalized attempt (there is no attempts table yet): the rate is N/D until it exists. */
+/** The first-attempt rate is not computed yet (the attempts were not read for this answer): N/D. */
 export const FIRST_ATTEMPT_UNAVAILABLE_REASON = 'attempt_not_normalized';
+
+/**
+ * The range starts before the first event the backend wrote with the data attempts are rebuilt from (ST-301.3). Earlier
+ * history cannot be turned into attempts, so the rate is N/D instead of an invented number.
+ */
+export const FIRST_ATTEMPT_COVERAGE_INCOMPLETE_REASON = 'attempt_coverage_incomplete';
