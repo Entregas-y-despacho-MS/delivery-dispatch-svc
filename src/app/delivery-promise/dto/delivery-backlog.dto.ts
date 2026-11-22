@@ -104,7 +104,7 @@ export class DeliveryBacklogDto {
     @ApiProperty({ type: AgeBreakdownDto, description: 'Open overdue dispatches by how long they have been in their current stage' })
     openOverdueByAge!: AgeBreakdownDto;
 
-    @ApiProperty({ type: [OpenOverdueDispatchDto], description: 'The open overdue dispatches, the most overdue first, up to `limit`' })
+    @ApiProperty({ type: [OpenOverdueDispatchDto], description: 'The open overdue dispatches, the most overdue first, up to `overdueLimit`' })
     openOverdue!: OpenOverdueDispatchDto[];
 
     @ApiProperty({ type: Boolean, description: 'true when the filters leave no dispatch at all: the screen shows "Sin datos"' })

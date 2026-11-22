@@ -17,7 +17,7 @@ const lower = ({ value }: { value: unknown }) => (typeof value === 'string' ? va
 /** The filters both queries of the dashboard share (ST-301.1): the date range of the promise, zone, service level and status. */
 export class DeliveryPromiseFiltersDto {
     // No `example` on the query parameters: Swagger UI would send it on "Try it out" (guarded by test/swagger.e2e-spec.ts).
-    @ApiProperty({ type: String, format: 'date', description: 'First day of the range, in YYYY-MM-DD (e.g. 2026-11-01), inclusive. Bolivia days (America/La_Paz), matched against the end of the committed promise window (or, with `basis=deliveredAt`, against the closing time)' })
+    @ApiProperty({ type: String, format: 'date', description: 'First day of the range, in YYYY-MM-DD (e.g. 2026-11-01), inclusive. Bolivia days (America/La_Paz), matched against the end of the committed promise window (or, with `basis=deliveredAt`, against the closing time; in the backlog a dispatch without a window is placed by its closing time, or by its creation while it waits to be planned)' })
     @IsDateString({ strict: true }, { message: DATE_MESSAGE('from') })
     @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: DATE_MESSAGE('from') })
     from!: string;

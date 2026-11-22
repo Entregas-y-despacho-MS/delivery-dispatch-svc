@@ -19,7 +19,7 @@ const AGE_RANGE_SQL = `CASE WHEN s.age_minutes IS NULL THEN NULL ${AGE_RANGE_BOU
  *
  * - `overdue`: active, with a valid window that ended before the cut (`$6`). An invalid window is never overdue.
  * - `age_minutes`: how long it has been in its current stage, from the last `status_changed` event that put it in this status
- *   (or the last update when there is none). Only active dispatches have one.
+ *   (the new status is `metadata.status`, but the planner writes it as `metadata.to`), or the last update when there is none. Only active dispatches have one.
  */
 const STAGED_SQL = `
     WITH base AS (
@@ -43,7 +43,7 @@ const STAGED_SQL = `
                WHERE b.status IN (${ACTIVE_STATUSES_SQL})
                  AND e.dispatch_id = b.dispatch_id
                  AND e.event_type = 'status_changed'
-                 AND e.metadata->>'status' = b.status
+                 AND COALESCE(e.metadata->>'status', e.metadata->>'to') = b.status
                ORDER BY e.created_at DESC, e.dispatch_event_id DESC
                LIMIT 1
           ) ev ON TRUE

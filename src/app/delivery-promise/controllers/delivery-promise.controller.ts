@@ -18,7 +18,7 @@ const RANGE_ERRORS = [
  * of the backlog by dispatch. The punctuality of ES-54 (`GET /reports/sla`) is not changed: `basis=deliveredAt` answers
  * that other rate from here, labelled as such.
  *
- * Error dictionary: VALIDATION_FAILED 400 (missing or invalid `from`, `to`, `zoneId`, `serviceLevelId`, `status`, `basis` or `overdueLimit`) |
+ * Error dictionary: VALIDATION_FAILED 400 (missing or invalid `from`, `to`, `zoneId`, `serviceLevelId`, `status`, `basis` (OTD) or `overdueLimit` (backlog)) |
  * INVALID_DATE_RANGE 400 (`from` after `to`) | DATE_RANGE_TOO_LARGE 400 (more than 366 days) | INVALID_TOKEN 401 | INSUFFICIENT_PERMISSIONS 403.
  */
 @ApiTags('Delivery promise')
@@ -54,7 +54,7 @@ export class DeliveryPromiseController {
     @ApiOperation({
         summary: 'Operational summary: volume of the backlog by dispatch and list of open overdue dispatches',
         description:
-            "Counts the delivery dispatches whose promise date falls between `from` and `to` (YYYY-MM-DD, both inclusive, Bolivia days; the end of the committed window, or the closing/creation time for a dispatch without a window) in mutually exclusive buckets, each dispatch once by its own `dispatchId` and status (never by the status of its batch: one delivered inside a batch still in execution already counts as delivered): `delivered`, `openOverdue` (active with its promise expired), `pending` (active, promise not expired), `notDelivered`, `rescheduled`, `cancelled` and `returned` (`returned` and `returned_to_warehouse`). `pendingByStage` splits the pending ones by exclusive stage (the current status) and by how long they have been in it; `openOverdueByAge` does the same for the overdue ones. `backlogTotal` is `openOverdue` + `pending`: terminal buckets are never added to it. `openOverdue` lists the most overdue dispatches first, with the minutes overdue and the next action, up to `overdueLimit`. Optional filters: zone, service level and current status. `empty` is true when nothing matches (\"Sin datos\"). Not cached. Requires coordinator role, or root.",
+            "Counts the delivery dispatches whose promise date falls between `from` and `to` (YYYY-MM-DD, both inclusive, Bolivia days; the end of the committed window, or the closing/creation time for a dispatch without a window; a cancelled dispatch is placed by its current window, while `/reports/otd` places it by the promise it had when it was cancelled, so the totals of one period of both endpoints can differ) in mutually exclusive buckets, each dispatch once by its own `dispatchId` and status (never by the status of its batch: one delivered inside a batch still in execution already counts as delivered): `delivered`, `openOverdue` (active with its promise expired), `pending` (active, promise not expired or without a valid window), `notDelivered`, `rescheduled`, `cancelled` and `returned` (`returned` and `returned_to_warehouse`). `pendingByStage` splits the pending ones by exclusive stage (the current status) and by how long they have been in it; `openOverdueByAge` does the same for the overdue ones. `backlogTotal` is `openOverdue` + `pending`: terminal buckets are never added to it. `openOverdue` lists the most overdue dispatches first, with the minutes overdue and the next action, up to `overdueLimit`. Optional filters: zone, service level and current status. `empty` is true when nothing matches (\"Sin datos\"). Not cached. Requires coordinator role, or root.",
     })
     @ApiOkResponse({ type: DeliveryBacklogDto })
     @ApiBadRequests({

@@ -13,7 +13,7 @@ export class AppliedFiltersDto {
 }
 
 export class ExcludedCancellationsDto {
-    @ApiProperty({ type: 'integer', minimum: 0, example: 3, description: 'Cancelled dispatches left out of the rate because they were cancelled before their promise expired' })
+    @ApiProperty({ type: 'integer', minimum: 0, example: 3, description: 'Cancelled dispatches left out of the rate because they were cancelled on or before the end of the promise in force when they were cancelled' })
     count!: number;
 
     @ApiProperty({ type: String, example: 'cancelled_before_promise_expired', description: 'The rule that excluded them. A cancellation after the promise expired stays in the denominator as not on time' })
