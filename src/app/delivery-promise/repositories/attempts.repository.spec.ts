@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ATTEMPT_EVENTS_SQL, AttemptsRepository, FIRST_INSTRUMENTED_SQL } from './attempts.repository.js';
+import { ATTEMPT_EVENTS_BY_IDS_SQL, ATTEMPT_EVENTS_SQL, AttemptsRepository, FIRST_INSTRUMENTED_SQL } from './attempts.repository.js';
 
 function repositoryAnswering(rows: unknown[]) {
     const query = vi.fn().mockResolvedValue(rows);
@@ -42,17 +42,33 @@ describe('AttemptsRepository.listSources', () => {
     });
 });
 
-describe('AttemptsRepository.findFirstInstrumentedAt', () => {
-    it('is the first trip written with its previous status and its author', async () => {
-        const { repository, query } = repositoryAnswering([{ first_at: '2026-10-05T10:00:00.000Z' }]);
-        expect(await repository.findFirstInstrumentedAt()).toEqual(new Date('2026-10-05T10:00:00.000Z'));
-        expect(query).toHaveBeenCalledWith(FIRST_INSTRUMENTED_SQL);
+describe('AttemptsRepository.listSourcesByIds', () => {
+    it('asks for the given dispatches and does not touch the database for an empty list', async () => {
+        const { repository, query } = repositoryAnswering([{ dispatch_id: 4, window_start: null, window_end: null, events: [] }]);
+        expect(await repository.listSourcesByIds([4, 9])).toHaveLength(1);
+        expect(query).toHaveBeenCalledWith(ATTEMPT_EVENTS_BY_IDS_SQL, [[4, 9]]);
+        query.mockClear();
+        expect(await repository.listSourcesByIds([])).toEqual([]);
+        expect(query).not.toHaveBeenCalled();
+    });
+});
+
+describe('AttemptsRepository.findCoverage', () => {
+    it('is complete when the range starts on or after the first trip written with its previous status and author', async () => {
+        const { repository, query } = repositoryAnswering([{ first_at: '2026-10-05T10:00:00.000Z', range_start: '2026-11-01T04:00:00.000Z' }]);
+        expect(await repository.findCoverage('2026-11-01')).toEqual({ from: new Date('2026-10-05T10:00:00.000Z'), complete: true });
+        expect(query).toHaveBeenCalledWith(FIRST_INSTRUMENTED_SQL, ['2026-11-01']);
         expect(FIRST_INSTRUMENTED_SQL).toContain("e.metadata->>'previousStatus' IS NOT NULL");
         expect(FIRST_INSTRUMENTED_SQL).toContain('e.actor_type IS NOT NULL');
     });
 
-    it('is null when no trip was ever written', async () => {
-        expect(await repositoryAnswering([{ first_at: null }]).repository.findFirstInstrumentedAt()).toBeNull();
-        expect(await repositoryAnswering([]).repository.findFirstInstrumentedAt()).toBeNull();
+    it('is incomplete when the range starts before it', async () => {
+        const { repository } = repositoryAnswering([{ first_at: '2026-10-05T10:00:00.000Z', range_start: '2026-10-01T04:00:00.000Z' }]);
+        expect((await repository.findCoverage('2026-10-01')).complete).toBe(false);
+    });
+
+    it('is incomplete with no instrumented trip at all', async () => {
+        const { repository } = repositoryAnswering([{ first_at: null, range_start: '2026-11-01T04:00:00.000Z' }]);
+        expect(await repository.findCoverage('2026-11-01')).toEqual({ from: null, complete: false });
     });
 });

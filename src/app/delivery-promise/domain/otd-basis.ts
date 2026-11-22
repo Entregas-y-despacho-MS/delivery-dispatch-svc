@@ -35,3 +35,6 @@ export const FIRST_ATTEMPT_UNAVAILABLE_REASON = 'attempt_not_normalized';
  * history cannot be turned into attempts, so the rate is N/D instead of an invented number.
  */
 export const FIRST_ATTEMPT_COVERAGE_INCOMPLETE_REASON = 'attempt_coverage_incomplete';
+
+/** The date the first-attempt rate places a dispatch by: the end of its promise window; without one, its closing, else its creation. */
+export const FIRST_ATTEMPT_DATE_BASIS = 'promise_window_end';

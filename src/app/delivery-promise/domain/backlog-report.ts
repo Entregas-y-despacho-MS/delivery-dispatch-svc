@@ -1,6 +1,7 @@
 import { OPERATING_TIME_ZONE } from '../../../modules/dispatch/dispatches/utils/operating-date.util.js';
 import type { DeliveryBacklogDto, OpenOverdueDispatchDto, PendingStageDto } from '../dto/delivery-backlog.dto.js';
 import { ACTIVE_DISPATCH_STATUSES, AgeRange, BacklogBucket, bucketOf, nextActionOf } from './backlog-buckets.js';
+import { FirstAttemptResult, type DispatchAttemptSummary } from './first-attempt.js';
 import { appliedFilters } from './otd-metrics.js';
 
 /** One group of dispatches as PostgreSQL returns it: how many are in this status, overdue or not, and how long in the stage. */
@@ -35,6 +36,7 @@ export function buildBacklogReport(
     overdueList: readonly OpenOverdueRow[],
     dateBasis: string,
     now: Date,
+    attempts: ReadonlyMap<number, DispatchAttemptSummary> = new Map(),
 ): DeliveryBacklogDto {
     const counts: Record<BacklogBucket, number> = {
         [BacklogBucket.DELIVERED]: 0,
@@ -78,6 +80,8 @@ export function buildBacklogReport(
         promiseEnd: row.promiseEnd.toISOString(),
         overdueMinutes: Math.max(0, row.overdueMinutes),
         nextAction: nextActionOf(row.status),
+        // No summary means no event of an attempt was read for it: it has had no attempt yet. A null stays null (cannot be rebuilt).
+        ...(attempts.get(row.dispatchId) ?? { attemptsUsed: 0, firstAttemptResult: FirstAttemptResult.NO_ATTEMPT_YET }),
     }));
 
     return {

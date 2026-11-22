@@ -1,4 +1,4 @@
-import { FIRST_ATTEMPT_COVERAGE_INCOMPLETE_REASON, FIRST_ATTEMPT_UNAVAILABLE_REASON } from './otd-basis.js';
+import { FIRST_ATTEMPT_COVERAGE_INCOMPLETE_REASON, FIRST_ATTEMPT_DATE_BASIS, FIRST_ATTEMPT_UNAVAILABLE_REASON } from './otd-basis.js';
 import { percentage } from './percentage.js';
 import type { FirstAttemptDto } from '../dto/otd-report.dto.js';
 
@@ -154,6 +154,7 @@ export function buildFirstAttempt(counts: FirstAttemptCounts, coverage: AttemptC
         denominator,
         n: denominator,
         percentage: coverage.complete ? percentage(numerator, denominator) : null,
+        dateBasis: FIRST_ATTEMPT_DATE_BASIS,
         onTimeCount: counts.onTime,
         lateCount: counts.late,
         deliveredWithoutWindowCount: counts.deliveredNoWindow,
@@ -170,4 +171,15 @@ export function unavailableFirstAttempt(): FirstAttemptDto {
         ...buildFirstAttempt(tallyFirstAttempts([]), { from: null, complete: false }),
         reason: FIRST_ATTEMPT_UNAVAILABLE_REASON,
     };
+}
+
+/** What the open overdue list shows of a dispatch: how many valid attempts it has used (null if they cannot be rebuilt) and how its first one went. */
+export interface DispatchAttemptSummary {
+    attemptsUsed: number | null;
+    firstAttemptResult: FirstAttemptResult;
+}
+
+export function summarizeAttempts(events: AttemptEvent[], window: CommittedWindow): DispatchAttemptSummary {
+    const history = normalizeAttempts(events);
+    return { attemptsUsed: history.reconstructable ? history.attempts.length : null, firstAttemptResult: classifyFirstAttempt(history, window) };
 }

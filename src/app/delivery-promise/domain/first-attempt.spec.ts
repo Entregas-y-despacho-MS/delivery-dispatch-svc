@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-    AttemptOutcome, FirstAttemptResult, attemptCoverage, buildFirstAttempt, classifyFirstAttempt, normalizeAttempts, tallyFirstAttempts, unavailableFirstAttempt,
+    AttemptOutcome, FirstAttemptResult, attemptCoverage, buildFirstAttempt, classifyFirstAttempt, normalizeAttempts, summarizeAttempts, tallyFirstAttempts, unavailableFirstAttempt,
     type AttemptEvent,
 } from './first-attempt.js';
 
@@ -83,6 +83,23 @@ describe('classifyFirstAttempt', () => {
     });
 });
 
+describe('summarizeAttempts', () => {
+    const window = { start: at(0), end: at(60) };
+
+    it('gives the valid attempts used and how the first one went', () => {
+        const events = [event('in_transit', 0), event('not_delivered', 5), event('in_transit', 10), event('delivered', 20)];
+        expect(summarizeAttempts(events, window)).toEqual({ attemptsUsed: 2, firstAttemptResult: FirstAttemptResult.FAILED });
+    });
+
+    it('has used none when nothing happened yet', () => {
+        expect(summarizeAttempts([], window)).toEqual({ attemptsUsed: 0, firstAttemptResult: FirstAttemptResult.NO_ATTEMPT_YET });
+    });
+
+    it('does not know how many it used when the history cannot be rebuilt', () => {
+        expect(summarizeAttempts([event('delivered', 5)], window)).toEqual({ attemptsUsed: null, firstAttemptResult: FirstAttemptResult.NOT_RECONSTRUCTABLE });
+    });
+});
+
 describe('attemptCoverage', () => {
     it('is complete only when the range starts on or after the first instrumented event', () => {
         expect(attemptCoverage(at(10), at(10)).complete).toBe(true);
@@ -101,7 +118,7 @@ describe('buildFirstAttempt', () => {
         ]);
         expect(buildFirstAttempt(counts, covered)).toMatchObject({
             available: true, reason: null, numerator: 9, denominator: 12, n: 12, percentage: 75,
-            onTimeCount: 6, lateCount: 2, deliveredWithoutWindowCount: 1, failedCount: 3, noAttemptYetCount: 4, notReconstructableCount: 1,
+            dateBasis: 'promise_window_end', onTimeCount: 6, lateCount: 2, deliveredWithoutWindowCount: 1, failedCount: 3, noAttemptYetCount: 4, notReconstructableCount: 1,
         });
     });
 

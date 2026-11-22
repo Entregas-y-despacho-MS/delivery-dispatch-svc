@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { AgeRange, NextAction } from '../domain/backlog-buckets.js';
+import { FirstAttemptResult } from '../domain/first-attempt.js';
 import { AppliedFiltersDto } from './otd-report.dto.js';
 
 export class AgeBreakdownDto {
@@ -71,6 +72,12 @@ export class OpenOverdueDispatchDto {
 
     @ApiProperty({ enum: NextAction, description: 'What the coordinator has to do next, derived from the stage the dispatch is stuck in' })
     nextAction!: NextAction;
+
+    @ApiProperty({ type: 'integer', nullable: true, minimum: 0, example: 1, description: 'Valid delivery attempts the dispatch has used (a trip that ended in a result; a `not_delivered` and the incident that caused it count once). null when its history does not allow rebuilding them' })
+    attemptsUsed!: number | null;
+
+    @ApiProperty({ enum: FirstAttemptResult, description: 'How the first attempt went: `on_time`, `late`, `delivered_no_window`, `failed`, `no_attempt_yet` (its first chance has not happened) or `not_reconstructable`' })
+    firstAttemptResult!: FirstAttemptResult;
 }
 
 export class DeliveryBacklogDto {

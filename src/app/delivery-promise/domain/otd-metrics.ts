@@ -2,7 +2,7 @@ import { OPERATING_TIME_ZONE } from '../../../modules/dispatch/dispatches/utils/
 import { CANCELLATION_EXCLUSION_REASON_BY_BASIS, OTD_DATE_BASIS, OtdBasis } from './otd-basis.js';
 import { unavailableFirstAttempt } from './first-attempt.js';
 import { percentage } from './percentage.js';
-import type { AppliedFiltersDto, OtdMetricsDto, OtdReportDto } from '../dto/otd-report.dto.js';
+import type { AppliedFiltersDto, FirstAttemptDto, OtdMetricsDto, OtdReportDto } from '../dto/otd-report.dto.js';
 
 /** What PostgreSQL returns for one query: only counts, the rate is built here. */
 export interface OtdCounts {
@@ -26,7 +26,7 @@ export function appliedFilters(filters: { zoneId?: number; serviceLevelId?: numb
 }
 
 /** The full answer of an OTD query: the rate with the date basis, the time zone and the cut it was measured at. */
-export function buildOtdReport(basis: OtdBasis, query: { from: string; to: string; zoneId?: number; serviceLevelId?: number; status?: string }, counts: OtdCounts, now: Date): OtdReportDto {
+export function buildOtdReport(basis: OtdBasis, query: { from: string; to: string; zoneId?: number; serviceLevelId?: number; status?: string }, counts: OtdCounts, now: Date, firstAttempt: FirstAttemptDto = unavailableFirstAttempt()): OtdReportDto {
     const metrics = buildOtdMetrics(counts, basis);
     return {
         from: query.from,
@@ -37,7 +37,7 @@ export function buildOtdReport(basis: OtdBasis, query: { from: string; to: strin
         asOf: now.toISOString(),
         filters: appliedFilters(query),
         metrics,
-        firstAttempt: unavailableFirstAttempt(),
+        firstAttempt,
         empty: counts.eligible === 0 && counts.invalidWindow === 0 && counts.excludedCancellations === 0 && counts.unreconstructableCancellations === 0,
     };
 }

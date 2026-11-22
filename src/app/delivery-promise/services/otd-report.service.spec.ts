@@ -1,17 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
-import { unavailableFirstAttempt } from '../domain/first-attempt.js';
+import { FirstAttemptResult, buildFirstAttempt, tallyFirstAttempts } from '../domain/first-attempt.js';
 import { OtdReportService } from './otd-report.service.js';
 
 const NOW = new Date('2026-11-20T15:00:00Z');
 const COUNTS = { eligible: 10, onTime: 8, invalidWindow: 1, excludedCancellations: 2, unreconstructableCancellations: 0, rescheduledPromise: 3 };
 
+const FIRST_ATTEMPT = buildFirstAttempt(tallyFirstAttempts([FirstAttemptResult.ON_TIME, FirstAttemptResult.FAILED]), { from: new Date('2026-10-01T00:00:00Z'), complete: true });
+
 function service(counts = COUNTS) {
     const repository = { countCohort: vi.fn().mockResolvedValue(counts), countDeliveredAt: vi.fn().mockResolvedValue(counts) };
-    return { service: new OtdReportService(repository as never), repository };
+    const firstAttempts = { getFirstAttempt: vi.fn().mockResolvedValue(FIRST_ATTEMPT) };
+    return { service: new OtdReportService(repository as never, firstAttempts as never), repository, firstAttempts };
 }
 
 describe('OtdReportService.getPromiseOtd', () => {
-    it('answers the rate with its basis, time zone, cut, filters and the N/D of the first attempt', async () => {
+    it('answers the rate with its basis, time zone, cut, filters and the first attempt', async () => {
         const { service: svc } = service();
         const report = await svc.getPromiseOtd({ from: '2026-11-01', to: '2026-11-30', zoneId: 3 }, NOW);
         expect(report).toMatchObject({
@@ -23,7 +26,7 @@ describe('OtdReportService.getPromiseOtd', () => {
             asOf: '2026-11-20T15:00:00.000Z',
             filters: { zoneId: 3, serviceLevelId: null, status: null },
             metrics: { numerator: 8, denominator: 10, n: 10, percentage: 80, invalidWindowCount: 1, rescheduledPromiseCount: 3 },
-            firstAttempt: unavailableFirstAttempt(),
+            firstAttempt: FIRST_ATTEMPT,
             empty: false,
         });
         expect(report.metrics.excludedCancellations).toEqual({ count: 2, reason: 'cancelled_before_promise_expired' });
@@ -48,6 +51,23 @@ describe('OtdReportService.getPromiseOtd', () => {
         await expect(svc.getPromiseOtd({ from: '2026-11-30', to: '2026-11-01' }, NOW)).rejects.toMatchObject({ response: { error: 'INVALID_DATE_RANGE' } });
         await expect(svc.getPromiseOtd({ from: '2025-01-01', to: '2026-11-01' }, NOW)).rejects.toMatchObject({ response: { error: 'DATE_RANGE_TOO_LARGE' } });
         expect(repository.countCohort).not.toHaveBeenCalled();
+    });
+});
+
+describe('OtdReportService first attempt', () => {
+    it('measures the first attempt with the same filters for both bases', async () => {
+        const { service: svc, firstAttempts } = service();
+        const filters = { from: '2026-11-01', to: '2026-11-30', zoneId: 3 };
+        expect((await svc.getPromiseOtd(filters, NOW)).firstAttempt).toBe(FIRST_ATTEMPT);
+        expect((await svc.getDeliveredAtOtd(filters, NOW)).firstAttempt).toBe(FIRST_ATTEMPT);
+        expect(firstAttempts.getFirstAttempt).toHaveBeenCalledTimes(2);
+        expect(firstAttempts.getFirstAttempt).toHaveBeenCalledWith(filters);
+    });
+
+    it('does not read the attempts for an invalid range', async () => {
+        const { service: svc, firstAttempts } = service();
+        await expect(svc.getPromiseOtd({ from: '2026-11-30', to: '2026-11-01' }, NOW)).rejects.toBeDefined();
+        expect(firstAttempts.getFirstAttempt).not.toHaveBeenCalled();
     });
 });
 

@@ -94,6 +94,9 @@ export class FirstAttemptDto {
     @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches whose event history does not allow rebuilding their attempts: out of the denominator' })
     notReconstructableCount!: number;
 
+    @ApiProperty({ type: String, example: 'promise_window_end', description: 'The date a dispatch is placed in the range by: the end of its promise window; without one, its closing time, else its creation. The same universe for both `basis` values of the OTD' })
+    dateBasis!: string;
+
     @ApiProperty({ type: AttemptCoverageDto, description: 'The period the attempts can be rebuilt for' })
     coverage!: AttemptCoverageDto;
 }
