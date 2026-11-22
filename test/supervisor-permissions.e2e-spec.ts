@@ -110,6 +110,9 @@ const COORDINATOR_ONLY: Route[] = [
     { method: 'post', path: `/dispatches/${NO_ID}/cotejo-resolved`, body: {} },
     // ST-54.2: el reporte de cumplimiento (SLA) es solo del Coordinador.
     { method: 'get', path: '/reports/sla' },
+    // ST-301.1: el OTD por cohorte de promesa y el volumen del backlog son solo del Coordinador.
+    { method: 'get', path: '/reports/otd' },
+    { method: 'get', path: '/reports/otd/backlog' },
     { method: 'post', path: '/planning/generate', body: {} },
     { method: 'post', path: '/planning/cutoff', body: {} },
     { method: 'get', path: '/service-levels' },
