@@ -23,7 +23,7 @@ export class ComplaintCaseItemDto {
     @ApiProperty({ type: 'integer', example: 1, description: 'Version of the case, as CRM last sent it. Commands must send the version they read; an older one is rejected with 409' })
     caseVersion!: number;
 
-    @ApiProperty({ type: String, example: 'damaged_item', description: 'Reason code of the complaint, as CRM sent it' })
+    @ApiProperty({ type: String, example: 'DAMAGED_ITEM', description: 'Reason code of the complaint, as CRM sent it' })
     reasonCode!: string;
 
     @ApiProperty({ enum: COMPLAINT_INVESTIGATION_STATUSES, example: 'received', description: 'Investigation status: `received` → `assigned` → `in_investigation` → `decided`' })
@@ -97,7 +97,7 @@ export class ComplaintCaseDetailDto extends ComplaintCaseItemDto {
     @ApiProperty({ type: 'integer', nullable: true, description: 'User who issued the verdict. null until `decided`' })
     decidedByUserId!: number | null;
 
-    @ApiProperty({ type: String, nullable: true, description: 'Full name of the user who issued the verdict' })
+    @ApiProperty({ type: String, nullable: true, description: 'Full name of the user who issued the verdict. null until `decided`' })
     decidedByUserName!: string | null;
 
     @ApiProperty({ type: String, nullable: true, description: 'ID of the RMA authorization request sent to Inventory. null without `request_RMA`' })

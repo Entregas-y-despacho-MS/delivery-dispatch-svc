@@ -14,6 +14,7 @@ import {
     ComplaintCaseNotFoundException,
     ComplaintCaseVersionStaleException,
     ComplaintDispatchNotDeliveredException,
+    ComplaintOrderReferenceInvalidException,
     ComplaintReferenceNotCorrelatedException,
     InvalidComplaintAssigneeException,
     InvalidComplaintTransitionException,
@@ -22,6 +23,7 @@ import { RMA_AUTHORIZATION_REQUESTED_TOPIC } from '../utils/rma-authorization-me
 import { ComplaintCasesService } from './complaint-cases.service.js';
 
 const DELIVERY_DISPATCH_TYPE = 'delivery';
+const MAX_ORDER_REF_LENGTH = 64;
 
 /** Roles that can be put in charge of a case; they are the ones that can operate the inbox. */
 const ASSIGNABLE_ROLES: readonly string[] = [RoleEnum.COORDINATOR, RoleEnum.SUPERVISOR];
@@ -183,6 +185,8 @@ export class ComplaintCaseCommandsService {
     }
 
     private buildAuthorizationRequest(row: LockedCaseRow, dto: IssueComplaintVerdictDto, requestedAt: Date) {
+        // The contract caps the order id at 64 characters while the column allows 100: answer 422 instead of failing in the outbox.
+        if (!row.source_order_ref || row.source_order_ref.length > MAX_ORDER_REF_LENGTH) throw new ComplaintOrderReferenceInvalidException();
         const messageId = generateMessageId();
         return buildEnvelope({
             type: RMA_AUTHORIZATION_REQUESTED_TOPIC,

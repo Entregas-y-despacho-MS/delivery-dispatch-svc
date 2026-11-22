@@ -10,21 +10,24 @@ const DATE_MESSAGE = (name: string) => `The '${name}' parameter must be a valid 
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 const lower = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.toLowerCase() : value);
 
+// From the year 1900: Postgres cannot cast year 0000 to a date, which would be a 500 instead of a 400.
+const DATE_PATTERN = /^(19|[2-9]\d)\d{2}-\d{2}-\d{2}$/;
+
 /** Filters of the complaint inbox (ST-45.2): they combine with AND. */
 export class ComplaintCaseFiltersDto {
     @ApiPropertyOptional({ type: String, format: 'date', description: 'First day of the range, in YYYY-MM-DD, inclusive. Bolivia days (America/La_Paz), matched against the time the complaint was received' })
     @IsOptional()
     @IsDateString({ strict: true }, { message: DATE_MESSAGE('from') })
-    @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: DATE_MESSAGE('from') })
+    @Matches(DATE_PATTERN, { message: DATE_MESSAGE('from') })
     from?: string;
 
     @ApiPropertyOptional({ type: String, format: 'date', description: 'Last day of the range, in YYYY-MM-DD, inclusive (the whole day counts). Must not be before `from`' })
     @IsOptional()
     @IsDateString({ strict: true }, { message: DATE_MESSAGE('to') })
-    @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: DATE_MESSAGE('to') })
+    @Matches(DATE_PATTERN, { message: DATE_MESSAGE('to') })
     to?: string;
 
-    @ApiPropertyOptional({ type: 'integer', description: 'Only cases whose dispatch belongs to this delivery zone (zone ID)' })
+    @ApiPropertyOptional({ type: 'integer', minimum: 1, maximum: 2147483647, description: 'Only cases whose dispatch belongs to this delivery zone (zone ID)' })
     @IsOptional()
     @Type(() => Number)
     @IsInt({ message: "The 'zoneId' parameter must be an integer." })
@@ -32,7 +35,7 @@ export class ComplaintCaseFiltersDto {
     @Max(INT4_MAX, { message: `The 'zoneId' parameter must be <= ${INT4_MAX}.` })
     zoneId?: number;
 
-    @ApiPropertyOptional({ maxLength: 40, description: 'Reason code of the complaint, exact match (case-insensitive), as CRM sent it' })
+    @ApiPropertyOptional({ type: String, maxLength: 40, description: 'Reason code of the complaint, exact match (case-insensitive), as CRM sent it' })
     @IsOptional()
     @Transform(trim)
     @IsString()
@@ -45,7 +48,7 @@ export class ComplaintCaseFiltersDto {
     @IsIn(COMPLAINT_INVESTIGATION_STATUSES, { message: `The 'status' parameter must be one of: ${COMPLAINT_INVESTIGATION_STATUSES.join(', ')}.` })
     status?: typeof COMPLAINT_INVESTIGATION_STATUSES[number];
 
-    @ApiPropertyOptional({ type: 'integer', description: 'Only cases assigned to this user (user ID)' })
+    @ApiPropertyOptional({ type: 'integer', minimum: 1, maximum: 2147483647, description: 'Only cases assigned to this user (user ID)' })
     @IsOptional()
     @Type(() => Number)
     @IsInt({ message: "The 'assignedUserId' parameter must be an integer." })

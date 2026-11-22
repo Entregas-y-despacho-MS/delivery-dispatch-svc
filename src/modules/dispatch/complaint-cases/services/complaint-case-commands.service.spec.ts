@@ -7,6 +7,7 @@ import {
     ComplaintCaseNotFoundException,
     ComplaintCaseVersionStaleException,
     ComplaintDispatchNotDeliveredException,
+    ComplaintOrderReferenceInvalidException,
     ComplaintReferenceNotCorrelatedException,
     InvalidComplaintAssigneeException,
     InvalidComplaintTransitionException,
@@ -301,6 +302,23 @@ describe('ComplaintCaseCommandsService.issueVerdict', () => {
 
         await expect(service.issueVerdict(12, verdictDto({ verdict: 'request_RMA' }), ACTOR)).rejects.toThrow(ComplaintDispatchNotDeliveredException);
         expect(updates).toHaveLength(0);
+        expect(outbox.enqueue).not.toHaveBeenCalled();
+    });
+});
+
+describe('ComplaintCaseCommandsService.issueVerdict — order reference', () => {
+    it.each([['longer than 64 characters', 'S'.repeat(65)], ['empty', '']])('request_RMA with an order reference %s answers 422 and queues nothing', async (_name, ref) => {
+        const { service, updates, outbox } = setup(lockedRow({ investigation_status: 'in_investigation', assigned_user_id: 3, source_order_ref: ref }));
+
+        await expect(service.issueVerdict(12, verdictDto({ verdict: 'request_RMA' }), ACTOR)).rejects.toThrow(ComplaintOrderReferenceInvalidException);
+        expect(outbox.enqueue).not.toHaveBeenCalled();
+        expect(updates).toHaveLength(0); // the request is built before the UPDATE: nothing is written
+    });
+
+    it('the other verdicts do not need an order reference', async () => {
+        const { service, outbox } = setup(lockedRow({ investigation_status: 'in_investigation', assigned_user_id: 3, source_order_ref: 'S'.repeat(80) }));
+
+        await expect(service.issueVerdict(12, verdictDto({ verdict: 'not_confirmed' }), ACTOR)).resolves.toBeDefined();
         expect(outbox.enqueue).not.toHaveBeenCalled();
     });
 });

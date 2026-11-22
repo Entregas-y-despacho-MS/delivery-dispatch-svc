@@ -7,16 +7,22 @@ import type { ComplaintVerdict } from '../../../messaging/complaint-intake/entit
 /** The only verdicts a case accepts (RF-U22). */
 export const COMPLAINT_VERDICTS: readonly ComplaintVerdict[] = ['no_return_required', 'request_RMA', 'not_confirmed'];
 
-/** Removes control characters (keeps line breaks and tabs) and trims, so stored text is plain. */
+/**
+ * Removes control characters (keeps line breaks and tabs) and the invisible ones (zero-width spaces and joiners,
+ * direction marks, word joiner, BOM) and trims, so stored text is plain and a reason of only invisible characters is empty.
+ */
 const isPlainChar = (char: string): boolean => {
     const code = char.charCodeAt(0);
-    return code === 0x09 || code === 0x0A || code === 0x0D || (code >= 0x20 && code !== 0x7F);
+    if (code === 0x09 || code === 0x0A || code === 0x0D) return true;
+    const invisible = (code >= 0x200B && code <= 0x200F) || (code >= 0x202A && code <= 0x202E) || code === 0x2060 || code === 0xFEFF;
+    return code >= 0x20 && code !== 0x7F && !invisible;
 };
 const sanitize = ({ value }: { value: unknown }) =>
     typeof value === 'string' ? [...value].filter(isPlainChar).join('').trim() : value;
 
 // The investigation text never carries a link: the API does not hand out public evidence URLs (HU rule 6).
-const NO_URL = /^(?!.*(?:https?:\/\/|www\.)).*$/is;
+// Any `scheme://`, `www.` and `javascript:` are links; a bare domain without scheme cannot be told from ordinary text.
+const NO_URL = /^(?!.*(?:[a-z][a-z0-9+.-]*:\/\/|www\.|javascript:)).*$/is;
 
 export class ComplaintCaseCommandDto {
     @ApiProperty({
@@ -32,7 +38,7 @@ export class ComplaintCaseCommandDto {
 
 export class AssignComplaintCaseDto extends ComplaintCaseCommandDto {
     @ApiPropertyOptional({
-        type: 'integer', minimum: 1, example: 7,
+        type: 'integer', minimum: 1, maximum: 2147483647, example: 7,
         description: 'User to put in charge of the case: an active coordinator or supervisor. Omitted: the person making the request takes the case',
     })
     @IsOptional()

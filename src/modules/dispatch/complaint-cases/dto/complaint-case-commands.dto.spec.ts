@@ -66,3 +66,17 @@ describe('AssignComplaintCaseDto', () => {
         expect(await check({ expectedVersion: 1, assigneeUserId: 'x' })).not.toEqual([]);
     });
 });
+
+describe('IssueComplaintVerdictDto — hardening', () => {
+    it('rejects any scheme and javascript: links, but not ordinary text with a colon or a time', async () => {
+        for (const text of ['ftp://host/file', 'custom+app://x', 'javascript:alert(1)', 'WWW.EXAMPLE.COM']) {
+            expect(await errorsOf({ ...valid, findings: text })).toContain('findings must not contain links.');
+        }
+        expect(await errorsOf({ ...valid, findings: 'Delivered at 12:30. Note: the box was open.' })).toEqual([]);
+    });
+
+    it('invisible characters do not make an empty reason valid', async () => {
+        expect(await errorsOf({ ...valid, decisionReason: '​‍﻿⁠' })).toContain('decisionReason must not be empty.');
+        expect(plainToInstance(IssueComplaintVerdictDto, { ...valid, findings: 'a​b' }).findings).toBe('ab');
+    });
+});
