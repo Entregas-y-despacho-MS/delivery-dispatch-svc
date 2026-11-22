@@ -11,6 +11,8 @@ import { RouteBatchResourcesService } from './route-batch-resources.service.js';
 import { ApproveFinalRouteBatchDto } from '../dto/approve-final-route-batch.dto.js';
 import { ApproveFinalRouteBatchResponseDto } from '../dto/approve-final-route-batch-response.dto.js';
 import { ROUTE_ASSIGNED_EVENT, type RouteAssignedEvent } from '../events/route-assigned.event.js';
+import { ORDER_DISPATCH_ACTIONS } from '../../../audit/order-dispatch-events/domain/order-dispatch-event-actions.js';
+import { OrderDispatchEventsService } from '../../../audit/order-dispatch-events/services/order-dispatch-events.service.js';
 
 interface BatchRow {
   id: number;
@@ -49,6 +51,7 @@ export class RouteBatchFinalApprovalService {
     private readonly capacity: RouteCapacityService,
     private readonly events: EventEmitter2,
     private readonly resources: RouteBatchResourcesService,
+    private readonly orderEvents: OrderDispatchEventsService,
   ) {}
 
   async approve(routeBatchId: number, dto: ApproveFinalRouteBatchDto, actorUserId: number): Promise<ApproveFinalRouteBatchResponseDto> {
@@ -195,6 +198,13 @@ export class RouteBatchFinalApprovalService {
          VALUES ($1, 'assigned', $2, 'user', $3, $4::jsonb)`,
         [dispatch.id, actorUserId, APPROVAL_REASON, JSON.stringify({ routeBatchId: batch.id, driverId, vehicleId, previousVersion: dispatch.version, version: dispatch.version + 1 })],
       );
+      await this.orderEvents.recordForDispatch(dispatch.id, {
+        actor: { id: actorUserId },
+        action: ORDER_DISPATCH_ACTIONS.ASSIGNED,
+        previousStatus: fromStatus,
+        newStatus: DispatchStatusEnum.ASSIGNED,
+        detail: { driverId, vehicleId, version: dispatch.version + 1 },
+      }, { manager });
     }
     await manager.query(
       `INSERT INTO route_batch_events (route_batch_id, event_type, actor_user_id, actor_type, reason, metadata)

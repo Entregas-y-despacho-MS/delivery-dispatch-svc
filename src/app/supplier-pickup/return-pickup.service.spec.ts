@@ -5,6 +5,8 @@ import { RegisterReturnPickupDto } from './dto/register-return-pickup.dto.js';
 import { ReturnPickupObservationsRequiredException, ReturnPickupPhotoRequiredException, ReturnPickupSignatureRequiredException } from './exceptions/supplier-pickup.exception.js';
 import { RETURN_PICKUP_COLLECTION_KIND, ReturnPickupService } from './return-pickup.service.js';
 
+const orderEvents = { recordForDispatch: vi.fn(), record: vi.fn() };
+
 const DISPATCH_ID = 31;
 const DRIVER_ID = 9;
 const ROUTE_BATCH_ID = 7;
@@ -57,7 +59,7 @@ describe('ReturnPickupService', () => {
                 return null;
             }),
         };
-        service = new ReturnPickupService(dataSource as never, dispatchEvents as never, evidences as never);
+        service = new ReturnPickupService(dataSource as never, dispatchEvents as never, evidences as never, orderEvents as never);
         mockOwnership();
     });
 
@@ -72,6 +74,7 @@ describe('ReturnPickupService', () => {
             dispatchId: DISPATCH_ID, eventType: 'status_changed', actorUserId: DRIVER_ID,
             metadata: expect.objectContaining({ kind: RETURN_PICKUP_COLLECTION_KIND, previousStatus: 'in_transit', status: 'picked_up_in_transit', checklistComplete: true }),
         }), { manager });
+        expect(orderEvents.recordForDispatch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: 'dispatch.pickup_collected', previousStatus: 'in_transit', newStatus: 'picked_up_in_transit' }), expect.anything());
     });
 
     it('accepts an incomplete checklist when observations are given, and stores them trimmed', async () => {

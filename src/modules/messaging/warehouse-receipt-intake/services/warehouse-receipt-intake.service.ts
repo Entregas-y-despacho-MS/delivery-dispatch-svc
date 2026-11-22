@@ -4,6 +4,8 @@ import { v7 as uuidv7 } from 'uuid';
 import { RouteBatchClosingService } from '../../../../app/route-batch-closing/services/route-batch-closing.service.js';
 import type { TransactionOptions } from '../../../../plugins/messaging/inbound-message-transaction.port.js';
 import { DispatchEventsService } from '../../../dispatch/dispatch-events/services/dispatch-events.service.js';
+import { ORDER_DISPATCH_ACTIONS } from '../../../audit/order-dispatch-events/domain/order-dispatch-event-actions.js';
+import { OrderDispatchEventsService } from '../../../audit/order-dispatch-events/services/order-dispatch-events.service.js';
 import { DispatchIncidentsService } from '../../../dispatch/dispatch-incidents/services/dispatch-incidents.service.js';
 import { DispatchStatusPublicationService } from '../../../dispatch/dispatch-status-publication/dispatch-status-publication.service.js';
 import { isTerminalDispatchStatus } from '../../../dispatch/dispatches/utils/terminal-statuses.js';
@@ -53,6 +55,7 @@ export class WarehouseReceiptIntakeService {
         private readonly dispatchIncidents: DispatchIncidentsService,
         private readonly statusPublication: DispatchStatusPublicationService,
         private readonly batchClosing: RouteBatchClosingService,
+        private readonly orderEvents: OrderDispatchEventsService,
     ) {}
 
     async apply(data: InventoryReceiptConfirmedData, options: TransactionOptions): Promise<ApplyReceiptResult> {
@@ -172,6 +175,13 @@ export class WarehouseReceiptIntakeService {
                 receiptId: data.receiptId, result: data.result, version: updated.version,
                 ...(outboundRecordVersion !== null && { outboundRecordVersion }),
             },
+            occurredAt: receivedAt,
+        }, { manager });
+        await this.orderEvents.recordForDispatch(found.dispatch_id, {
+            action: ORDER_DISPATCH_ACTIONS.WAREHOUSE_RECEIVED,
+            previousStatus: found.status,
+            newStatus,
+            detail: { receiptId: data.receiptId, result: data.result },
             occurredAt: receivedAt,
         }, { manager });
 

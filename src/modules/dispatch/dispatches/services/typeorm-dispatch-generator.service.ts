@@ -3,6 +3,8 @@ import type { EntityManager } from 'typeorm';
 import type { ConsolidatedOrder } from '../../../messaging/sales-order-intake/domain/consolidated-order.types.js';
 import { DispatchGenerator, type CreatedDispatch } from '../../../messaging/sales-order-intake/ports/dispatch-generator.port.js';
 import type { TransactionOptions } from '../../../../plugins/messaging/inbound-message-transaction.port.js';
+import { ORDER_DISPATCH_ACTIONS } from '../../../audit/order-dispatch-events/domain/order-dispatch-event-actions.js';
+import { OrderDispatchEventsService } from '../../../audit/order-dispatch-events/services/order-dispatch-events.service.js';
 import { calculateServiceTerm } from './service-term.js';
 
 interface IdRow { id: number }
@@ -11,6 +13,10 @@ interface SettingRow { setting_key: string; setting_value: string }
 /** ST-49.1: creates one delivery and all its packages inside the caller's message transaction. */
 @Injectable()
 export class TypeOrmDispatchGenerator extends DispatchGenerator {
+    constructor(private readonly orderEvents: OrderDispatchEventsService) {
+        super();
+    }
+
     async createFromConsolidated(order: ConsolidatedOrder, options: TransactionOptions): Promise<CreatedDispatch> {
         const manager = options.manager;
         if (!manager) throw new Error('Dispatch generation requires the inbound message transaction manager.');
@@ -101,6 +107,13 @@ export class TypeOrmDispatchGenerator extends DispatchGenerator {
                 addressReview,
             })],
         );
+        await this.orderEvents.record({
+            sourceOrderRef: order.salesOrderId,
+            dispatchId: dispatch.id,
+            action: ORDER_DISPATCH_ACTIONS.CREATED,
+            newStatus: addressReview ? 'address_review' : 'pending',
+            detail: { source: 'marketplace_inventory', addressReview },
+        }, { manager });
         if (addressReview) await this.recordAddressReview(manager, dispatch.id, order.salesOrderId);
         return { dispatchId: dispatch.id };
     }

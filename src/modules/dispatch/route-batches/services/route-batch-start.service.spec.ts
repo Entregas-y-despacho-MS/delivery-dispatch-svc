@@ -12,6 +12,8 @@ import { OutboxService } from '../../../messaging/outbound-messages/services/out
 import { RouteBatchStartConflictException } from '../exceptions/route-batch-start-conflict.exception.js';
 import { RouteBatchStartService } from './route-batch-start.service.js';
 
+const orderEvents = { recordForDispatch: vi.fn(), record: vi.fn() };
+
 const eventId = '01933b6e-7f2a-7c3d-9a1b-2f8e6c4d5a10';
 const savedAt = new Date('2026-10-18T12:00:00.000Z');
 const dispatches = [
@@ -147,6 +149,7 @@ function setup(
     outbox,
     events,
     alerts as unknown as PlanningAlertsService,
+    orderEvents as never,
   );
   return { service, manager, runner, outbox, events, alerts };
 }
@@ -199,6 +202,7 @@ describe('RouteBatchStartService.start', () => {
     );
     expect(audit?.[0]).toContain('route_batch_events');
     expect(audit?.[1]?.[2]).toContain('PKG-22-B');
+    expect(orderEvents.recordForDispatch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: 'dispatch.departed', previousStatus: 'assigned', newStatus: 'out_for_delivery', detail: expect.objectContaining({ scope: 'route' }) }), expect.anything());
   });
 
   it('returns the original result for the same eventId without repeating writes', async () => {

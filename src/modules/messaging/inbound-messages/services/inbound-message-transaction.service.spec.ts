@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MessageEnvelope } from '../../../../plugins/messaging/envelope/message-envelope.js';
+import { currentCorrelationId } from '../../../audit/order-dispatch-events/context/correlation-context.js';
 import { InboundMessageTransactionService } from './inbound-message-transaction.service.js';
 
 const envelope: MessageEnvelope = {
@@ -35,6 +36,16 @@ describe('InboundMessageTransactionService', () => {
         expect(order).toEqual(['lock', 'lock', 'lookup', 'business', 'receipt']);
         expect(query.mock.calls[0][1]).toEqual([`inbound-message:${envelope.messageId}`]);
         expect(query.mock.calls[1][1]).toEqual(['sales-order:SO-1']);
+    });
+
+    it('runs the handler with the message id as the correlation id of the events it writes (ST-69.2)', async () => {
+        const { service } = fixture();
+        let seen: string | undefined;
+
+        await service.process(envelope, 'SO-1', async () => { seen = currentCorrelationId(); });
+
+        expect(seen).toBe(envelope.messageId);
+        expect(currentCorrelationId()).toBeUndefined();
     });
 
     it('does not call the business handler or write a receipt for a processed duplicate', async () => {

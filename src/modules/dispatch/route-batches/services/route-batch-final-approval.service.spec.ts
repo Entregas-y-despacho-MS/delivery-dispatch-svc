@@ -4,6 +4,8 @@ import { RouteBatchApprovalConflictException } from '../exceptions/route-batch-a
 import { RouteBatchFinalApprovalService } from './route-batch-final-approval.service.js';
 import { RouteBatchResourcesService } from './route-batch-resources.service.js';
 
+const orderEvents = { recordForDispatch: vi.fn(), record: vi.fn() };
+
 function createHarness(options: { batchVersion?: number; batchStatus?: string; dispatches?: any[]; packageCount?: number; emptyUpdate?: 'batch' | 'dispatch' } = {}) {
   const batch = {
     id: 12,
@@ -54,7 +56,7 @@ function createHarness(options: { batchVersion?: number; batchStatus?: string; d
   const dataSource = { createQueryRunner: vi.fn(() => runner) };
   const capacity = { assertAssignable: vi.fn().mockResolvedValue({ assignable: true }) };
   const events = { emit: vi.fn() };
-  const service = new RouteBatchFinalApprovalService(dataSource as any, capacity as any, events as unknown as EventEmitter2, new RouteBatchResourcesService());
+  const service = new RouteBatchFinalApprovalService(dataSource as any, capacity as any, events as unknown as EventEmitter2, new RouteBatchResourcesService(), orderEvents as never);
   return { service, runner, manager, capacity, events };
 }
 
@@ -79,6 +81,7 @@ describe('RouteBatchFinalApprovalService', () => {
       zoneName: 'Centro',
       version: 5,
     });
+    expect(orderEvents.recordForDispatch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: 'dispatch.assigned', newStatus: 'assigned' }), expect.anything());
   });
 
   it('emits the approved dispatch and priority snapshot in the event order', async () => {

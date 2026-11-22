@@ -3,6 +3,8 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { DispatchEventsService } from '../../../modules/dispatch/dispatch-events/services/dispatch-events.service.js';
+import { OrderDispatchEventsService } from '../../../modules/audit/order-dispatch-events/services/order-dispatch-events.service.js';
+import { ORDER_DISPATCH_ACTIONS } from '../../../modules/audit/order-dispatch-events/domain/order-dispatch-event-actions.js';
 import { DispatchStatusPublicationService } from '../../../modules/dispatch/dispatch-status-publication/dispatch-status-publication.service.js';
 import { DispatchStatusEnum } from '../../../shared/enums/dispatch-status.enum.js';
 import { DISPATCH_STATUS_CHANGED_EVENT, type DispatchStatusChangedEvent } from '../../dispatch-status/dispatch-status-changed.event.js';
@@ -60,6 +62,7 @@ export class DispatchCancelService {
         private readonly closing: RouteBatchClosingService,
         private readonly batchExit: BatchExitService,
         private readonly events: EventEmitter2,
+        private readonly orderEvents: OrderDispatchEventsService,
     ) {}
 
     /**
@@ -130,6 +133,16 @@ export class DispatchCancelService {
                 ...(exit && { fromBatchId: exit.batchId, batchStatusBefore: exit.batchStatusBefore, batchStatusAfter: exit.batchStatusAfter, batchVersion: exit.batchVersion }),
                 ...(outboundRecordVersion !== null && { outboundRecordVersion }),
             },
+            occurredAt: now,
+        }, { manager });
+        await this.orderEvents.recordForDispatch(dispatchId, {
+            actor: { id: userId },
+            action: ORDER_DISPATCH_ACTIONS.CANCELLED,
+            // The dispatch already left its batch (route_batch_id is NULL now): the history keeps the one it left.
+            routeBatchId: batch?.id ?? null,
+            previousStatus: dispatch.status,
+            newStatus: DispatchStatusEnum.CANCELLED,
+            detail: { reasonCode: COORDINATOR_CANCELLED_REASON_CODE },
             occurredAt: now,
         }, { manager });
 

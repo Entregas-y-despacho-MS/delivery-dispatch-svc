@@ -3,6 +3,8 @@ import type { EntityManager } from 'typeorm';
 import type { ConsolidatedOrder } from '../../../messaging/sales-order-intake/domain/consolidated-order.types.js';
 import { TypeOrmDispatchGenerator } from './typeorm-dispatch-generator.service.js';
 
+const orderEvents = { record: vi.fn() };
+
 function consolidatedOrder(overrides: Partial<ConsolidatedOrder> = {}): ConsolidatedOrder {
     return {
         salesOrderId: 'SO-101',
@@ -53,7 +55,8 @@ describe('TypeOrmDispatchGenerator', () => {
         const { manager, query } = createManager();
         const order = consolidatedOrder();
 
-        expect(await new TypeOrmDispatchGenerator().createFromConsolidated(order, { manager })).toEqual({ dispatchId: 40 });
+        expect(await new TypeOrmDispatchGenerator(orderEvents as never).createFromConsolidated(order, { manager })).toEqual({ dispatchId: 40 });
+        expect(orderEvents.record).toHaveBeenCalledWith(expect.objectContaining({ sourceOrderRef: 'SO-101', dispatchId: 40, action: 'dispatch.created', newStatus: 'pending' }), { manager });
 
         const [zoneSql, zoneParams] = statement(query, 'FROM delivery_zones');
         expect(zoneSql).toContain('boundary @> point($1::float8, $2::float8)');
@@ -93,7 +96,7 @@ describe('TypeOrmDispatchGenerator', () => {
         const { manager, query } = createManager(null);
         const order = consolidatedOrder({ deliveryAddress: { line: 'Calle 1', ...(location && { location }) } });
 
-        await new TypeOrmDispatchGenerator().createFromConsolidated(order, { manager });
+        await new TypeOrmDispatchGenerator(orderEvents as never).createFromConsolidated(order, { manager });
 
         const [, params] = statement(query, 'INSERT INTO dispatches');
         expect(params[0]).toBe('address_review');
@@ -109,7 +112,7 @@ describe('TypeOrmDispatchGenerator', () => {
 
     it('requests a fresh tracking code for each dispatch and lets the database enforce uniqueness', async () => {
         const { manager, query } = createManager();
-        const generator = new TypeOrmDispatchGenerator();
+        const generator = new TypeOrmDispatchGenerator(orderEvents as never);
 
         await generator.createFromConsolidated(consolidatedOrder(), { manager });
         await generator.createFromConsolidated(consolidatedOrder({ salesOrderId: 'SO-102' }), { manager });
@@ -122,7 +125,7 @@ describe('TypeOrmDispatchGenerator', () => {
     });
 
     it('rejects a missing transaction manager or warehouse before inserting a dispatch', async () => {
-        const generator = new TypeOrmDispatchGenerator();
+        const generator = new TypeOrmDispatchGenerator(orderEvents as never);
         await expect(generator.createFromConsolidated(consolidatedOrder(), {})).rejects.toThrow('transaction manager');
 
         const { manager, query } = createManager();

@@ -3,6 +3,8 @@ import type { EntityManager } from 'typeorm';
 import type { InventoryReceiptConfirmedData } from '../domain/warehouse-receipt-message.types.js';
 import { WarehouseReceiptIntakeService } from './warehouse-receipt-intake.service.js';
 
+const orderEvents = { recordForDispatch: vi.fn(), record: vi.fn() };
+
 const data: InventoryReceiptConfirmedData = {
     receiptId: 'RCPT-1',
     referenceType: 'rma',
@@ -28,7 +30,7 @@ function build() {
     const statusPublication = { publish: vi.fn().mockResolvedValue(1) };
     const batchClosing = { closeIfComplete: vi.fn() };
     const service = new WarehouseReceiptIntakeService(
-        dispatchEvents as any, dispatchIncidents as any, statusPublication as any, batchClosing as any,
+        dispatchEvents as any, dispatchIncidents as any, statusPublication as any, batchClosing as any, orderEvents as never,
     );
     return { service, dispatchEvents, dispatchIncidents, statusPublication, batchClosing };
 }
@@ -250,6 +252,7 @@ describe('WarehouseReceiptIntakeService.apply', () => {
             dispatchId: 55, status: 'delivered', previousStatus: 'picked_up_in_transit',
         }));
         expect(batchClosing.closeIfComplete).toHaveBeenCalledWith(expect.anything(), 900, expect.objectContaining({ dispatchId: 55 }));
+        expect(orderEvents.recordForDispatch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: 'dispatch.warehouse_received', newStatus: 'delivered' }), expect.anything());
     });
 
     it('opens an incident for with_differences, without closing the dispatch', async () => {
