@@ -44,6 +44,9 @@ export class OtdMetricsDto {
 
     @ApiProperty({ type: 'integer', minimum: 0, example: 0, description: 'Cancelled dispatches with no window, so it cannot be told whether the promise had expired when they were cancelled. They are out of the rate; above 0 the rate is not reliable (N/D for the affected history)' })
     unreconstructableCancellationCount!: number;
+
+    @ApiProperty({ type: 'integer', minimum: 0, example: 4, description: 'Eligible dispatches whose window was changed after it was first promised. They are measured against the window in force (the last one accepted); the original promise is kept in the reschedule history for comparison' })
+    rescheduledPromiseCount!: number;
 }
 
 export class FirstAttemptDto {

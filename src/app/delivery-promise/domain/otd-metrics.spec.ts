@@ -7,6 +7,7 @@ const counts = (overrides: Partial<OtdCounts> = {}): OtdCounts => ({
     invalidWindow: 0,
     excludedCancellations: 0,
     unreconstructableCancellations: 0,
+    rescheduledPromise: 0,
     ...overrides,
 });
 
