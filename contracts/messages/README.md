@@ -83,6 +83,7 @@ Este es el catálogo de tópicos. Cada fila corresponde a `schemas/<tópico>.sch
 | `dispatch.transfer.incident_reported` | Marketplace / Compras | `reasonCode` del catálogo `incident_reasons` y `nextStep` decidido por Despacho. |
 | `dispatch.delivery_complaint.received` | CRM (simulador) | Acuse de un reclamo persistido; `correlationMessageId` es el `messageId` del reclamo. |
 | `dispatch.delivery_complaint.rejected` | CRM (simulador) | Acuse de rechazo con `rejectionCode` estable (enum cerrado). `field` solo con `schema_invalid`; `caseVersion` solo junto a `crmCaseId`. |
+| `dispatch.rma.authorization_requested` | Inventarios | Dictamen `request_RMA` de un reclamo (ES-45). `authorizationRequestId` es el `messageId`. Pide autorizar la devolución: no crea recojo, que nace después con `inventory.return.requested`. Sin datos personales. |
 
 ### Reclamos de CRM (`crm.delivery_complaint.*` / `dispatch.delivery_complaint.*`)
 

@@ -15,7 +15,7 @@ describe('MessageValidator', () => {
         expect(validator.topics).toContain('inventory.shipment.ready');
         expect(validator.topics).toContain('dispatch.transfer.status_changed');
         expect(validator.topics).toContain('crm.delivery_complaint.opened');
-        expect(validator.topics).toHaveLength(20);
+        expect(validator.topics).toHaveLength(21);
     });
 
     it.each(validator.topics)('accepts the example of %s', (topic) => {
