@@ -76,6 +76,7 @@ reservado). Debe coincidir con `PORTAL_ROUTES` del portal web (`config/portal-ro
 | Ajustes | `GET /settings/alert-thresholds` (desde ST-67.1) | Sí (también el Coordinador) |
 | Ajustes | `PUT /settings/alert-thresholds` (desde ST-67.1) | Sí, solo Supervisor (y root); el Coordinador recibe 403. Va en su propio endpoint: `/settings` no cambia |
 | Auditoría | `GET /audit/outbound-message-alerts` | **No**, solo Coordinador |
+| Auditoría | `GET /audit/admin-events` (ST-70.1) | **No**, solo Administrador (y root); el Coordinador, el Supervisor y el Repartidor reciben 403 |
 | Usuarios | `/users`, `/roles`, `POST /auth/register` | **No**, solo Administrador (el listado de `/users` y `/roles` también lo lee el Coordinador) |
 | Repartidor | `my-assignments`, `my-history`, `drivers/me/metrics`, inicio y aceptación de lotes, estados, evidencias, OTP, incidencias, `supplier-pickup`, `return-pickup`, `arrived-at-warehouse`, `tracking/locations`, `push-tokens` | **No**, solo Repartidor |
 
