@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiExtraModels, ApiProperty, getSchemaPath } from '@nestjs/swagger';
 import { VehicleStatusEnum } from '../../../shared/enums/index.js';
 
 /** Why a figure is `N/D` (null) instead of a number. */
@@ -34,7 +34,7 @@ export class FleetAvailabilitySummaryDto {
     @ApiProperty({ type: 'integer', nullable: true, description: 'Registered vehicles out of service. null (N/D) when the cut-off is in the past' })
     outOfService!: number | null;
 
-    @ApiProperty({ enum: FleetUnavailableReason, nullable: true, description: 'Why the four figures are N/D; null when they are numbers' })
+    @ApiProperty({ enum: FleetUnavailableReason, type: String, nullable: true, description: 'Why the four figures are N/D; null when they are numbers' })
     unavailableReason!: FleetUnavailableReason | null;
 }
 
@@ -50,21 +50,22 @@ export class FleetMaintenanceSummaryDto {
 }
 
 export class FleetLoadFigureDto {
-    @ApiProperty({ type: 'number', minimum: 0, description: 'Estimated load of the heaviest route of the vehicle in the period, from the estimates of its dispatches (the ones without estimate are not counted: see `withoutWeight` / `withoutVolume`)' })
+    @ApiProperty({ type: 'number', format: 'double', minimum: 0, description: 'Estimated load of the heaviest route of the vehicle in the period, from the estimates of its dispatches (the ones without estimate are not counted: see `withoutWeight` / `withoutVolume`)' })
     used!: number;
 
-    @ApiProperty({ type: 'number', minimum: 0, description: 'Capacity of the vehicle in the same unit' })
+    @ApiProperty({ type: 'number', format: 'double', minimum: 0, description: 'Capacity of the vehicle in the same unit' })
     capacity!: number;
 
-    @ApiProperty({ type: 'number', minimum: 0, description: 'used / capacity, not capped at 1: above 1 means over capacity' })
+    @ApiProperty({ type: 'number', format: 'double', minimum: 0, description: 'used / capacity, not capped at 1: above 1 means over capacity' })
     ratio!: number;
 }
 
+@ApiExtraModels(FleetLoadFigureDto)
 export class FleetLoadDto {
-    @ApiProperty({ type: FleetLoadFigureDto, nullable: true, description: 'Kilograms against `capacity_kg`, peak of one route. null (N/D) when there is no attribution' })
+    @ApiProperty({ allOf: [{ $ref: getSchemaPath(FleetLoadFigureDto) }], nullable: true, description: 'Kilograms against `capacity_kg`, peak of one route. null (N/D) when there is no attribution' })
     kg!: FleetLoadFigureDto | null;
 
-    @ApiProperty({ type: FleetLoadFigureDto, nullable: true, description: 'Cubic metres against `capacity_m3`, peak of one route; independent from kg (the peaks may come from different routes). null (N/D) when there is no attribution' })
+    @ApiProperty({ allOf: [{ $ref: getSchemaPath(FleetLoadFigureDto) }], nullable: true, description: 'Cubic metres against `capacity_m3`, peak of one route; independent from kg (the peaks may come from different routes). null (N/D) when there is no attribution' })
     m3!: FleetLoadFigureDto | null;
 
     @ApiProperty({ type: 'integer', minimum: 0, description: 'Routes of the vehicle attributed in the period: approved routes (confirmed, in execution or closed) whose vehicle is this one, never inferred from the current status' })
@@ -79,32 +80,32 @@ export class FleetLoadDto {
     @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches counted without a volume estimate: when above 0, `m3.used` is a lower bound' })
     withoutVolume!: number;
 
-    @ApiProperty({ enum: FleetUnavailableReason, nullable: true, description: 'Why kg and m3 are both N/D (`no_route_in_period` or `no_estimate`); null when at least one is a number' })
+    @ApiProperty({ enum: FleetUnavailableReason, type: String, nullable: true, description: 'Why kg and m3 are both N/D (`no_route_in_period` or `no_estimate`); null when at least one is a number' })
     unavailableReason!: FleetUnavailableReason | null;
 }
 
 export class FleetAvailabilityVehicleDto {
-    @ApiProperty({ type: 'integer' })
+    @ApiProperty({ type: 'integer', description: 'Vehicle ID' })
     vehicleId!: number;
 
-    @ApiProperty({ example: '1234-ABC' })
+    @ApiProperty({ example: '1234-ABC', description: 'License plate' })
     plate!: string;
 
-    @ApiProperty({ enum: VehicleStatusEnum, nullable: true, description: 'Current fleet status; null (N/D) when the cut-off is in the past' })
+    @ApiProperty({ enum: VehicleStatusEnum, type: String, nullable: true, description: 'Current fleet status; null (N/D) when the cut-off is in the past' })
     fleetStatus!: VehicleStatusEnum | null;
 
-    @ApiProperty({ type: FleetMaintenanceSummaryDto })
+    @ApiProperty({ type: FleetMaintenanceSummaryDto, description: 'Maintenance of this vehicle in the period' })
     maintenance!: FleetMaintenanceSummaryDto;
 
-    @ApiProperty({ type: FleetLoadDto })
+    @ApiProperty({ type: FleetLoadDto, description: 'Load of this vehicle in the period, attributed only from its approved routes' })
     load!: FleetLoadDto;
 }
 
 export class FleetAvailabilityDriverDto {
-    @ApiProperty({ type: 'integer' })
+    @ApiProperty({ type: 'integer', description: 'Driver (user) ID' })
     driverId!: number;
 
-    @ApiProperty({ type: String, nullable: true })
+    @ApiProperty({ type: String, nullable: true, description: 'Full name of the driver; null if the user has no name stored' })
     driverName!: string | null;
 
     @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches delivered in the period (n)' })
@@ -128,8 +129,16 @@ export class FleetDriverProductivityDto {
     drivers!: FleetAvailabilityDriverDto[];
 }
 
+export class FleetUnitsDto {
+    @ApiProperty({ enum: ['calendar_days'], description: 'Unit of the maintenance time: Bolivia calendar days, never operating hours' })
+    time!: 'calendar_days';
+
+    @ApiProperty({ type: [String], example: ['kg', 'm3'], description: 'Units of the load figures, kept apart: kilograms and cubic metres' })
+    load!: ['kg', 'm3'];
+}
+
 export class FleetAvailabilityDto {
-    @ApiProperty({ type: FleetAvailabilityCutoffDto })
+    @ApiProperty({ type: FleetAvailabilityCutoffDto, description: 'The cut-off day of the availability and whether its state is stored (current) or not (past)' })
     cutoff!: FleetAvailabilityCutoffDto;
 
     @ApiProperty({ type: String, format: 'date', description: 'First Bolivia day of the maintenance and productivity period' })
@@ -138,21 +147,21 @@ export class FleetAvailabilityDto {
     @ApiProperty({ type: String, format: 'date', description: 'Last Bolivia day of the period' })
     to!: string;
 
-    @ApiProperty({ example: { time: 'calendar_days', load: ['kg', 'm3'] }, description: 'Units used: calendar days (never hours) and kg / m³ kept apart' })
-    units!: { time: 'calendar_days'; load: ['kg', 'm3'] };
+    @ApiProperty({ type: FleetUnitsDto, description: 'Units used: calendar days (never hours) and kg / m³ kept apart' })
+    units!: FleetUnitsDto;
 
-    @ApiProperty({ type: 'integer', minimum: 0, description: 'Vehicles in the answer after the filters (n). 0 = "Sin datos"' })
+    @ApiProperty({ type: 'integer', minimum: 0, description: 'Vehicles in the answer after the filters (n). 0 means no data' })
     n!: number;
 
-    @ApiProperty({ type: FleetAvailabilitySummaryDto })
+    @ApiProperty({ type: FleetAvailabilitySummaryDto, description: 'Assignable / registered vehicles at the cut-off, apart from maintenance and out of service' })
     availability!: FleetAvailabilitySummaryDto;
 
     @ApiProperty({ type: FleetMaintenanceSummaryDto, description: 'Maintenance of all the vehicles in the answer' })
     maintenance!: FleetMaintenanceSummaryDto;
 
-    @ApiProperty({ type: [FleetAvailabilityVehicleDto] })
+    @ApiProperty({ type: [FleetAvailabilityVehicleDto], description: 'One row per vehicle of the answer, ordered by plate; empty when no vehicle matches the filters' })
     vehicles!: FleetAvailabilityVehicleDto[];
 
-    @ApiProperty({ type: FleetDriverProductivityDto })
+    @ApiProperty({ type: FleetDriverProductivityDto, description: 'Deliveries and attempts of the period; the driver rows depend on the role of the caller' })
     productivity!: FleetDriverProductivityDto;
 }

@@ -135,6 +135,12 @@ describe('FleetAvailabilityService.atCutoff', () => {
             expect(repository.listDriverProductivity).toHaveBeenCalledWith('2026-11-19', '2026-11-19', { vehicleId: 1, driverId: 5 });
         });
 
+        it('does not narrow the productivity of a role without driver detail by vehicle (it could rebuild the driver figures)', async () => {
+            const { service, repository } = buildGet();
+            await service.get({ vehicleId: 1 }, 'coordinator', NOW);
+            expect(repository.listDriverProductivity).toHaveBeenCalledWith('2026-11-19', '2026-11-19', { vehicleId: undefined, driverId: undefined });
+        });
+
         it('keeps the real maintenance of a past period and marks the status N/D', async () => {
             const { service } = buildGet();
             const answer = await service.get({ cutoff: '2026-11-10', from: '2026-11-01', to: '2026-11-10' }, 'supervisor', NOW);

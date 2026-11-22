@@ -67,7 +67,9 @@ export class FleetAvailabilityService {
         const [maintenance, load, productivity] = await Promise.all([
             this.maintenance(vehicleIds, period, params),
             this.load(answer.vehicles, period),
-            this.repository.listDriverProductivity(period.from, period.to, { vehicleId: params.vehicleId, driverId: params.driverId }),
+            // A role without the driver detail gets the fleet-wide aggregate: narrowing it by vehicle would let it rebuild the
+            // figures driver by driver (a vehicle has one driver per day).
+            this.repository.listDriverProductivity(period.from, period.to, { vehicleId: canSeeDriverDetail(role) ? params.vehicleId : undefined, driverId: params.driverId }),
         ]);
         const past = answer.cutoff.kind === 'past';
         return {
