@@ -37,7 +37,8 @@ export interface RecordedManifest {
 export class RouteManifestService {
     async record(manager: EntityManager, input: RecordManifestInput): Promise<RecordedManifest> {
         const [batch]: { version: number; vehicle_id: number | null; driver_id: number | null }[] = await manager.query(
-            `SELECT version, vehicle_id, driver_id FROM route_batches WHERE route_batch_id = $1`,
+            // The caller already holds this lock; taking it here makes `manifest_version = max + 1` safe even for a caller that forgot.
+            `SELECT version, vehicle_id, driver_id FROM route_batches WHERE route_batch_id = $1 FOR UPDATE`,
             [input.routeBatchId],
         );
         if (!batch) throw new Error(`Route batch ${input.routeBatchId} does not exist; its manifest cannot be written.`);

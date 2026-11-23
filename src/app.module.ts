@@ -68,6 +68,7 @@ import { PickupOrdersModule } from './app/pickup-orders/pickup-orders.module.js'
 import { SlaReportModule } from './app/sla-report/sla-report.module.js';
 import { DeliveryPromiseModule } from './app/delivery-promise/delivery-promise.module.js';
 import { PlanningPipelineModule } from './app/planning-pipeline/planning-pipeline.module.js';
+import { PlanningSnapshotsModule } from './app/planning-snapshots/planning-snapshots.module.js';
 import { FleetKpisModule } from './app/fleet-kpis/fleet-kpis.module.js';
 import { OperationalAlertsModule } from './modules/operational-alerts/operational-alerts.module.js';
 import { FleetReportsModule } from './app/fleet-reports/fleet-reports.module.js';
@@ -103,6 +104,7 @@ import { FleetReportsModule } from './app/fleet-reports/fleet-reports.module.js'
     SlaReportModule,
     DeliveryPromiseModule,
     PlanningPipelineModule,
+    PlanningSnapshotsModule,
     FleetKpisModule,
     OperationalAlertsModule,
     FleetReportsModule,
