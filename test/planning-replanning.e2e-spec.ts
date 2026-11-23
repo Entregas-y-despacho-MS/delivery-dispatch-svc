@@ -620,4 +620,39 @@ describe('Planning cohort after replanning, load and route completion (e2e, ST-3
             }
         });
     });
+
+    describe('what the dashboard must not show', () => {
+        it('never answers a duration, an ETA or an end time: there is no planned time to compare with', async () => {
+            const bodies = [
+                (await completion('')).body,
+                (await coverage(`cutoffId=${scheduledId}`)).body,
+                (await get(`/planning/cutoffs?date=${shiftDate}`)).body,
+            ];
+            const forbidden = /duration|^eta|Eta[A-Z]?|minutes|elapsed|endedAt|finishedAt|closedAt|plannedStart|plannedEnd|actualStart|actualEnd/;
+            for (const body of bodies) expect([...allKeys(body)].filter((key) => forbidden.test(key))).toEqual([]);
+            // The route only knows when it left (the started manifest), never when it is planned to end.
+            const a = (await completion(`zoneId=${zone[1]}`)).body.data[0];
+            expect(Number.isNaN(Date.parse(a.startedAt))).toBe(false);
+        });
+
+        it('does not leak customer data, tokens or evidence in the completion or the coverage', async () => {
+            const bodies = [(await completion(`zoneId=${zone[1]}`)).body, (await completion(`zoneId=${zone[2]}`)).body, (await coverage(`cutoffId=${scheduledId}&zoneId=${zone[1]}`)).body];
+            for (const body of bodies) {
+                const keys = [...allKeys(body)];
+                expect(keys.filter((key) => /address|customer|phone|email|token|trackingCode|evidence|signature|receiver|latitude|longitude/i.test(key))).toEqual([]);
+                const text = JSON.stringify(body);
+                expect(text).not.toContain('Calle Privada');
+                expect(text).not.toContain('Receptor E2E');
+                expect(text).not.toContain('e2e://');
+            }
+        });
+
+        it('is closed to the driver and to a request without token', async () => {
+            for (const path of [`/planning/route-completion?date=${shiftDate}`, `/planning/cutoffs/coverage?cutoffId=${scheduledId}`, `/planning/cutoffs?date=${shiftDate}`]) {
+                expect((await get(path, tokens.driverA)).status).toBe(403);
+                expect((await get(path, tokens.supervisor)).status).toBe(403);
+                expect((await request(app.getHttpServer()).get(api(path))).status).toBe(401);
+            }
+        });
+    });
 });
