@@ -98,7 +98,7 @@ export class SupplierPickupController {
     @ApiIdParam('Dispatch')
     @ApiOperation({
         summary: 'Register the driver’s arrival at the destination warehouse',
-        description: 'The assigned driver marks arrival at the destination warehouse for a picked_up_in_transit supplier pickup or customer return pickup (warehouse_return_pickup). Does not change the dispatch status; Inventarios still receives dispatch.transfer.status_changed. eventId makes retries idempotent.',
+        description: 'The assigned driver marks arrival at the destination warehouse for a picked_up_in_transit supplier pickup or customer return pickup (warehouse_return_pickup). Accepted only once per dispatch and never marks the goods as received: the dispatch stays picked_up_in_transit (Inventarios still receives dispatch.transfer.status_changed) until the matching inventory.receipt.confirmed arrives, which is what moves a customer return pickup to returned_to_warehouse. eventId makes retries idempotent: repeating the same eventId returns the original result, even after the receipt was confirmed; a new eventId after that is refused with DISPATCH_NOT_PICKED_UP. A refused request changes nothing.',
     })
     @ApiOkResponse({ type: ArrivedAtWarehouseResponseDto, description: 'The arrival was registered (or this eventId was already processed; the original result is returned).', headers: { [SETTINGS_VERSION_HEADER]: { description: 'Current operational settings version. Reload settings when this value changes.', schema: { type: 'integer' } } } })
     @ApiBadRequests({ validation: true, id: true, example: ['eventId must be a UUID v7'] })

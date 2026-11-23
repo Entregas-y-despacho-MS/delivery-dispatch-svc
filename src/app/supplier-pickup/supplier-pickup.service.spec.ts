@@ -228,6 +228,72 @@ describe('SupplierPickupService', () => {
             .rejects.toMatchObject({ response: { error: 'WAREHOUSE_ARRIVAL_ALREADY_REGISTERED' } });
     });
 
+    describe('arrival of a customer return pickup that must change nothing (ST-306.2)', () => {
+        const arrivedAt = new Date('2026-11-20T15:00:00.000Z');
+        const arrivalDto = () => ({ eventId: uuidv7(), occurredAt: new Date().toISOString(), ...gps });
+        const returnPickup = (overrides: Record<string, unknown> = {}) => baseDispatch({ dispatch_type: 'warehouse_return_pickup', status: 'picked_up_in_transit', ...overrides });
+
+        function expectNothingWritten() {
+            expect(manager.query.mock.calls.some(([sql]) => /\b(SET|INSERT)\b/i.test(String(sql)))).toBe(false);
+            expect(dispatchEvents.create).not.toHaveBeenCalled();
+            expect(statusPublication.publishTransferUpdate).not.toHaveBeenCalled();
+            expect(orderEvents.recordForDispatch).not.toHaveBeenCalled();
+        }
+
+        it.each([
+            ['another dispatch type', baseDispatch({ dispatch_type: 'delivery', status: 'picked_up_in_transit' }), 'DISPATCH_NOT_SUPPLIER_PICKUP'],
+            ['a pickup still in transit', returnPickup({ status: 'in_transit' }), 'DISPATCH_NOT_PICKED_UP'],
+            ['a pickup already confirmed by the warehouse', returnPickup({ status: 'returned_to_warehouse', arrived_at_warehouse_at: arrivedAt }), 'DISPATCH_NOT_PICKED_UP'],
+            ['a second arrival with a new eventId', returnPickup({ arrived_at_warehouse_at: arrivedAt }), 'WAREHOUSE_ARRIVAL_ALREADY_REGISTERED'],
+        ])('answers a conflict and writes nothing for %s', async (_case, dispatch, code) => {
+            mockOwnership(dispatch);
+
+            await expect(service.registerArrival(DISPATCH_ID, DRIVER_ID, arrivalDto())).rejects.toMatchObject({ response: { error: code } });
+
+            expectNothingWritten();
+        });
+
+        it('answers a conflict and writes nothing when the eventId belongs to an event of another dispatch', async () => {
+            mockOwnership(returnPickup());
+            dispatchEvents.findByClientEventId.mockResolvedValue({ dispatchId: 999, eventType: 'status_changed', createdAt: new Date(), metadata: { kind: 'warehouse_arrival' } });
+
+            await expect(service.registerArrival(DISPATCH_ID, DRIVER_ID, arrivalDto())).rejects.toMatchObject({ response: { error: 'EVENT_ID_ALREADY_USED' } });
+
+            expectNothingWritten();
+        });
+
+        it('replays the original arrival after the warehouse receipt confirmed the return, without writing', async () => {
+            mockOwnership(returnPickup({ status: 'returned_to_warehouse', arrived_at_warehouse_at: arrivedAt }));
+            dispatchEvents.findByClientEventId.mockResolvedValue({
+                dispatchId: DISPATCH_ID, eventType: 'status_changed', createdAt: new Date('2026-11-20T15:00:01.000Z'), metadata: { kind: 'warehouse_arrival' },
+            });
+
+            const result = await service.registerArrival(DISPATCH_ID, DRIVER_ID, arrivalDto());
+
+            expect(result).toEqual({ dispatchId: DISPATCH_ID, arrivedAtWarehouseAt: arrivedAt });
+            expectNothingWritten();
+        });
+
+        it('never moves the dispatch to returned_to_warehouse: only the arrival timestamp is written', async () => {
+            mockOwnership(returnPickup());
+            manager.query.mockImplementation(async (sql: string) => {
+                if (sql.includes('SELECT route_batch_id FROM dispatches')) return [{ route_batch_id: ROUTE_BATCH_ID }];
+                if (sql.includes('SELECT route_batch_id, driver_id FROM route_batches')) return [{ route_batch_id: ROUTE_BATCH_ID, driver_id: DRIVER_ID }];
+                if (sql.includes('JOIN dispatch_types')) return [returnPickup()];
+                if (sql.includes('arrived_at_warehouse_at = $1')) return [{ arrived_at_warehouse_at: arrivedAt }];
+                return [];
+            });
+
+            await service.registerArrival(DISPATCH_ID, DRIVER_ID, arrivalDto());
+
+            const writes = manager.query.mock.calls.map(([sql]) => String(sql)).filter((sql) => /\b(SET|INSERT)\b/i.test(sql));
+            expect(writes).toHaveLength(1);
+            expect(writes[0]).toContain('arrived_at_warehouse_at');
+            expect(writes[0]).not.toContain('dispatch_status_id');
+            expect(statusPublication.publishTransferUpdate).toHaveBeenCalledWith(manager, expect.objectContaining({ status: 'picked_up_in_transit', previousStatus: 'picked_up_in_transit' }));
+        });
+    });
+
     it('rejects a collection eventId reused against the arrival endpoint, and vice versa', async () => {
         mockOwnership(baseDispatch({ status: 'picked_up_in_transit' }));
         dispatchEvents.findByClientEventId.mockResolvedValue({

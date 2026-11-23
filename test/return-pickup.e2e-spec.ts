@@ -257,4 +257,142 @@ describe('Customer return pickup: POST /dispatches/:id/return-pickup and /arrive
         expect(response.status).toBe(409);
         expect(response.body.error).toBe('DISPATCH_NOT_PICKED_UP');
     });
+
+    describe('arrival: accepted once, never marks the return as received (ST-306.2)', () => {
+        /** A return pickup already collected from the customer, so only the arrival is missing. */
+        async function collected(): Promise<number> {
+            const id = await pickup();
+            const photoId = await insertEvidence(id, 'photo', 'https://files.test/p.jpg');
+            const signatureId = await insertEvidence(id, 'signature', 'https://files.test/s.png');
+            expect((await post(`/dispatches/${id}/return-pickup`, body(photoId, signatureId))).status).toBe(200);
+            return id;
+        }
+
+        /** Everything an arrival could touch, to prove a refused one changes nothing. */
+        async function snapshot(id: number) {
+            const [row] = await db.query(
+                `SELECT ds.name AS status, d.arrived_at_warehouse_at AS arrived, d.source_order_ref AS ref,
+                        (SELECT count(*)::int FROM dispatch_events e WHERE e.dispatch_id = d.dispatch_id) AS events
+                   FROM dispatches d JOIN dispatch_statuses ds ON ds.dispatch_status_id = d.dispatch_status_id
+                  WHERE d.dispatch_id = $1`, [id],
+            );
+            const [{ messages }] = await db.query(`SELECT count(*)::int AS messages FROM outbound_messages WHERE payload->'data'->>'salesOrderId' = $1`, [row.ref]);
+            return { status: row.status, arrived: row.arrived, events: row.events, messages };
+        }
+
+        /** The warehouse receipt is applied by its own consumer (ES-240); here only its resulting state is needed. */
+        async function confirmReceipt(id: number): Promise<void> {
+            await db.query('UPDATE dispatches SET dispatch_status_id = $1 WHERE dispatch_id = $2', [statusIds.returned_to_warehouse, id]);
+        }
+
+        it('refuses the arrival of another dispatch type with 409 and leaves the dispatch untouched', async () => {
+            const [{ dispatch_type_id: deliveryTypeId }] = await db.query(`SELECT dispatch_type_id FROM dispatch_types WHERE name='delivery'`);
+            const id = await pickup('picked_up_in_transit');
+            await db.query('UPDATE dispatches SET dispatch_type_id = $1 WHERE dispatch_id = $2', [deliveryTypeId, id]);
+            const before = await snapshot(id);
+
+            const response = await post(`/dispatches/${id}/arrived-at-warehouse`, arrivalBody());
+
+            expect(response.status).toBe(409);
+            expect(response.body.error).toBe('DISPATCH_NOT_SUPPLIER_PICKUP');
+            expect(await snapshot(id)).toEqual(before);
+        });
+
+        it('leaves the dispatch untouched when the pickup was not collected yet', async () => {
+            const id = await pickup();
+            const before = await snapshot(id);
+
+            const response = await post(`/dispatches/${id}/arrived-at-warehouse`, arrivalBody());
+
+            expect(response.status).toBe(409);
+            expect(response.body.error).toBe('DISPATCH_NOT_PICKED_UP');
+            expect(await snapshot(id)).toEqual(before);
+        });
+
+        it('leaves the dispatch untouched on a second arrival with a new eventId', async () => {
+            const id = await collected();
+            expect((await post(`/dispatches/${id}/arrived-at-warehouse`, arrivalBody())).status).toBe(200);
+            const arrived = await snapshot(id);
+
+            const second = await post(`/dispatches/${id}/arrived-at-warehouse`, arrivalBody());
+
+            expect(second.status).toBe(409);
+            expect(second.body.error).toBe('WAREHOUSE_ARRIVAL_ALREADY_REGISTERED');
+            expect(await snapshot(id)).toEqual(arrived);
+        });
+
+        it('leaves the dispatch untouched when the eventId was already used by the arrival of another dispatch', async () => {
+            const first = await collected();
+            const usedEventId = uuidv7();
+            expect((await post(`/dispatches/${first}/arrived-at-warehouse`, arrivalBody({ eventId: usedEventId }))).status).toBe(200);
+            const other = await collected();
+            const before = await snapshot(other);
+
+            const reused = await post(`/dispatches/${other}/arrived-at-warehouse`, arrivalBody({ eventId: usedEventId }));
+
+            expect(reused.status).toBe(409);
+            expect(reused.body.error).toBe('EVENT_ID_ALREADY_USED');
+            expect(await snapshot(other)).toEqual(before);
+        });
+
+        it('leaves the dispatch untouched when another driver tries the arrival', async () => {
+            const id = await collected();
+            const before = await snapshot(id);
+
+            const response = await post(`/dispatches/${id}/arrived-at-warehouse`, arrivalBody(), 'foreign');
+
+            expect(response.status).toBe(403);
+            expect(await snapshot(id)).toEqual(before);
+        });
+
+        it('keeps the return pending after the arrival and answers the same result to a replay once the receipt confirmed it', async () => {
+            const id = await collected();
+            const eventId = uuidv7();
+            const response = await post(`/dispatches/${id}/arrived-at-warehouse`, arrivalBody({ eventId }));
+            expect(response.status).toBe(200);
+            expect(await status(id)).toBe('picked_up_in_transit');
+
+            await confirmReceipt(id);
+            const confirmed = await snapshot(id);
+            expect(confirmed.status).toBe('returned_to_warehouse');
+
+            const replay = await post(`/dispatches/${id}/arrived-at-warehouse`, arrivalBody({ eventId }));
+            expect(replay.status).toBe(200);
+            expect(replay.body).toEqual(response.body);
+
+            const again = await post(`/dispatches/${id}/arrived-at-warehouse`, arrivalBody());
+            expect(again.status).toBe(409);
+            expect(again.body.error).toBe('DISPATCH_NOT_PICKED_UP');
+            expect(await snapshot(id)).toEqual(confirmed);
+        });
+
+        it('answers the same result to two simultaneous arrivals with the same eventId and records one event', async () => {
+            const id = await collected();
+            const eventId = uuidv7();
+
+            const responses = await Promise.all([
+                post(`/dispatches/${id}/arrived-at-warehouse`, arrivalBody({ eventId })),
+                post(`/dispatches/${id}/arrived-at-warehouse`, arrivalBody({ eventId })),
+            ]);
+
+            expect(responses.map((response) => response.status)).toEqual([200, 200]);
+            expect(responses[0].body).toEqual(responses[1].body);
+            expect((await db.query(`SELECT count(*)::int AS count FROM dispatch_events WHERE dispatch_id = $1 AND metadata->>'kind' = 'warehouse_arrival'`, [id]))[0].count).toBe(1);
+            expect(await status(id)).toBe('picked_up_in_transit');
+        });
+
+        it('accepts only one of two simultaneous arrivals with different eventIds', async () => {
+            const id = await collected();
+
+            const responses = await Promise.all([
+                post(`/dispatches/${id}/arrived-at-warehouse`, arrivalBody()),
+                post(`/dispatches/${id}/arrived-at-warehouse`, arrivalBody()),
+            ]);
+
+            expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+            expect(responses.find((response) => response.status === 409)!.body.error).toBe('WAREHOUSE_ARRIVAL_ALREADY_REGISTERED');
+            expect((await db.query(`SELECT count(*)::int AS count FROM dispatch_events WHERE dispatch_id = $1 AND metadata->>'kind' = 'warehouse_arrival'`, [id]))[0].count).toBe(1);
+            expect(await status(id)).toBe('picked_up_in_transit');
+        });
+    });
 });

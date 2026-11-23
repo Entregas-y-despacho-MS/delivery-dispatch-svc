@@ -29,9 +29,9 @@ export class ReturnPickupResponseDto {
 }
 
 export class ArrivedAtWarehouseResponseDto {
-    @ApiProperty({ example: 42, description: 'Dispatch identifier.' })
+    @ApiProperty({ type: 'integer', example: 42, description: 'Dispatch identifier.' })
     dispatchId!: number;
 
-    @ApiProperty({ format: 'date-time', description: 'Server timestamp at which the arrival at the destination warehouse was recorded.' })
+    @ApiProperty({ format: 'date-time', description: 'Time at which the arrival at the destination warehouse was recorded. It is not a receipt: the dispatch status does not change until the warehouse confirms it. A repeated eventId returns the same value.' })
     arrivedAtWarehouseAt!: Date;
 }
