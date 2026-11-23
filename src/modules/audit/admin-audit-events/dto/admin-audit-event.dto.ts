@@ -36,7 +36,12 @@ export class AdminAuditEventDto implements AuditEventView {
     @ApiPropertyOptional({ type: String, nullable: true, description: 'Client address. Only returned to ROOT.' })
     ip?: string | null;
 
-    @ApiPropertyOptional({ type: 'object', additionalProperties: true, description: 'Declared body fields of the action. Only returned to ROOT.' })
+    @ApiPropertyOptional({
+        type: 'object',
+        properties: { roleId: { type: 'integer', description: 'Example of a declared body field; the keys depend on the action.' } },
+        additionalProperties: true,
+        description: 'Scalar body fields the action declared (never secrets or personal data); the keys depend on the action. Only returned to ROOT.',
+    })
     metadata?: Record<string, string | number | boolean | null>;
 }
 

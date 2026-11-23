@@ -10,12 +10,12 @@ const dateMessage = (name: string) => `The '${name}' parameter must be an ISO 86
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 
 export class FindAdminAuditEventsParamsDto extends PaginationParamsDto {
-    @ApiProperty({ type: String, format: 'date-time', example: '2026-11-20T00:00:00-04:00', description: `Start of the window, inclusive. ISO 8601 with an explicit offset (a '+' in the query string must be sent as %2B). The window must not exceed ${AUDIT_QUERY_MAX_RANGE_DAYS} days.` })
+    @ApiProperty({ type: String, format: 'date-time', description: `Start of the window, inclusive, e.g. 2026-11-20T00:00:00-04:00. ISO 8601 with an explicit offset (a '+' in the query string must be sent as %2B). The window must not exceed ${AUDIT_QUERY_MAX_RANGE_DAYS} days.` })
     @IsISO8601({ strict: true }, { message: dateMessage('from') })
     @Matches(ISO_WITH_OFFSET, { message: dateMessage('from') })
     from!: string;
 
-    @ApiProperty({ type: String, format: 'date-time', example: '2026-11-24T00:00:00-04:00', description: "End of the window, exclusive. ISO 8601 with an explicit offset; must be after 'from'." })
+    @ApiProperty({ type: String, format: 'date-time', description: "End of the window, exclusive, e.g. 2026-11-24T00:00:00-04:00. ISO 8601 with an explicit offset; must be after 'from'." })
     @IsISO8601({ strict: true }, { message: dateMessage('to') })
     @Matches(ISO_WITH_OFFSET, { message: dateMessage('to') })
     to!: string;
