@@ -32,6 +32,8 @@ import { ComplaintCasesModule } from './modules/dispatch/complaint-cases/complai
 import { PickupSchedulingModule } from './modules/dispatch/pickup-scheduling/pickup-scheduling.module.js';
 import { RouteAssignmentModule } from './app/route-assignment/route-assignment.module.js';
 import { RouteBatchesModule } from './modules/dispatch/route-batches/route-batches.module.js';
+import { PlanningCutoffsModule } from './modules/dispatch/planning-cutoffs/planning-cutoffs.module.js';
+import { RouteManifestsModule } from './modules/dispatch/route-manifests/route-manifests.module.js';
 import { DispatchReservationsModule } from './modules/dispatch/dispatch-reservations/dispatch-reservations.module.js';
 import { CacheModule } from './plugins/cache/cache.module.js';
 import { MessagingModule } from './plugins/messaging/messaging.module.js';
@@ -140,6 +142,8 @@ import { FleetReportsModule } from './app/fleet-reports/fleet-reports.module.js'
     DispatchHistoryModule,
     ComplaintCasesModule,
     RouteBatchesModule,
+    PlanningCutoffsModule,
+    RouteManifestsModule,
     DispatchReservationsModule,
     PickupSchedulingModule,
     RouteAssignmentModule,

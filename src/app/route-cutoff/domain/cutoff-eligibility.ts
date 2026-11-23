@@ -8,7 +8,17 @@
  */
 import type { CutoffEligibility, CutoffStop } from './cutoff-types.js';
 
-export function classifyStop(stop: CutoffStop, now: Date, windowMinutes: number): CutoffEligibility {
+/**
+ * What `classifyStop` really reads of a stop. A `CutoffStop` satisfies it; the planning snapshot (ST-302.2) builds it
+ * from a plain read so both use the same rule instead of two copies that could drift apart.
+ */
+export interface ClassifiableStop {
+    promiseNotifiedAt: Date | null;
+    promiseFirmedAt: Date | null;
+    dispatch: { status: string; dispatchType: string };
+}
+
+export function classifyStop(stop: ClassifiableStop, now: Date, windowMinutes: number): CutoffEligibility {
     if (stop.promiseFirmedAt) return 'firm';
     // A customer pickup never gets a promise (ST-81.3): it always enters, same as a firm delivery.
     if (stop.dispatch.status === 'pickup_scheduled' || stop.dispatch.dispatchType === 'supplier_pickup') return 'pickup';
