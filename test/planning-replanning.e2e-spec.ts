@@ -510,4 +510,114 @@ describe('Planning cohort after replanning, load and route completion (e2e, ST-3
             expect(manifestsC[1].dispatch_ids).toEqual(ids('c1'));
         });
     });
+
+    describe('during the route', () => {
+        it('a stop not delivered and rescheduled by the coordinator writes a revised manifest and counts as unsuccessful', async () => {
+            expect((await driverStatus(tokens.driverA, id.a2, 'in_transit')).status).toBe(200);
+            expect((await driverStatus(tokens.driverA, id.a2, 'not_delivered')).status).toBe(200);
+            const response = await reschedule('a2');
+            expect(response.status).toBe(200);
+
+            const manifestsA = await manifestsOf(batch.A);
+            expect(manifestsA.map((m: { kind: string }) => m.kind)).toEqual(['confirmed', 'started', 'revised']);
+            expect(manifestsA[2].dispatch_ids).toEqual(ids('a1', 'a8'));
+            expect(manifestsA[2].reason).toBeTruthy();
+
+            expect((await driverStatus(tokens.driverB, id.b2, 'in_transit')).status).toBe(200);
+            expect((await driverStatus(tokens.driverB, id.b2, 'not_delivered')).status).toBe(200);
+        });
+
+        it('a stop reassigned between two started routes writes one revised manifest per route', async () => {
+            const [origin, target] = [await batchRow(batch.A), await batchRow(batch.B)];
+            const response = await post(`/route-batches/${batch.A}/reassign`, {
+                dispatchIds: [id.a1], targetBatchId: batch.B, reasonCode, version: origin.version, targetVersion: target.version,
+            });
+            expect(response.status).toBe(200);
+            expect(response.body).toMatchObject({ fromBatchId: batch.A, toBatchId: batch.B, fromBatchClosed: false });
+
+            const manifestsA = await manifestsOf(batch.A);
+            const manifestsB = await manifestsOf(batch.B);
+            expect(manifestsA.map((m: { kind: string }) => m.kind)).toEqual(['confirmed', 'started', 'revised', 'revised']);
+            expect(manifestsB.map((m: { kind: string }) => m.kind)).toEqual(['confirmed', 'started', 'revised']);
+            expect(manifestsA[3]).toMatchObject({ reason: reasonCode, dispatch_ids: ids('a8') });
+            expect(manifestsB[2]).toMatchObject({ reason: reasonCode, dispatch_ids: ids('a1', 'b1', 'b2') });
+        });
+
+        it('the destination route delivers the reassigned stop', async () => {
+            expect((await driverStatus(tokens.driverB, id.a1, 'in_transit')).status).toBe(200);
+            await dataSource.query(
+                `INSERT INTO delivery_evidences (delivery_evidence_id, dispatch_id, type, file_url, captured_at, receiver_name, receiver_document)
+                 VALUES ($1, $2, 'signature', 'e2e://signature.png', NOW(), 'Receptor E2E', '1234567')`,
+                [uuidv7(), id.a1],
+            );
+            expect((await driverStatus(tokens.driverB, id.a1, 'delivered')).status).toBe(200);
+            expect(await dispatchRow('a1')).toMatchObject({ status: 'delivered', route_batch_id: batch.B });
+        });
+    });
+
+    describe('route completion over the frozen baseline', () => {
+        it('gives each route the counts of the table, each stop in one category', async () => {
+            for (const [route, n] of [['A', 1], ['B', 2], ['C', 3]] as const) {
+                const response = await completion(`zoneId=${zone[n]}`);
+                expect(response.status).toBe(200);
+                const expected = expectedRoute(route);
+                expect(response.body.data).toHaveLength(1);
+                const [data] = response.body.data;
+                expect(data).toMatchObject({ routeBatchId: batch[route], manifestVersion: 2, departed: expected.departed, finalized: expected.finalized, finalizedPct: expected.finalizedPct });
+                expect(data.counts).toEqual(expected.counts);
+                const outcomes = Object.fromEntries(data.stops.map((stop: { dispatchId: number; outcome: string }) => [stop.dispatchId, stop.outcome]));
+                expect(outcomes).toEqual(Object.fromEntries(expected.keys.map((key) => [id[key], CASES[key].outcome])));
+            }
+            // A mano: A = a1 entregada (en B), a2 no exitosa, a8 pendiente, a7 quitada antes de salir → 2 de 3 = 66,67 %.
+            expect(expectedRoute('A')).toMatchObject({ departed: 3, finalized: 2, finalizedPct: 66.67 });
+            expect(expectedRoute('B')).toMatchObject({ departed: 2, finalized: 1, finalizedPct: 50 });
+            // C = c1 pendiente, c2 cancelada antes de salir (no cuenta como salida) → 0 de 1.
+            expect(expectedRoute('C')).toMatchObject({ departed: 1, finalized: 0, finalizedPct: 0, counts: expect.objectContaining({ cancelledBeforeStart: 1 }) });
+        });
+
+        it('counts the reassigned stop only in the route it left, with its current status (current behaviour)', async () => {
+            const b = (await completion(`zoneId=${zone[2]}`)).body.data[0];
+            expect(b.stops.map((stop: { dispatchId: number }) => stop.dispatchId)).not.toContain(id.a1);
+            const a = (await completion(`zoneId=${zone[1]}`)).body.data[0];
+            expect(a.stops.find((stop: { dispatchId: number }) => stop.dispatchId === id.a1)).toMatchObject({ outcome: 'delivered', currentStatus: 'delivered' });
+        });
+
+        it('keeps the baseline after the revisions: the started manifest, not the last revised one', async () => {
+            const a = (await completion(`zoneId=${zone[1]}`)).body.data[0];
+            expect(a.manifestVersion).toBe(2);
+            expect(a.stops).toHaveLength(4);
+        });
+
+        it('weights the summary by stops, never by averaging the routes', async () => {
+            const response = await completion('');
+            expect(response.body.data.map((route: { routeBatchId: number }) => route.routeBatchId)).toEqual(expect.arrayContaining([batch.A, batch.B]));
+            const sum = response.body.data.reduce(
+                (acc: { departed: number; finalized: number }, route: { departed: number; finalized: number }) => ({ departed: acc.departed + route.departed, finalized: acc.finalized + route.finalized }),
+                { departed: 0, finalized: 0 },
+            );
+            expect(response.body.summary).toMatchObject({ departed: sum.departed, finalized: sum.finalized, finalizedPct: Math.round((sum.finalized / sum.departed) * 10000) / 100 });
+            // Con solo A y B: 3 de 5 = 60 %, no el promedio (66,67 + 50) / 2 = 58,33 %.
+            const mine = response.body.data.filter((route: { routeBatchId: number }) => route.routeBatchId === batch.A || route.routeBatchId === batch.B);
+            const mineFinalized = mine.reduce((acc: number, route: { finalized: number }) => acc + route.finalized, 0);
+            const mineDeparted = mine.reduce((acc: number, route: { departed: number }) => acc + route.departed, 0);
+            expect(Math.round((mineFinalized / mineDeparted) * 10000) / 100).toBe(60);
+        });
+
+        it('counts the stop cancelled before the start apart, never as a departed or unsuccessful stop', async () => {
+            const c = (await completion(`zoneId=${zone[3]}`)).body.data[0];
+            expect(c.stops.find((stop: { dispatchId: number }) => stop.dispatchId === id.c2)).toMatchObject({ outcome: 'cancelled_before_start', currentStatus: 'cancelled' });
+            expect(c).toMatchObject({ departed: 1, counts: expect.objectContaining({ unsuccessful: 0, cancelledBeforeStart: 1 }) });
+        });
+    });
+
+    describe('the cohort does not move with the execution', () => {
+        it('gives the same coverage after the reschedules, the reassignment and the deliveries', async () => {
+            for (const n of [1, 2, 3] as const) {
+                const byId = await coverage(`cutoffId=${scheduledId}&zoneId=${zone[n]}`);
+                expect(byId.body.coverage).toEqual({ ...expectedCoverage(n), confirmedOutsideUniverse: 0 });
+                expect(byId.body.excluded.total).toBe(ofZone(n).filter((key) => CASES[key].universe === 'excluded').length);
+                expect((await coverage(`date=${shiftDate}&zoneId=${zone[n]}`)).body).toEqual(byId.body);
+            }
+        });
+    });
 });
