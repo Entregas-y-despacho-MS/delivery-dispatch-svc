@@ -8,6 +8,7 @@ import { RouteBatchStatusEnum } from '../../../../shared/enums/route-batch-statu
 import { DispatchStatusEnum } from '../../../../shared/enums/dispatch-status.enum.js';
 import { BatchExitService, type LockedBatch } from '../../../../app/dispatch-reschedule/services/batch-exit.service.js';
 import { RouteCapacityService } from './route-capacity.service.js';
+import { RouteManifestService } from '../../route-manifests/services/route-manifest.service.js';
 import { RouteBatchNotFoundException } from '../exceptions/route-batch-not-found.exception.js';
 import { RouteBatchReassignConflictException } from '../exceptions/route-batch-reassign-conflict.exception.js';
 import { ReassignRouteBatchDto } from '../dto/reassign-route-batch.dto.js';
@@ -54,6 +55,7 @@ export class RouteBatchReassignmentService {
         private readonly batchExit: BatchExitService,
         private readonly capacity: RouteCapacityService,
         private readonly events: EventEmitter2,
+        private readonly manifests: RouteManifestService,
     ) {}
 
     async reassign(originBatchId: number, dto: ReassignRouteBatchDto, actorUserId: number): Promise<ReassignRouteBatchResponseDto> {
@@ -149,7 +151,7 @@ export class RouteBatchReassignmentService {
         let originClosed = false;
         for (const dispatchId of dto.dispatchIds) {
             const result = await this.batchExit.leave(manager, locked, dispatchId, {
-                actorUserId, reason: dto.reasonCode, metadata: { toBatchId: dto.targetBatchId },
+                actorUserId, reason: dto.reasonCode, metadata: { toBatchId: dto.targetBatchId }, deferManifest: true,
             });
             originClosed = result.closed;
             locked = { ...locked, version: result.batchVersion, stops: locked.stops.filter((stop) => stop.dispatchId !== dispatchId) };
@@ -184,6 +186,12 @@ export class RouteBatchReassignmentService {
                 [dto.targetBatchId, dispatchId, actorUserId, dto.reasonCode, JSON.stringify({ fromBatchId: originBatchId })],
             );
         }
+
+        // ST-302.2: both routes changed after they left. One revised manifest each for the whole move (the exits above
+        // deferred theirs), written once the stops are in their final place. An origin that the move left closed is over,
+        // so it gets none, the same as a single exit that closes its batch.
+        if (!originClosed) await this.manifests.record(manager, { routeBatchId: originBatchId, kind: 'revised', actorUserId, reason: dto.reasonCode });
+        await this.manifests.record(manager, { routeBatchId: dto.targetBatchId, kind: 'revised', actorUserId, reason: dto.reasonCode });
 
         const zones: (ZoneRow & { route_batch_id: number })[] = await manager.query(
             `SELECT rb.route_batch_id, dz.name

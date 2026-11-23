@@ -23,10 +23,11 @@ import { PromiseFirmingModule } from '../../../app/promise-firming/promise-firmi
 import { DispatchRescheduleModule } from '../../../app/dispatch-reschedule/dispatch-reschedule.module.js';
 import { RouteBatchReassignmentService } from './services/route-batch-reassignment.service.js';
 import { ReassignmentTargetsService } from './services/reassignment-targets.service.js';
+import { RouteManifestsModule } from '../route-manifests/route-manifests.module.js';
 
 // Reviewer assignment (ST-50.4, D-42). The batch planner (ST-50.2) calls RouteBatchReviewerService.assignReviewer.
 @Module({
-  imports: [TypeOrmModule.forFeature([RouteBatch, RouteBatchEvent]), OutboundMessagesModule, PromiseFirmingModule, DispatchRescheduleModule],
+  imports: [TypeOrmModule.forFeature([RouteBatch, RouteBatchEvent]), OutboundMessagesModule, PromiseFirmingModule, DispatchRescheduleModule, RouteManifestsModule],
   controllers: [RouteBatchesController, CotejoResolutionController],
   providers: [
     RouteBatchReviewerService,

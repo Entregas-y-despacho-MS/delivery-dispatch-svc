@@ -56,8 +56,9 @@ function createHarness(options: { batchVersion?: number; batchStatus?: string; d
   const dataSource = { createQueryRunner: vi.fn(() => runner) };
   const capacity = { assertAssignable: vi.fn().mockResolvedValue({ assignable: true }) };
   const events = { emit: vi.fn() };
-  const service = new RouteBatchFinalApprovalService(dataSource as any, capacity as any, events as unknown as EventEmitter2, new RouteBatchResourcesService(), orderEvents as never);
-  return { service, runner, manager, capacity, events };
+  const manifests = { record: vi.fn().mockResolvedValue({ routeManifestId: 1, manifestVersion: 1, routeVersion: 2, stops: [] }) };
+  const service = new RouteBatchFinalApprovalService(dataSource as any, capacity as any, events as unknown as EventEmitter2, new RouteBatchResourcesService(), orderEvents as never, manifests as never);
+  return { service, runner, manager, capacity, events, manifests };
 }
 
 describe('RouteBatchFinalApprovalService', () => {
@@ -82,6 +83,31 @@ describe('RouteBatchFinalApprovalService', () => {
       version: 5,
     });
     expect(orderEvents.recordForDispatch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: 'dispatch.assigned', newStatus: 'assigned' }), expect.anything());
+  });
+
+  it('freezes the confirmed manifest in the same transaction, with the version the batch just reached', async () => {
+    const { service, runner, manager, manifests } = createHarness();
+
+    await service.approve(12, { version: 4, dispatches: [{ dispatchId: 77, version: 2 }] }, 9);
+
+    expect(manifests.record).toHaveBeenCalledTimes(1);
+    expect(manifests.record).toHaveBeenCalledWith(manager, { routeBatchId: 12, kind: 'confirmed', actorUserId: 9 });
+    const approvalUpdate = manager.query.mock.invocationCallOrder[
+      manager.query.mock.calls.findIndex(([sql]: [string]) => String(sql).includes('SET status = $3, driver_id = $4'))
+    ];
+    expect(manifests.record.mock.invocationCallOrder[0]).toBeGreaterThan(approvalUpdate);
+    expect(manifests.record.mock.invocationCallOrder[0]).toBeLessThan(runner.commitTransaction.mock.invocationCallOrder[0]);
+  });
+
+  it('rolls back the approval and emits nothing when the manifest cannot be written', async () => {
+    const { service, runner, events, manifests } = createHarness();
+    manifests.record.mockRejectedValueOnce(new Error('manifest down'));
+
+    await expect(service.approve(12, { version: 4, dispatches: [{ dispatchId: 77, version: 2 }] }, 9)).rejects.toThrow('manifest down');
+
+    expect(runner.rollbackTransaction).toHaveBeenCalled();
+    expect(runner.commitTransaction).not.toHaveBeenCalled();
+    expect(events.emit).not.toHaveBeenCalled();
   });
 
   it('emits the approved dispatch and priority snapshot in the event order', async () => {

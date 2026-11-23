@@ -9,6 +9,9 @@
  */
 import { toLocalMoment } from '../../scheduler/domain/task-schedule.js';
 
+/** The operating timezone: every local date and hour of the planning is read in it. */
+export const OPERATING_TIMEZONE = 'America/La_Paz';
+
 /** Bolivia has no daylight saving time: America/La_Paz is UTC-4 all year. */
 const LA_PAZ_UTC_OFFSET_HOURS = -4;
 

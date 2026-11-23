@@ -32,6 +32,8 @@ import { ComplaintCasesModule } from './modules/dispatch/complaint-cases/complai
 import { PickupSchedulingModule } from './modules/dispatch/pickup-scheduling/pickup-scheduling.module.js';
 import { RouteAssignmentModule } from './app/route-assignment/route-assignment.module.js';
 import { RouteBatchesModule } from './modules/dispatch/route-batches/route-batches.module.js';
+import { PlanningCutoffsModule } from './modules/dispatch/planning-cutoffs/planning-cutoffs.module.js';
+import { RouteManifestsModule } from './modules/dispatch/route-manifests/route-manifests.module.js';
 import { DispatchReservationsModule } from './modules/dispatch/dispatch-reservations/dispatch-reservations.module.js';
 import { CacheModule } from './plugins/cache/cache.module.js';
 import { MessagingModule } from './plugins/messaging/messaging.module.js';
@@ -66,6 +68,7 @@ import { PickupOrdersModule } from './app/pickup-orders/pickup-orders.module.js'
 import { SlaReportModule } from './app/sla-report/sla-report.module.js';
 import { DeliveryPromiseModule } from './app/delivery-promise/delivery-promise.module.js';
 import { PlanningPipelineModule } from './app/planning-pipeline/planning-pipeline.module.js';
+import { PlanningSnapshotsModule } from './app/planning-snapshots/planning-snapshots.module.js';
 import { FleetKpisModule } from './app/fleet-kpis/fleet-kpis.module.js';
 import { OperationalAlertsModule } from './modules/operational-alerts/operational-alerts.module.js';
 import { FleetReportsModule } from './app/fleet-reports/fleet-reports.module.js';
@@ -101,6 +104,7 @@ import { FleetReportsModule } from './app/fleet-reports/fleet-reports.module.js'
     SlaReportModule,
     DeliveryPromiseModule,
     PlanningPipelineModule,
+    PlanningSnapshotsModule,
     FleetKpisModule,
     OperationalAlertsModule,
     FleetReportsModule,
@@ -140,6 +144,8 @@ import { FleetReportsModule } from './app/fleet-reports/fleet-reports.module.js'
     DispatchHistoryModule,
     ComplaintCasesModule,
     RouteBatchesModule,
+    PlanningCutoffsModule,
+    RouteManifestsModule,
     DispatchReservationsModule,
     PickupSchedulingModule,
     RouteAssignmentModule,

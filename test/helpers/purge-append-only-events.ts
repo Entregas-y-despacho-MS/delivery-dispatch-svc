@@ -56,6 +56,42 @@ export async function withEventPurge(
             );
             await manager.query('ALTER TABLE order_dispatch_events ENABLE TRIGGER trg_order_dispatch_events_prevent_delete');
         }
+        // Planning snapshots and route manifests (ST-302.2): append-only, with RESTRICT foreign keys to dispatches, batches,
+        // vehicles and users, so any suite that runs the cutoff, approves or starts a route would fail to delete its rows.
+        // The delete trigger lets this transaction through (`app.allow_event_purge`). Checked for first, like the tables above.
+        const [{ planning }] = await manager.query(
+            `SELECT (to_regclass('public.planning_cutoffs') IS NOT NULL AND to_regclass('public.route_manifests') IS NOT NULL) AS planning`,
+        );
+        if (planning) {
+            const suiteDispatches = `SELECT dispatch_id FROM dispatches WHERE source_order_ref LIKE ANY($1::text[]) OR route_batch_id = ANY($2::int[])`;
+            const suiteBatches = `SELECT route_batch_id FROM dispatches WHERE route_batch_id IS NOT NULL AND source_order_ref LIKE ANY($1::text[])`;
+            const suiteUsers = `SELECT user_id FROM users WHERE username LIKE ANY($3::text[])`;
+            const suiteManifests =
+                `SELECT route_manifest_id FROM route_manifests
+                  WHERE route_batch_id = ANY($2::int[]) OR route_batch_id IN (${suiteBatches})
+                     OR driver_id IN (${suiteUsers}) OR actor_user_id IN (${suiteUsers})`;
+            await manager.query(
+                `DELETE FROM route_manifest_stops WHERE dispatch_id IN (${suiteDispatches}) OR route_manifest_id IN (${suiteManifests})`,
+                params,
+            );
+            await manager.query(`DELETE FROM route_manifests WHERE route_manifest_id IN (${suiteManifests})`, params);
+
+            const suiteItems =
+                `SELECT planning_cutoff_dispatch_id FROM planning_cutoff_dispatches
+                  WHERE dispatch_id IN (${suiteDispatches}) OR route_batch_id = ANY($2::int[]) OR route_batch_id IN (${suiteBatches})`;
+            const cutoffs: { id: number }[] = await manager.query(
+                `SELECT DISTINCT planning_cutoff_id AS id FROM planning_cutoff_dispatches WHERE planning_cutoff_dispatch_id IN (${suiteItems})`,
+                params.slice(0, 2),
+            );
+            await manager.query(`DELETE FROM planning_cutoff_dispatches WHERE planning_cutoff_dispatch_id IN (${suiteItems})`, params.slice(0, 2));
+            // Only the headers this suite emptied: a header another suite still has rows in must stay.
+            await manager.query(
+                `DELETE FROM planning_cutoffs c
+                  WHERE c.planning_cutoff_id = ANY($1::int[])
+                    AND NOT EXISTS (SELECT 1 FROM planning_cutoff_dispatches i WHERE i.planning_cutoff_id = c.planning_cutoff_id)`,
+                [cutoffs.map(({ id }) => id)],
+            );
+        }
         if (cleanup) await cleanup(manager);
     });
 }

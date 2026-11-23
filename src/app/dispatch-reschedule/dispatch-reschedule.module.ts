@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { DispatchEventsModule } from '../../modules/dispatch/dispatch-events/dispatch-events.module.js';
 import { DispatchStatusPublicationModule } from '../../modules/dispatch/dispatch-status-publication/dispatch-status-publication.module.js';
+import { RouteManifestsModule } from '../../modules/dispatch/route-manifests/route-manifests.module.js';
 import { RouteBatchClosingModule } from '../route-batch-closing/route-batch-closing.module.js';
 import { DispatchRescheduleController } from './controllers/dispatch-reschedule.controller.js';
 import { BatchExitService } from './services/batch-exit.service.js';
@@ -15,7 +16,7 @@ import { DispatchReschedulingService } from './services/dispatch-rescheduling.se
  * to the warehouse. No table of its own: it writes `dispatch_reschedules`, `dispatches` and the audit events.
  */
 @Module({
-    imports: [DispatchEventsModule, DispatchStatusPublicationModule, RouteBatchClosingModule],
+    imports: [DispatchEventsModule, DispatchStatusPublicationModule, RouteBatchClosingModule, RouteManifestsModule],
     controllers: [DispatchRescheduleController],
     providers: [BatchExitService, DeliveryAttemptsService, DispatchCancelService, DispatchLockService, DispatchReschedulingService, DispatchReturnService],
     exports: [BatchExitService, DeliveryAttemptsService, DispatchCancelService, DispatchLockService],

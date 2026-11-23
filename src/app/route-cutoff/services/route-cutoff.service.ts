@@ -7,6 +7,7 @@ import { loadPlanningSettings } from '../../planning/domain/planning-settings.js
 import type { PlanVehicle } from '../../planning/domain/plan-types.js';
 import { PlanCandidatesRepository } from '../../planning/services/plan-candidates.repository.js';
 import { PlanningAlertsService } from '../../planning/services/planning-alerts.service.js';
+import { CutoffSnapshotService } from '../../planning-snapshots/services/cutoff-snapshot.service.js';
 import type { ScheduledTaskContext } from '../../scheduler/ports/scheduled-task.js';
 import { buildSimParams } from '../domain/cutoff-sim-params.js';
 import { splitPlanByGroup } from '../domain/cutoff-groups.js';
@@ -36,6 +37,7 @@ export class RouteCutoffService {
         private readonly matrices: CutoffMatricesService,
         private readonly writer: RouteCutoffWriterService,
         private readonly alerts: PlanningAlertsService,
+        private readonly snapshots: CutoffSnapshotService,
     ) {}
 
     async run(context: ScheduledTaskContext): Promise<RouteCutoffSummaryDto> {
@@ -64,6 +66,16 @@ export class RouteCutoffService {
         if (!manual && previousOperatingDay(shiftDate, settings.calendar) !== today) {
             return emptySummary('not_cutoff_day', null, []);
         }
+
+        // ST-302.2: the universe of the cutoff is frozen first, before anything is reorganized. If it cannot be saved the
+        // run fails with nothing changed; running it again is safe because the snapshot is kept once per occurrence.
+        await this.snapshots.capture({
+            shiftDate,
+            now,
+            windowMinutes: settings.promiseRules.promiseResponseWindowMinutes,
+            manual,
+            occurrence: context.occurrence,
+        });
 
         const read = await this.batches.findProvisionalBatches(shiftDate);
         const summary = emptySummary('executed', shiftDate, []);
