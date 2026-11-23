@@ -473,4 +473,41 @@ describe('Planning cohort after replanning, load and route completion (e2e, ST-3
             expect(expectedCoverage(1)).toEqual({ eligible: 5, confirmed: 4, pending: 1, coveragePct: 80 });
         });
     });
+
+    describe('before the route leaves', () => {
+        it('a stop rescheduled through the endpoint leaves the confirmed route', async () => {
+            const response = await reschedule('a7');
+            expect(response.status).toBe(200);
+            expect(await dispatchRow('a7')).toMatchObject({ status: 'rescheduled', route_batch_id: null });
+        });
+
+        it('starts A and B for real and freezes their started manifests without the stop that left', async () => {
+            const a = await acceptAndStart(batch.A, tokens.driverA);
+            const b = await acceptAndStart(batch.B, tokens.driverB);
+            expect(a.started?.status).toBe(200);
+            expect(b.started?.status).toBe(200);
+
+            const manifestsA = await manifestsOf(batch.A);
+            expect(manifestsA.map((m: { manifest_version: number; kind: string }) => [m.manifest_version, m.kind])).toEqual([[1, 'confirmed'], [2, 'started']]);
+            expect(manifestsA[0].dispatch_ids).toEqual(ids('a1', 'a2', 'a7', 'a8'));
+            expect(manifestsA[1].dispatch_ids).toEqual(ids('a1', 'a2', 'a8'));
+            expect(manifestsA[1].states).toEqual(['departing', 'departing', 'departing']);
+        });
+
+        it('a confirmed stop cancelled through the endpoint leaves its batch and the route starts without it', async () => {
+            const cancelled = await post(`/dispatches/${id.c2}/cancel`, { reason: 'Cliente desiste con la ruta confirmada' });
+            expect(cancelled.status).toBe(200);
+            // The route has not left yet: the cancelled stop goes out of the batch, like a planned one.
+            expect(cancelled.body).toMatchObject({ previousStatus: 'assigned', status: 'cancelled', routeBatchId: null });
+            expect(await dispatchRow('c2')).toMatchObject({ status: 'cancelled', route_batch_id: null });
+
+            const c = await acceptAndStart(batch.C, tokens.driverC);
+            expect(c.started?.status).toBe(200);
+            expect(c.started?.body.dispatchIds).toEqual([id.c1]);
+            const manifestsC = await manifestsOf(batch.C);
+            expect(manifestsC.map((m: { manifest_version: number; kind: string }) => [m.manifest_version, m.kind])).toEqual([[1, 'confirmed'], [2, 'started']]);
+            expect(manifestsC[0].dispatch_ids).toEqual(ids('c1', 'c2'));
+            expect(manifestsC[1].dispatch_ids).toEqual(ids('c1'));
+        });
+    });
 });
