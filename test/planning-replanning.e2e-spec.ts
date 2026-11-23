@@ -403,4 +403,74 @@ describe('Planning cohort after replanning, load and route completion (e2e, ST-3
             );
         });
     });
+
+    describe('replanning after the cutoff', () => {
+        let before: Record<number, unknown> = {};
+
+        it('takes a dispatch out of its batch by cancelling it through the endpoint', async () => {
+            for (const n of [1, 2, 3] as const) before[n] = (await coverage(`cutoffId=${scheduledId}&zoneId=${zone[n]}`)).body;
+            const versionBefore = (await batchRow(batch.A)).version;
+
+            const response = await post(`/dispatches/${id.a3}/cancel`, { reason: 'Cliente desiste antes de la ruta' });
+
+            expect(response.status).toBe(200);
+            expect(response.body).toMatchObject({ dispatchId: id.a3, status: 'cancelled', previousStatus: 'scheduled', routeBatchId: null });
+            expect(await dispatchRow('a3')).toMatchObject({ status: 'cancelled', route_batch_id: null });
+            expect((await batchRow(batch.A)).version).toBe(versionBefore + 1);
+        });
+
+        it('firms the promise the customer confirms, and the manual cutoff plans its remnant batch with its own snapshot', async () => {
+            const firmed = await app.get(PromiseFirmingService).firm(id.a4, { reason: 'customer_confirmed' });
+            expect(firmed.outcome).toBe('firmed');
+
+            const response = await post('/planning/cutoff');
+            expect(response.status).toBe(200);
+
+            const [manual] = await dataSource.query(
+                `SELECT c.planning_cutoff_id AS id, c.trigger_type, c.occurrence, i.universe_status, i.route_batch_id
+                   FROM planning_cutoffs c JOIN planning_cutoff_dispatches i USING (planning_cutoff_id)
+                  WHERE i.dispatch_id = $1 AND c.planning_cutoff_id <> $2`,
+                [id.a4, scheduledId],
+            );
+            expect(manual).toMatchObject({ trigger_type: 'manual', occurrence: null, universe_status: 'eligible', route_batch_id: batch.R });
+            manualId = manual.id;
+            scope.cutoffIds.add(manualId);
+            // Only the provisional batches enter a cutoff: the batches already reviewed are not in the manual universe.
+            const manualMine = await dataSource.query(`SELECT dispatch_id FROM planning_cutoff_dispatches WHERE planning_cutoff_id = $1 AND dispatch_id = ANY($2::int[])`, [manualId, ids(...KEYS)]);
+            expect(manualMine.map((row: { dispatch_id: number }) => row.dispatch_id)).toEqual([id.a4]);
+            expect((await batchRow(batch.R)).status).not.toBe('provisional');
+        });
+
+        it('repeating the scheduled occurrence keeps the first snapshot and does nothing', async () => {
+            const again = await app.get(RouteCutoffService).run({ trigger: 'schedule', occurrence, startedAt: new Date(cutoffAt.getTime() + 60_000) });
+            expect(again.status).toBe('nothing_to_process');
+            expect(await dataSource.query(`SELECT 1 FROM planning_cutoffs WHERE occurrence = $1`, [occurrence])).toHaveLength(1);
+        });
+
+        it('keeps the official cutoff and its denominator; the manual one is listed apart', async () => {
+            const list = await get(`/planning/cutoffs?date=${shiftDate}`);
+            expect(list.body.data.find((c: { id: number }) => c.id === scheduledId)).toMatchObject({ official: true, triggerType: 'scheduled' });
+            expect(list.body.data.find((c: { id: number }) => c.id === manualId)).toMatchObject({ official: false, triggerType: 'manual' });
+            for (const n of [1, 2, 3] as const) {
+                const byId = await coverage(`cutoffId=${scheduledId}&zoneId=${zone[n]}`);
+                expect(byId.body).toEqual(before[n]);
+                expect((await coverage(`date=${shiftDate}&zoneId=${zone[n]}`)).body).toEqual(byId.body);
+            }
+            const manualCoverage = await coverage(`cutoffId=${manualId}&zoneId=${zone[1]}`);
+            expect(manualCoverage.body.cutoff).toMatchObject({ id: manualId, official: false });
+            expect(manualCoverage.body.coverage).toMatchObject({ eligible: 1, confirmed: 0, coveragePct: 0 });
+        });
+
+        it('counts the second approval in the numerator and never the stop that left the batch', async () => {
+            for (const key of ['A', 'B', 'C'] as const) expect((await approveFinal(batch[key])).status, key).toBe(200);
+
+            for (const n of [1, 2, 3] as const) {
+                const byId = await coverage(`cutoffId=${scheduledId}&zoneId=${zone[n]}`);
+                expect(byId.body.coverage).toEqual({ ...expectedCoverage(n), confirmedOutsideUniverse: 0 });
+                expect((await coverage(`date=${shiftDate}&zoneId=${zone[n]}`)).body).toEqual(byId.body);
+            }
+            // Zona 1 a mano: 5 elegibles (a1, a2, a3, a7, a8), 4 confirmadas (a3 se canceló antes de la aprobación) = 80 %.
+            expect(expectedCoverage(1)).toEqual({ eligible: 5, confirmed: 4, pending: 1, coveragePct: 80 });
+        });
+    });
 });
