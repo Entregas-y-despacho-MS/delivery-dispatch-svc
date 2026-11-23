@@ -147,6 +147,8 @@ const ADMIN_ONLY: Route[] = [
     { method: 'post', path: '/auth/register', body: {} },
     { method: 'get', path: '/roles' },
     { method: 'get', path: `/roles/${NO_ID}` },
+    // ST-70.1: la búsqueda de auditoría administrativa es solo del Administrador.
+    { method: 'get', path: '/audit/admin-events' },
 ];
 
 const DRIVER_ONLY: Route[] = [

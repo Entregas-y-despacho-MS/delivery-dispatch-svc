@@ -107,3 +107,34 @@ Qué guarda `metadata` según la acción (valores fijos del código y campos dec
 `entity_id` sale del parámetro de la ruta; en las altas (`user.created`, `catalog.changed` create, `vehicle.changed` create) del `id` de la respuesta, y en `auth.*` es el propio usuario. `planning.run` y `PUT /settings/alert-thresholds` no tienen id. Una alta que falla no tiene respuesta, así que su evento queda sin id.
 
 Fuera del catálogo: los endpoints operativos del repartidor (estado, incidencias, evidencias, GPS) y los públicos del cliente; su traza es el historial del despacho (`dispatch_events`).
+
+## Consulta de la auditoría (RF-A37, ST-70.1)
+
+`GET /audit/admin-events` (con el prefijo global `/api`). Solo lectura: el servicio (`AdminAuditQueryService`) nunca escribe en la tabla y la consulta en sí no genera un evento.
+
+**Permiso.** Solo Administrador; root pasa por el guard como siempre. Coordinador, Supervisor y Repartidor reciben 403 `INSUFFICIENT_PERMISSIONS` sin datos, y sin token 401. El repartidor no tiene ninguna ruta de auditoría global.
+
+**Parámetros** (todos en el query string; un parámetro desconocido es 400):
+
+| Parámetro | Regla |
+|---|---|
+| `from`, `to` | Obligatorios. ISO 8601 con zona explícita (`Z` o `±hh:mm`); sin zona o solo fecha es 400. La ventana es `[from, to)`: incluye `from`, excluye `to`, así dos ventanas seguidas no repiten ni saltan eventos. `from` debe ser anterior a `to` y la ventana no puede pasar de 31 días (`INVALID_AUDIT_RANGE`). Un `+` en el query string se envía como `%2B`. |
+| `actorId` | Entero 1..2147483647. |
+| `actorRole` | Un valor de `RoleEnum` (`root`, `admin`, `coordinator`, `supervisor`, `driver`): el rol que tenía el actor en ese momento. |
+| `action` | Una acción del catálogo de arriba. |
+| `entityType` | Un tipo de entidad del catálogo (`user`, `setting`, `catalog`, `vehicle`, `dispatch`, `planning`, `route_batch`). |
+| `entityId` | Hasta 64 caracteres sin espacios; exige `entityType` (`INVALID_AUDIT_FILTER`). |
+| `result` | `success`, `denied` o `failed`. |
+| `correlationId` | 8 a 64 caracteres `A-Z a-z 0-9 . _ : -` (el `X-Request-Id` de la solicitud). |
+| `page`, `limit` | Los de la paginación común: `page` desde 1, `limit` por defecto 10 y máximo 100 (101 es 400). |
+| `order` | `asc` o `desc` (por defecto `desc`), siempre por la hora del evento. |
+
+Los filtros se combinan con AND. Los valores van como parámetros de la consulta, nunca concatenados.
+
+**Orden estable.** `ORDER BY occurred_at <dir>, admin_audit_event_id <dir>`: el id desempata los eventos del mismo instante en la misma dirección, así que recorrer las páginas nunca repite ni se salta filas (probado con tres eventos en el mismo instante).
+
+**Respuesta.** `{ data, meta: { page, limit, total, pages } }`. Cada evento trae `eventId`, `occurredAt` (UTC), `actorId`, `actorRole`, `action`, `entityType`, `entityId`, `result`, `statusCode` y `correlationId`. `ip` y `metadata` se devuelven **solo a root**; el Administrador no los recibe. Una ventana sin eventos es `200` con `data: []` y `total: 0`, distinta de cualquier error.
+
+**Errores.** 400 `VALIDATION_FAILED` (formato), `INVALID_AUDIT_RANGE`, `INVALID_AUDIT_FILTER`; 401 `INVALID_TOKEN`; 403 `INSUFFICIENT_PERMISSIONS`.
+
+**Alcance.** Solo cubre `admin_audit_events` (acciones administrativas sensibles). El historial de un despacho (`order_dispatch_events`) y la exportación (RF-A38) son otras consultas. Los eventos de acciones que ya no estén en el catálogo no se pueden filtrar por `action` (el filtro valida contra el catálogo vigente).
