@@ -16,7 +16,8 @@ const RETURNABLE: readonly string[] = [DispatchStatusEnum.INCIDENT, DispatchStat
 
 /**
  * States from which the coordinator can cancel the dispatch (ES-241): any before the route starts. From `assigned` it
- * stays linked to its batch (a stop the driver cannot take); from `in_planning` and `scheduled` it leaves the batch.
+ * leaves a batch that has not left yet and stays linked to one in execution (a stop the driver cannot take); from
+ * `in_planning` and `scheduled` it leaves the batch.
  */
 const CANCELLABLE: readonly string[] = [
     DispatchStatusEnum.PENDING,
