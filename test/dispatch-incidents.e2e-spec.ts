@@ -131,7 +131,7 @@ describe('POST /dispatches/:id/incidents (ST-32.2)', () => {
 
     afterEach(() => vi.restoreAllMocks());
 
-    it('commits incident, status and timeline metadata atomically and emits the alert, with the reason\'s criticality, after commit', async () => {
+    it('commits incident, status and timeline metadata atomically and emits the incident event, with the reason\'s criticality, after commit', async () => {
         const id = await dispatch();
         const evidenceId = uuidv7();
         await db.query(`INSERT INTO delivery_evidences (delivery_evidence_id, dispatch_id, type, file_url) VALUES ($1,$2,'photo','https://files.test/incident.jpg')`, [evidenceId, id]);
@@ -157,7 +157,7 @@ describe('POST /dispatches/:id/incidents (ST-32.2)', () => {
         expect((await requestIncident(id, { ...report, observations: 'Changed incident details.' })).status).toBe(409);
     });
 
-    it('a high-criticality reason emits a high-criticality alert', async () => {
+    it('a high-criticality reason emits the incident event with high criticality', async () => {
         const id = await dispatch();
         const report = body(reasonCodes.COMPFAIL);
         expect((await requestIncident(id, report)).status).toBe(201);

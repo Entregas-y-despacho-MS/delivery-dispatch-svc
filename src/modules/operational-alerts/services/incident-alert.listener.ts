@@ -21,11 +21,9 @@ interface DispatchSubjectRow {
 }
 
 /**
- * Escenario 1 de ES-66: una incidencia reportada (`dispatch.incident_reported`, ST-32.2) de
- * criticidad alta levanta la alerta. `criticality` viene siempre `'high'` hoy — no hay una columna
- * real de severidad en `incident_reasons` todavía (decisión del usuario, 2026-11-09: no agregarla
- * en este ticket) — así que en la práctica toda incidencia la levanta, pero el guard explícito deja
- * esto funcionando solo cuando esa columna exista, sin otro cambio en este listener.
+ * Una incidencia reportada (`dispatch.incident_reported`) levanta la alerta crítica solo si su
+ * motivo es de criticidad alta. El evento trae la criticidad que el catálogo `incident_reasons`
+ * asigna a cada motivo (`low` por defecto); las incidencias de criticidad baja no generan alerta.
  */
 @Injectable()
 export class IncidentAlertListener {
