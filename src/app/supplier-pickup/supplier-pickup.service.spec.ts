@@ -234,7 +234,7 @@ describe('SupplierPickupService', () => {
         const returnPickup = (overrides: Record<string, unknown> = {}) => baseDispatch({ dispatch_type: 'warehouse_return_pickup', status: 'picked_up_in_transit', ...overrides });
 
         function expectNothingWritten() {
-            expect(manager.query.mock.calls.some(([sql]) => /\bSET\b/.test(String(sql)))).toBe(false);
+            expect(manager.query.mock.calls.some(([sql]) => /\b(SET|INSERT)\b/i.test(String(sql)))).toBe(false);
             expect(dispatchEvents.create).not.toHaveBeenCalled();
             expect(statusPublication.publishTransferUpdate).not.toHaveBeenCalled();
             expect(orderEvents.recordForDispatch).not.toHaveBeenCalled();
@@ -286,7 +286,7 @@ describe('SupplierPickupService', () => {
 
             await service.registerArrival(DISPATCH_ID, DRIVER_ID, arrivalDto());
 
-            const writes = manager.query.mock.calls.map(([sql]) => String(sql)).filter((sql) => /\bSET\b/.test(sql));
+            const writes = manager.query.mock.calls.map(([sql]) => String(sql)).filter((sql) => /\b(SET|INSERT)\b/i.test(sql));
             expect(writes).toHaveLength(1);
             expect(writes[0]).toContain('arrived_at_warehouse_at');
             expect(writes[0]).not.toContain('dispatch_status_id');
