@@ -11,7 +11,7 @@ import { RouteCutoffService } from './route-cutoff.service.js';
 const TUESDAY_CUTOFF = localInstant('2026-10-13', '15:00');
 const SATURDAY = localInstant('2026-10-17', '15:00');
 
-function build(over: { settings?: Record<string, string>; batches?: ReturnType<typeof batch>[]; osrmFails?: boolean } = {}) {
+function build(over: { settings?: Record<string, string>; batches?: ReturnType<typeof batch>[]; osrmFails?: boolean; snapshotFails?: boolean } = {}) {
     const raw = { ...RAW_SETTINGS, ...over.settings };
     const settings = { getString: vi.fn((key: string) => raw[key] ?? '') };
     const read = { batches: over.batches ?? [], skippedBatchIds: [] as number[] };
@@ -42,10 +42,17 @@ function build(over: { settings?: Record<string, string>; batches?: ReturnType<t
         })),
     };
     const alerts = { raise: vi.fn(async () => undefined) };
+    const snapshots = {
+        capture: vi.fn(async (_input: unknown) => {
+            if (over.snapshotFails) throw new Error('snapshot down');
+            return { planningCutoffId: 1, created: true, counts: null };
+        }),
+    };
     const service = new RouteCutoffService(
         settings as any, batches as any, candidates as any, osrm as any, new CutoffMatricesService(osrm as any), writer as any, alerts as any,
+        snapshots as any,
     );
-    return { service, batches, osrm, writer, alerts };
+    return { service, batches, osrm, writer, alerts, snapshots };
 }
 
 const ctx = (startedAt: Date, trigger: 'schedule' | 'manual' = 'schedule') => ({ trigger, occurrence: 'route-cutoff@x', startedAt });
@@ -74,6 +81,48 @@ describe('RouteCutoffService', () => {
 
         expect(summary.status).toBe('not_cutoff_day');
         expect(batches.findProvisionalBatches).not.toHaveBeenCalled();
+    });
+
+    it('freezes the planning universe first, with the day, the instant and the window of the promise', async () => {
+        const { service, snapshots, batches } = build();
+
+        await service.run(ctx(TUESDAY_CUTOFF));
+
+        expect(snapshots.capture).toHaveBeenCalledWith({
+            shiftDate: SHIFT_DATE,
+            now: TUESDAY_CUTOFF,
+            windowMinutes: expect.any(Number),
+            manual: false,
+            occurrence: 'route-cutoff@x',
+        });
+        expect(snapshots.capture.mock.invocationCallOrder[0]).toBeLessThan(batches.findProvisionalBatches.mock.invocationCallOrder[0]);
+    });
+
+    it('freezes the universe of a manual run as manual', async () => {
+        const { service, snapshots } = build();
+
+        await service.run({ trigger: 'manual', occurrence: null, startedAt: SATURDAY });
+
+        expect(snapshots.capture).toHaveBeenCalledWith(expect.objectContaining({ shiftDate: '2026-10-19', manual: true, occurrence: null }));
+    });
+
+    it('leaves no snapshot when the run is blocked or it is not a cutoff day', async () => {
+        const blocked = build({ settings: { stop_service_minutes: '' } });
+        await blocked.service.run(ctx(TUESDAY_CUTOFF));
+        const weekend = build();
+        await weekend.service.run(ctx(SATURDAY));
+
+        expect(blocked.snapshots.capture).not.toHaveBeenCalled();
+        expect(weekend.snapshots.capture).not.toHaveBeenCalled();
+    });
+
+    it('fails with nothing read or written when the universe cannot be frozen', async () => {
+        const { service, batches, writer, osrm } = build({ batches: [batch(1, [stop(1)])], snapshotFails: true });
+
+        await expect(service.run(ctx(TUESDAY_CUTOFF))).rejects.toThrow('snapshot down');
+        expect(batches.findProvisionalBatches).not.toHaveBeenCalled();
+        expect(osrm.getDurationMatrix).not.toHaveBeenCalled();
+        expect(writer.applyGroup).not.toHaveBeenCalled();
     });
 
     it('lets a manual run work on the next operating day even on a weekend', async () => {
