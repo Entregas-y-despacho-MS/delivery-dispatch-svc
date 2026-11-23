@@ -86,6 +86,15 @@ describe('BatchExitService.leave', () => {
         expect(bumped).toBeGreaterThanOrEqual(0);
     });
 
+    it('in_execution: writes no revision for a route this exit just closed, whose baseline is all that is left to measure', async () => {
+        const { service, manager, manifests } = build(true);
+
+        const result = await service.leave(manager, batch('in_execution', [{ id: 1, seq: 1 }, { id: 2, seq: 2 }]), 2, audit);
+
+        expect(result.closed).toBe(true);
+        expect(manifests.record).not.toHaveBeenCalled();
+    });
+
     it('in_execution: gives a reason to the revision even if the caller sent a blank one', async () => {
         const { service, manager, manifests } = build();
 

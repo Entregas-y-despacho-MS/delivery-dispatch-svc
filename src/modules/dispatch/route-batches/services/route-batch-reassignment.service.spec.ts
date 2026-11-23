@@ -85,6 +85,17 @@ describe('RouteBatchReassignmentService.reassign', () => {
         expect(manifests.record.mock.invocationCallOrder[0]).toBeGreaterThan(bumpOrder);
     });
 
+    it('writes no revision for an origin the move left closed, only for the target', async () => {
+        const { service, query, batchExit, manifests } = build();
+        mockHappyPath(query, batchExit);
+        batchExit.leave.mockResolvedValue({ batchVersion: 6, closed: true });
+
+        await service.reassign(10, { ...dto, dispatchIds: [31] }, 9);
+
+        expect(manifests.record).toHaveBeenCalledTimes(1);
+        expect(manifests.record).toHaveBeenCalledWith(expect.anything(), { routeBatchId: 20, kind: 'revised', actorUserId: 9, reason: 'DRIVER-BREAKDOWN' });
+    });
+
     it('writes no manifest when the reassignment is refused', async () => {
         const { service, query, manifests } = build();
         query.mockResolvedValueOnce([{ ...ORIGIN, status: 'confirmed' }, TARGET]);

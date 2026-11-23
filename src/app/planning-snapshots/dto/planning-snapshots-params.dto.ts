@@ -29,11 +29,11 @@ export class OperatingDateParamsDto {
 
 /** The dashboard filters that apply to a snapshot or a manifest (rule 9 of the HU). The batch is never a filter. */
 export class SnapshotFiltersDto extends OperatingDateParamsDto {
-    @ApiPropertyOptional({ type: 'integer', minimum: 1, maximum: INT4_MAX, description: 'Only dispatches of this delivery zone (ID), the zone the batch had at the cutoff' })
+    @ApiPropertyOptional({ type: 'integer', minimum: 1, maximum: INT4_MAX, description: 'Only dispatches of this delivery zone (ID). In the coverage it is the zone the batch had at the cutoff; in the completion it is the zone of the route' })
     @positiveInt('zoneId')
     zoneId?: number;
 
-    @ApiPropertyOptional({ type: 'integer', minimum: 1, maximum: INT4_MAX, description: 'Only dispatches of this origin warehouse (ID), the one the batch had at the cutoff' })
+    @ApiPropertyOptional({ type: 'integer', minimum: 1, maximum: INT4_MAX, description: 'Only dispatches of this origin warehouse (ID). In the coverage it is the warehouse the batch had at the cutoff; in the completion it is the warehouse of the route' })
     @positiveInt('warehouseId')
     warehouseId?: number;
 
@@ -45,7 +45,7 @@ export class SnapshotFiltersDto extends OperatingDateParamsDto {
 }
 
 export class CutoffCoverageParamsDto extends SnapshotFiltersDto {
-    @ApiPropertyOptional({ type: 'integer', minimum: 1, maximum: INT4_MAX, description: 'A specific cutoff (ID, from `GET /planning/cutoffs`). Without it the official cutoff of `date` is used: the first scheduled one' })
+    @ApiPropertyOptional({ type: 'integer', minimum: 1, maximum: INT4_MAX, description: 'A specific cutoff (ID, from `GET /planning/cutoffs`). Without it the official cutoff of `date` is used: the first scheduled one. With it `date` is ignored: the cutoff decides the day, and the answer carries its date. An unknown ID answers `available: false` with `NO_SNAPSHOT`, not a 404' })
     @positiveInt('cutoffId')
     cutoffId?: number;
 }

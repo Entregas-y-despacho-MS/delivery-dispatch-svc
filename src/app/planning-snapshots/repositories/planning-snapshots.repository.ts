@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
+import { OPERATING_TIMEZONE } from '../../planning/domain/operating-calendar.js';
 import type { CoverageItem } from '../domain/coverage.js';
 import type { BaselineStop } from '../domain/route-completion.js';
 
@@ -45,7 +46,7 @@ export interface BaselineStopRow extends BaselineStop {
 /** The shift of a promise window, with the same rule as the pipeline (ST-302.1): before 12:00 `morning`, from 12:00 `afternoon`, America/La_Paz. */
 const shiftOf = (column: string): string =>
     `CASE WHEN ${column} IS NULL THEN NULL
-          WHEN EXTRACT(HOUR FROM ${column} AT TIME ZONE 'America/La_Paz') < 12 THEN 'morning'
+          WHEN EXTRACT(HOUR FROM ${column} AT TIME ZONE '${OPERATING_TIMEZONE}') < 12 THEN 'morning'
           ELSE 'afternoon' END`;
 
 const CUTOFF_SELECT = `
@@ -77,7 +78,9 @@ export class PlanningSnapshotsRepository {
 
     /**
      * The universe of one cutoff after the filters, each dispatch with whether it was confirmed. Confirmed means it
-     * appears in a `confirmed` manifest written after the cutoff, of a batch of the same operating day.
+     * appears in a `confirmed` manifest written after the cutoff, of a batch of the same operating day. "After" is
+     * measured against `planning_cutoffs.created_at`, not `cutoff_at`: both it and `route_manifests.created_at` are the
+     * clock of the database, while `cutoff_at` is the clock of the application and the two could differ at the edge.
      */
     async findUniverse(cutoffId: number, filters: SnapshotFilters): Promise<UniverseRow[]> {
         return await this.dataSource.query(
@@ -89,7 +92,7 @@ export class PlanningSnapshotsRepository {
                           JOIN route_manifests m ON m.route_manifest_id = s.route_manifest_id
                           JOIN route_batches b ON b.route_batch_id = m.route_batch_id
                          WHERE s.dispatch_id = i.dispatch_id AND m.kind = 'confirmed'
-                           AND m.created_at >= c.cutoff_at AND b.shift_date = c.shift_date
+                           AND m.created_at >= c.created_at AND b.shift_date = c.shift_date
                     ) AS confirmed
                FROM planning_cutoff_dispatches i
                JOIN planning_cutoffs c ON c.planning_cutoff_id = i.planning_cutoff_id
@@ -108,7 +111,7 @@ export class PlanningSnapshotsRepository {
             `SELECT COUNT(DISTINCT s.dispatch_id)::int AS total
                FROM planning_cutoffs c
                JOIN route_batches b ON b.shift_date = c.shift_date
-               JOIN route_manifests m ON m.route_batch_id = b.route_batch_id AND m.kind = 'confirmed' AND m.created_at >= c.cutoff_at
+               JOIN route_manifests m ON m.route_batch_id = b.route_batch_id AND m.kind = 'confirmed' AND m.created_at >= c.created_at
                JOIN route_manifest_stops s ON s.route_manifest_id = m.route_manifest_id
               WHERE c.planning_cutoff_id = $1
                 AND NOT EXISTS (SELECT 1 FROM planning_cutoff_dispatches i WHERE i.planning_cutoff_id = c.planning_cutoff_id AND i.dispatch_id = s.dispatch_id)`,

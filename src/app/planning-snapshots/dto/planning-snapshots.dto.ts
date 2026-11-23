@@ -27,10 +27,10 @@ export class CutoffSummaryDto {
     @ApiProperty({ type: Boolean, description: 'This is the official cutoff of the day: the first scheduled one. Manual runs and later scheduled ones are listed but never replace it' })
     official!: boolean;
 
-    @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches eligible in this cutoff: the denominator of its coverage' })
+    @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches eligible in the whole cutoff, with no filter applied. The denominator that respects the filters is `coverage.eligible`' })
     eligible!: number;
 
-    @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches excluded from this cutoff, each with a code and an explanation' })
+    @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches excluded from the whole cutoff, with no filter applied, each with a code and an explanation' })
     excluded!: number;
 }
 
@@ -55,7 +55,7 @@ export class CoverageDto {
     @ApiProperty({ type: 'number', format: 'double', minimum: 0, maximum: 100, nullable: true, description: '`confirmed` over `eligible` in percent. `null` when no dispatch was eligible: there is nothing to cover' })
     coveragePct!: number | null;
 
-    @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches of that day confirmed after the cutoff that were not in its universe. Informational: they never enter `confirmed`' })
+    @ApiProperty({ type: 'integer', minimum: 0, description: 'Dispatches of that day confirmed after the cutoff that were not in its universe. Informational: they never enter `confirmed`, and this count is not filtered by zone, warehouse or shift' })
     confirmedOutsideUniverse!: number;
 }
 
@@ -107,7 +107,7 @@ export class CutoffCoverageResponseDto {
     @ApiProperty({ type: Boolean, description: '`false` when there is no snapshot to read: the coverage is not available (N/A) and is never rebuilt from today\'s statuses' })
     available!: boolean;
 
-    @ApiProperty({ type: String, enum: SNAPSHOT_UNAVAILABLE_REASONS, nullable: true, description: 'Why it is not available: `NO_SNAPSHOT` (no cutoff of that day was saved) or `NO_OFFICIAL_SNAPSHOT` (only manual runs exist and no `cutoffId` was given). `null` when available' })
+    @ApiProperty({ type: String, enum: SNAPSHOT_UNAVAILABLE_REASONS, nullable: true, description: 'Why it is not available: `NO_SNAPSHOT` (no cutoff of that day was saved, or the `cutoffId` asked for does not exist) or `NO_OFFICIAL_SNAPSHOT` (only manual runs exist and no `cutoffId` was given). `null` when available' })
     reason!: SnapshotUnavailableReason | null;
 
     @ApiProperty({ ...nullableRef(CutoffSummaryDto), description: 'The cutoff the numbers come from; `null` when not available' })
@@ -150,7 +150,7 @@ export class RouteStopDto {
     @ApiProperty({ type: 'integer', nullable: true, description: 'Visiting order in the baseline; `null` when it had none' })
     sequenceOrder!: number | null;
 
-    @ApiProperty({ type: String, example: 'delivery', description: 'Dispatch type: `delivery` or a pickup' })
+    @ApiProperty({ type: String, enum: ['delivery', 'supplier_pickup', 'warehouse_return_pickup'], description: 'Dispatch type: a `delivery`, a pickup at a supplier (`supplier_pickup`) or a customer return pickup (`warehouse_return_pickup`)' })
     dispatchType!: string;
 
     @ApiProperty({ type: String, enum: ['delivered', 'pickup_completed', 'unsuccessful', 'pending', 'excluded_at_start', 'cancelled_before_start', 'removed_before_start'], description: 'Result of this stop, one category only. It does not wait for the batch to close' })

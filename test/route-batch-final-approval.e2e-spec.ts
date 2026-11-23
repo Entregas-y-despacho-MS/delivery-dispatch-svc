@@ -135,6 +135,15 @@ describe('POST /route-batches/:id/approve-final (e2e)', () => {
       zoneName: 'Zona sin especificar',
       version: 5,
     });
+    // ST-302.2: the approved route is frozen, with the version it just reached and its stops still to leave.
+    const manifests = await db.query(
+      `SELECT route_manifest_id, manifest_version, kind, route_version, vehicle_id, driver_id FROM route_manifests WHERE route_batch_id = $1`,
+      [routeBatchId],
+    );
+    expect(manifests).toHaveLength(1);
+    expect(manifests[0]).toMatchObject({ manifest_version: 1, kind: 'confirmed', route_version: 5, vehicle_id: vehicleId, driver_id: driverId });
+    const stops = await db.query(`SELECT dispatch_id, stop_state, exclusion_code FROM route_manifest_stops WHERE route_manifest_id = $1`, [manifests[0].route_manifest_id]);
+    expect(stops).toEqual([{ dispatch_id: dispatchId, stop_state: 'planned', exclusion_code: null }]);
   });
 
   it('accepts a pickup_scheduled customer pickup with no registered packages, moving it to assigned', async () => {

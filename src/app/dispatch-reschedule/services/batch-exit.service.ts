@@ -160,9 +160,9 @@ export class BatchExitService {
             );
         }
         // ST-302.2: the route already left, so its stops changed after the `started` baseline: a new version, with the reason.
-        // A batch cancelled by this exit has no route left to describe, and one that had not started is covered by comparing
-        // its `confirmed` manifest with its `started` one.
-        if (locked.status === RouteBatchStatusEnum.IN_EXECUTION && !cancelled && !audit.deferManifest) {
+        // One that had not started is covered by comparing its `confirmed` manifest with its `started` one, and one this exit
+        // just closed (or cancelled) is over: its baseline is all there is left to measure, so no revision is written for it.
+        if (locked.status === RouteBatchStatusEnum.IN_EXECUTION && !closed && !cancelled && !audit.deferManifest) {
             await this.manifests.record(manager, {
                 routeBatchId: locked.id,
                 kind: 'revised',

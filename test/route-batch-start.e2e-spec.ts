@@ -204,6 +204,16 @@ describe('POST /route-batches/:id/start (e2e, ST-51.5)', () => {
       dispatchIds: [dispatchId],
       dispatches: [{ dispatchId, packageIds: [packageId] }],
     });
+    // ST-302.2: the route that left is frozen as the baseline of its completion.
+    const manifests = await db.query(
+      `SELECT route_manifest_id, kind, driver_id FROM route_manifests WHERE route_batch_id = $1`,
+      [routeBatchId],
+    );
+    expect(manifests).toHaveLength(1);
+    expect(manifests[0]).toMatchObject({ kind: 'started', driver_id: users.driver1 });
+    expect(
+      await db.query(`SELECT dispatch_id, stop_state FROM route_manifest_stops WHERE route_manifest_id = $1`, [manifests[0].route_manifest_id]),
+    ).toEqual([{ dispatch_id: dispatchId, stop_state: 'departing' }]);
     const [{ payload }] = await db.query(
       `SELECT payload FROM outbound_messages WHERE type = 'dispatch.shipment.departed' AND payload #>> '{data,salesOrderId}' = $1`,
       [sourceOrderRef],
@@ -370,6 +380,17 @@ describe('POST /route-batches/:id/start (e2e, ST-51.5)', () => {
       dispatchIds: [dispatchId],
       excludedDispatchIds: [Number(excludedDispatchId)],
     });
+    // ST-302.2: the stop held back by the package check is in the frozen baseline, excluded with its code; the replay wrote no second manifest.
+    const manifestStops = await db.query(
+      `SELECT s.dispatch_id, s.stop_state, s.exclusion_code
+         FROM route_manifests m JOIN route_manifest_stops s USING (route_manifest_id)
+        WHERE m.route_batch_id = $1 AND m.kind = 'started' ORDER BY s.dispatch_id`,
+      [routeBatchId],
+    );
+    expect(manifestStops).toEqual([
+      { dispatch_id: dispatchId, stop_state: 'departing', exclusion_code: null },
+      { dispatch_id: Number(excludedDispatchId), stop_state: 'excluded', exclusion_code: 'cotejo_failed' },
+    ]);
     const statuses = await db.query(
       `SELECT d.dispatch_id, s.name AS status FROM dispatches d JOIN dispatch_statuses s USING (dispatch_status_id)
         WHERE d.dispatch_id = ANY($1::int[]) ORDER BY d.dispatch_id`,

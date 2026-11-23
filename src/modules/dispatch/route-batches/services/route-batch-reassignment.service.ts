@@ -188,8 +188,9 @@ export class RouteBatchReassignmentService {
         }
 
         // ST-302.2: both routes changed after they left. One revised manifest each for the whole move (the exits above
-        // deferred theirs), written once the stops are in their final place.
-        await this.manifests.record(manager, { routeBatchId: originBatchId, kind: 'revised', actorUserId, reason: dto.reasonCode });
+        // deferred theirs), written once the stops are in their final place. An origin that the move left closed is over,
+        // so it gets none, the same as a single exit that closes its batch.
+        if (!originClosed) await this.manifests.record(manager, { routeBatchId: originBatchId, kind: 'revised', actorUserId, reason: dto.reasonCode });
         await this.manifests.record(manager, { routeBatchId: dto.targetBatchId, kind: 'revised', actorUserId, reason: dto.reasonCode });
 
         const zones: (ZoneRow & { route_batch_id: number })[] = await manager.query(
