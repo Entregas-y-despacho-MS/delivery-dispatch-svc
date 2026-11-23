@@ -14,8 +14,8 @@ export type AuditOrder = (typeof AUDIT_ORDERS)[number];
 export const AUDIT_ACTIONS: readonly string[] = Object.keys(ADMIN_AUDIT_CATALOG);
 export const AUDIT_ENTITY_TYPES: readonly string[] = [...new Set(Object.values(ADMIN_AUDIT_CATALOG).map((definition) => definition.entityType))];
 
-/** ISO 8601 date-time that carries its own offset (`Z` or `±hh:mm`): the search never guesses a time zone. */
-export const ISO_WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2})$/;
+/** ISO 8601 date-time that carries its own offset (`Z` or `±hh:mm`): the search never guesses a time zone. Resolution is the millisecond (a `Date` cannot hold more), so more decimals are rejected instead of silently truncated. */
+export const ISO_WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/;
 
 /**
  * The window `[from, to)` of a search: `from` is included, `to` is not, so two consecutive windows never repeat or

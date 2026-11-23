@@ -19,7 +19,7 @@ describe('FindAdminAuditEventsParamsDto', () => {
         expect(dto).toMatchObject({ actorId: 4, entityId: '12', page: 2, limit: 100, order: 'asc' });
     });
 
-    it.each([undefined, '', '2026-11-20', '2026-11-20T00:00:00', '2026-11-20 00:00:00Z', '2026-13-20T00:00:00Z', '2026-02-30T00:00:00Z'])('rejects the missing or zone-less date %s', async (value) => {
+    it.each([undefined, '', '2026-11-20T00:00:00.0001Z', '2026-11-20', '2026-11-20T00:00:00', '2026-11-20 00:00:00Z', '2026-13-20T00:00:00Z', '2026-02-30T00:00:00Z'])('rejects the missing or zone-less date %s', async (value) => {
         expect(await validate(parse({ from: value }))).not.toHaveLength(0);
         expect(await validate(parse({ to: value }))).not.toHaveLength(0);
     });

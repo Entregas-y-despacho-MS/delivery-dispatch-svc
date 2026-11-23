@@ -20,7 +20,7 @@ export class FindAdminAuditEventsParamsDto extends PaginationParamsDto {
     @Matches(ISO_WITH_OFFSET, { message: dateMessage('to') })
     to!: string;
 
-    @ApiPropertyOptional({ type: 'integer', minimum: 1, description: 'Id of the user who acted.' })
+    @ApiPropertyOptional({ type: 'integer', minimum: 1, maximum: INT4_MAX, description: 'Id of the user who acted.' })
     @IsOptional()
     @Type(() => Number)
     @IsInt({ message: "The 'actorId' parameter must be an integer." })

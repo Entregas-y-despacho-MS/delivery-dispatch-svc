@@ -1,9 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
-import type { AuditEventView } from '../domain/admin-audit-query.js';
+import { AUDIT_RESULTS, type AuditEventView } from '../domain/admin-audit-query.js';
 
 export class AdminAuditEventDto implements AuditEventView {
-    @ApiProperty({ format: 'uuid', description: 'Unique id of the audit event.' })
+    @ApiProperty({ type: String, format: 'uuid', description: 'Unique id of the audit event.' })
     eventId!: string;
 
     @ApiProperty({ type: String, format: 'date-time', description: 'Moment the action ended (UTC).' })
@@ -24,7 +24,7 @@ export class AdminAuditEventDto implements AuditEventView {
     @ApiProperty({ type: String, nullable: true, description: 'Id of the affected entity; null when the action has none or it could not be known.' })
     entityId!: string | null;
 
-    @ApiProperty({ enum: ['success', 'denied', 'failed'], description: 'success; denied for any 401/403; failed for any other error.' })
+    @ApiProperty({ enum: AUDIT_RESULTS, description: 'success; denied for any 401/403; failed for any other error.' })
     result!: string;
 
     @ApiProperty({ type: 'integer', nullable: true, description: 'HTTP status the client received.' })
@@ -46,6 +46,6 @@ export class AdminAuditEventDto implements AuditEventView {
 }
 
 export class FindAdminAuditEventsResponseDto extends PaginationResponseDto<AdminAuditEventDto> {
-    @ApiProperty({ type: () => [AdminAuditEventDto], description: 'Events of the page, in the requested order. Empty (not an error) when nothing matches.' })
+    @ApiProperty({ type: [AdminAuditEventDto], description: 'Events of the page, in the requested order. Empty (not an error) when nothing matches.' })
     declare data: AdminAuditEventDto[];
 }

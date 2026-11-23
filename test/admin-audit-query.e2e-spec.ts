@@ -1,6 +1,7 @@
 // RF-A37 (ST-70.1): GET /audit/admin-events against the real AppModule and a real database.
 // The events it searches are inserted by the test inside a window of 2020, where nothing else writes, and are deleted
-// in afterAll together with the throwaway users (found by their prefix).
+// in afterAll together with the throwaway users (found by their prefix). It deletes rows of an append-only table, so
+// run it against a disposable database (postgres:18-alpine), never a shared one.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
@@ -120,9 +121,19 @@ describe('admin audit search (RF-A37)', () => {
             });
         });
 
-        it('shows the address and the metadata only to root', async () => {
+        it('never gives the administrator the address or the metadata, in any row of the page', async () => {
+            const res = await search('admin', { order: 'asc' });
+            expect(res.body.data).toHaveLength(7);
+            for (const event of res.body.data) {
+                expect(event).not.toHaveProperty('ip');
+                expect(event).not.toHaveProperty('metadata');
+            }
+        });
+
+        it('shows the address and the metadata only to root, with null when the event has none', async () => {
             const res = await search('root', { order: 'asc' });
             expect(res.body.data[1]).toMatchObject({ eventId: uuid(1), ip: '10.1.2.3', metadata: { roleId: 3 } });
+            expect(res.body.data[0]).toMatchObject({ eventId: uuid(7), ip: null, metadata: {} });
         });
     });
 
@@ -185,6 +196,14 @@ describe('admin audit search (RF-A37)', () => {
             }
             expect(seen).toEqual(order === 'asc' ? ASC : [...ASC].reverse());
             expect((await search('admin', { order, limit: 2, page: 5 })).body.data).toEqual([]);
+        });
+
+        it('accepts a window of exactly 31 days and rejects one second more', async () => {
+            const exact = await search('admin', { from: '2020-03-01T00:00:00Z', to: '2020-04-01T00:00:00Z' });
+            expect(exact.status).toBe(200);
+            const wider = await search('admin', { from: '2020-03-01T00:00:00Z', to: '2020-04-01T00:00:01Z' });
+            expect(wider.status).toBe(400);
+            expect(wider.body.error).toBe('INVALID_AUDIT_RANGE');
         });
 
         it('accepts the maximum limit and rejects one more', async () => {

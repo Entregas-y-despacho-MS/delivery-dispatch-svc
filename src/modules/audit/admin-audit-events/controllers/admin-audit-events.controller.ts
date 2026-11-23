@@ -4,8 +4,6 @@ import { AdminOnly } from '../../../../app/auth/decorators/index.js';
 import { CurrentUser } from '../../../../shared/decorators/current-user.decorator.js';
 import { RoleEnum } from '../../../../shared/enums/index.js';
 import { ApiBadRequests, ApiForbidden, ApiUnauthorized } from '../../../../shared/utils/swagger/index.js';
-import type { PaginationResponseDto } from '../../../../shared/dto/index.js';
-import type { AuditEventView } from '../domain/admin-audit-query.js';
 import { FindAdminAuditEventsParamsDto } from '../dto/find-admin-audit-events-params.dto.js';
 import { FindAdminAuditEventsResponseDto } from '../dto/admin-audit-event.dto.js';
 import { AdminAuditQueryService } from '../services/admin-audit-query.service.js';
@@ -32,6 +30,7 @@ export class AdminAuditEventsController {
         example: ["The 'limit' parameter must be <= 100.", "The 'from' parameter must be an ISO 8601 date-time with an explicit offset (e.g. 2026-11-20T00:00:00-04:00)."],
         errors: [
             { code: 'INVALID_AUDIT_RANGE', message: "The 'from' parameter must be before 'to'." },
+            { code: 'INVALID_AUDIT_RANGE', message: "The range between 'from' and 'to' must not exceed 31 days." },
             { code: 'INVALID_AUDIT_FILTER', message: "The 'entityId' parameter requires 'entityType'." },
         ],
     })
@@ -41,7 +40,7 @@ export class AdminAuditEventsController {
     async find(
         @Query() params: FindAdminAuditEventsParamsDto,
         @CurrentUser('role') role: RoleEnum,
-    ): Promise<PaginationResponseDto<AuditEventView>> {
+    ): Promise<FindAdminAuditEventsResponseDto> {
         return await this.queryService.find(params, role);
     }
 }
