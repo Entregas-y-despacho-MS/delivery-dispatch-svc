@@ -153,9 +153,11 @@ describe('Programación de recogidas en proveedor (e2e, ST-75.1)', () => {
             expect((await state(id)).status).toBe('pending');
         });
 
-        it('cuerpo inválido → 400 con VALIDATION_FAILED, sin vehículo o con fecha sin desfase', async () => {
+        // Sin vehículo ya no es inválido: el planificador elige uno (ruta de recojo dedicada); lo inválido es un vehículo mal formado.
+        it('cuerpo inválido → 400 con VALIDATION_FAILED, vehículo mal formado o fecha sin desfase', async () => {
             const { id } = await insertPickup();
-            expect((await post(id, 'pickup-schedule', {})).status).toBe(400);
+            for (const bad of [0, -1, 1.5, '3']) expect((await post(id, 'pickup-schedule', { vehicleId: bad })).status, String(bad)).toBe(400);
+            expect((await state(id)).status).toBe('pending');
             const res = await post(id, 'pickup-schedule', { vehicleId, windowStart: '2030-01-15T10:00:00', windowEnd: '2030-01-15T11:00:00' });
             expect(res.status).toBe(400);
             expect(res.body.message.join(' ')).toContain('windowStart');

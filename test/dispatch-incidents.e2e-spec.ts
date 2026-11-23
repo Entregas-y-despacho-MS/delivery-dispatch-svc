@@ -40,11 +40,13 @@ describe('POST /dispatches/:id/incidents (ST-32.2)', () => {
         occurredAt: new Date(Date.now() - 60_000).toISOString(), lat: -16.5, lng: -68.1, ...extra,
     });
 
-    async function reason(code: string, name: string, requiresEvidence: boolean, active = true): Promise<void> {
+    // The alert carries the criticality of the reason (ES-66), as in the seeded catalog: a customer absent is `low`, a
+    // company or vehicle failure is `high`.
+    async function reason(code: string, name: string, requiresEvidence: boolean, active = true, criticality: 'low' | 'high' = 'low'): Promise<void> {
         const [{ incident_reason_id: id }] = await db.query(
-            `INSERT INTO incident_reasons (code, name, requires_evidence, counts_as_attempt, active)
-             VALUES ($1, $2, $3, false, $4) RETURNING incident_reason_id`,
-            [`${tag}-${code}`, code === 'OTHER' ? 'Otro' : `${name} ${tag}`, requiresEvidence, active],
+            `INSERT INTO incident_reasons (code, name, requires_evidence, counts_as_attempt, active, criticality)
+             VALUES ($1, $2, $3, false, $4, $5) RETURNING incident_reason_id`,
+            [`${tag}-${code}`, code === 'OTHER' ? 'Otro' : `${name} ${tag}`, requiresEvidence, active, criticality],
         );
         reasonIds.push(id);
         reasonCodes[code] = `${tag}-${code}`;
@@ -104,7 +106,7 @@ describe('POST /dispatches/:id/incidents (ST-32.2)', () => {
         for (const row of await db.query('SELECT name, dispatch_status_id FROM dispatch_statuses')) statusIds[row.name] = row.dispatch_status_id;
         [{ dispatch_type_id: deliveryTypeId }] = await db.query(`SELECT dispatch_type_id FROM dispatch_types WHERE name='delivery'`);
         await reason('ABSENT', 'Customer absent', true);
-        await reason('COMPFAIL', 'Company or vehicle failure', false);
+        await reason('COMPFAIL', 'Company or vehicle failure', false, true, 'high');
         await reason('OTHER', 'Otro', false);
         await reason('INACTIVE', 'Inactive reason', false, false);
     }, 30000);
@@ -129,7 +131,7 @@ describe('POST /dispatches/:id/incidents (ST-32.2)', () => {
 
     afterEach(() => vi.restoreAllMocks());
 
-    it('commits incident, status and timeline metadata atomically and emits high-criticality alert after commit', async () => {
+    it('commits incident, status and timeline metadata atomically and emits the incident event, with the reason\'s criticality, after commit', async () => {
         const id = await dispatch();
         const evidenceId = uuidv7();
         await db.query(`INSERT INTO delivery_evidences (delivery_evidence_id, dispatch_id, type, file_url) VALUES ($1,$2,'photo','https://files.test/incident.jpg')`, [evidenceId, id]);
@@ -145,7 +147,7 @@ describe('POST /dispatches/:id/incidents (ST-32.2)', () => {
         expect(incident.description).toBe(report.observations);
         const [event] = await db.query('SELECT metadata, event_type FROM dispatch_events WHERE dispatch_id=$1 AND client_event_id=$2', [id, report.incidentId]);
         expect(event).toMatchObject({ event_type: 'status_changed', metadata: expect.objectContaining({ status: 'incident', reasonCode: reasonCodes.ABSENT, evidenceId, lat: report.lat, lng: report.lng }) });
-        expect(announcements).toContainEqual(expect.objectContaining({ dispatchId: id, incidentId: report.incidentId, criticality: 'high' }));
+        expect(announcements).toContainEqual(expect.objectContaining({ dispatchId: id, incidentId: report.incidentId, criticality: 'low' }));
 
         const replay = await requestIncident(id, report);
         expect(replay.status).toBe(200);
@@ -153,6 +155,13 @@ describe('POST /dispatches/:id/incidents (ST-32.2)', () => {
         expect((await db.query('SELECT count(*)::int AS count FROM dispatch_incidents WHERE dispatch_incident_id=$1', [report.incidentId]))[0].count).toBe(1);
         expect(announcements.filter((item) => item.incidentId === report.incidentId)).toHaveLength(1);
         expect((await requestIncident(id, { ...report, observations: 'Changed incident details.' })).status).toBe(409);
+    });
+
+    it('a high-criticality reason emits the incident event with high criticality', async () => {
+        const id = await dispatch();
+        const report = body(reasonCodes.COMPFAIL);
+        expect((await requestIncident(id, report)).status).toBe(201);
+        expect(announcements).toContainEqual(expect.objectContaining({ dispatchId: id, incidentId: report.incidentId, criticality: 'high' }));
     });
 
     it('requires evidence for an active reason and leaves status and history unchanged when photo is absent', async () => {
