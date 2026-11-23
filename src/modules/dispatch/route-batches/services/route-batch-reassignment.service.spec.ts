@@ -18,8 +18,9 @@ function build() {
     const batchExit = { lock: vi.fn(), leave: vi.fn() };
     const capacity = { assertAssignable: vi.fn().mockResolvedValue(undefined) };
     const events = { emit: vi.fn() };
-    const service = new RouteBatchReassignmentService(dataSource as never, batchExit as never, capacity as never, events as never);
-    return { service, query, dataSource, batchExit, capacity, events };
+    const manifests = { record: vi.fn().mockResolvedValue({ routeManifestId: 1, manifestVersion: 2, routeVersion: 6, stops: [] }) };
+    const service = new RouteBatchReassignmentService(dataSource as never, batchExit as never, capacity as never, events as never, manifests as never);
+    return { service, query, dataSource, batchExit, capacity, events, manifests };
 }
 
 const dto = { dispatchIds: [31], targetBatchId: 20, reasonCode: 'DRIVER-BREAKDOWN', version: 5, targetVersion: 3 };
@@ -48,7 +49,7 @@ describe('RouteBatchReassignmentService.reassign', () => {
         const result = await service.reassign(10, dto, 9);
 
         expect(result).toEqual({ fromBatchId: 10, toBatchId: 20, movedDispatchIds: [31], fromVersion: 6, toVersion: 4, fromBatchClosed: false });
-        expect(batchExit.leave).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 10 }), 31, { actorUserId: 9, reason: 'DRIVER-BREAKDOWN', metadata: { toBatchId: 20 } });
+        expect(batchExit.leave).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 10 }), 31, { actorUserId: 9, reason: 'DRIVER-BREAKDOWN', metadata: { toBatchId: 20 }, deferManifest: true });
         expect(capacity.assertAssignable).toHaveBeenCalledWith(20, 7, expect.anything());
         const moveCall = query.mock.calls.find(([sql]: [string]) => sql.includes('UPDATE dispatches SET route_batch_id'));
         expect(moveCall[1]).toEqual([31, 20, 1]);
@@ -67,6 +68,30 @@ describe('RouteBatchReassignmentService.reassign', () => {
         expect(events.emit).toHaveBeenCalledWith(ROUTE_ASSIGNED_EVENT, {
             routeId: 20, driverId: 9, vehicleId: 7, dispatchIds: [31], dispatches: [{ dispatchId: 31, priority: 'normal' }], zoneName: 'Centro', version: 4, fromReassignment: true,
         });
+    });
+
+    it('writes one revised manifest per route for the whole move, with the reason, after the stops are in place', async () => {
+        const { service, query, batchExit, manifests } = build();
+        mockHappyPath(query, batchExit);
+
+        await service.reassign(10, { ...dto, dispatchIds: [31] }, 9);
+
+        expect(manifests.record).toHaveBeenCalledTimes(2);
+        expect(manifests.record).toHaveBeenNthCalledWith(1, expect.anything(), { routeBatchId: 10, kind: 'revised', actorUserId: 9, reason: 'DRIVER-BREAKDOWN' });
+        expect(manifests.record).toHaveBeenNthCalledWith(2, expect.anything(), { routeBatchId: 20, kind: 'revised', actorUserId: 9, reason: 'DRIVER-BREAKDOWN' });
+        const moveOrder = query.mock.invocationCallOrder[query.mock.calls.findIndex(([sql]: [string]) => sql.includes('UPDATE dispatches SET route_batch_id'))];
+        const bumpOrder = query.mock.invocationCallOrder[query.mock.calls.findIndex(([sql]: [string]) => sql.includes('UPDATE route_batches SET version = version + $2'))];
+        expect(manifests.record.mock.invocationCallOrder[0]).toBeGreaterThan(moveOrder);
+        expect(manifests.record.mock.invocationCallOrder[0]).toBeGreaterThan(bumpOrder);
+    });
+
+    it('writes no manifest when the reassignment is refused', async () => {
+        const { service, query, manifests } = build();
+        query.mockResolvedValueOnce([{ ...ORIGIN, status: 'confirmed' }, TARGET]);
+
+        await expect(service.reassign(10, dto, 9)).rejects.toBeInstanceOf(RouteBatchReassignConflictException);
+
+        expect(manifests.record).not.toHaveBeenCalled();
     });
 
     it('falls back to the default zone label on route.assigned when a batch has no zone', async () => {

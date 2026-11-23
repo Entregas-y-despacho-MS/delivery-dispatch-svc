@@ -144,14 +144,16 @@ function setup(
   } as unknown as OutboxService;
   const events = { emit: vi.fn() } as unknown as EventEmitter2;
   const alerts = { raise: vi.fn().mockResolvedValue(undefined) };
+  const manifests = { record: vi.fn().mockResolvedValue({ routeManifestId: 1, manifestVersion: 2, routeVersion: 3, stops: [] }) };
   const service = new RouteBatchStartService(
     dataSource,
     outbox,
     events,
     alerts as unknown as PlanningAlertsService,
     orderEvents as never,
+    manifests as never,
   );
-  return { service, manager, runner, outbox, events, alerts };
+  return { service, manager, runner, outbox, events, alerts, manifests };
 }
 
 describe('RouteBatchStartService.start', () => {
@@ -320,6 +322,43 @@ describe('RouteBatchStartService.start', () => {
     );
     expect(routeStarted?.[1]?.[2]).toContain('"dispatchIds":[21]');
     expect(routeStarted?.[1]?.[2]).toContain('"excludedDispatchIds":[22]');
+    // ST-302.2: the stop held back is part of the frozen baseline, with its exclusion.
+    expect(ctx.manifests.record).toHaveBeenCalledWith(ctx.manager, {
+      routeBatchId: 7,
+      kind: 'started',
+      actorUserId: 9,
+      excludedDispatchIds: [22],
+    });
+  });
+
+  it('freezes the started manifest in the same transaction, before the commit', async () => {
+    const ctx = setup();
+
+    await ctx.service.start(7, { eventId }, 9);
+
+    expect(ctx.manifests.record).toHaveBeenCalledTimes(1);
+    expect(ctx.manifests.record).toHaveBeenCalledWith(ctx.manager, expect.objectContaining({ routeBatchId: 7, kind: 'started', excludedDispatchIds: [] }));
+    expect(ctx.manifests.record.mock.invocationCallOrder[0]).toBeLessThan(ctx.runner.commitTransaction.mock.invocationCallOrder[0]);
+  });
+
+  it('writes no manifest on a replay of the same eventId', async () => {
+    const ctx = setup({
+      batch: [{ id: 7, status: RouteBatchStatusEnum.IN_EXECUTION, driver_id: 9 }],
+      prior: [{ route_batch_id: 7, metadata: { dispatchIds: [21], excludedDispatchIds: [22], startedAt: savedAt.toISOString() } }],
+    });
+
+    await ctx.service.start(7, { eventId }, 9);
+
+    expect(ctx.manifests.record).not.toHaveBeenCalled();
+  });
+
+  it('rolls back the start when the manifest cannot be written', async () => {
+    const ctx = setup();
+    ctx.manifests.record.mockRejectedValueOnce(new Error('manifest down'));
+
+    await expect(ctx.service.start(7, { eventId }, 9)).rejects.toThrow('manifest down');
+    expect(ctx.runner.rollbackTransaction).toHaveBeenCalled();
+    expect(ctx.runner.commitTransaction).not.toHaveBeenCalled();
   });
 
   it('raises cotejo_exclusion_pending once, after the commit, when the batch starts with excluded dispatches', async () => {

@@ -13,6 +13,7 @@ import { ApproveFinalRouteBatchResponseDto } from '../dto/approve-final-route-ba
 import { ROUTE_ASSIGNED_EVENT, type RouteAssignedEvent } from '../events/route-assigned.event.js';
 import { ORDER_DISPATCH_ACTIONS } from '../../../audit/order-dispatch-events/domain/order-dispatch-event-actions.js';
 import { OrderDispatchEventsService } from '../../../audit/order-dispatch-events/services/order-dispatch-events.service.js';
+import { RouteManifestService } from '../../route-manifests/services/route-manifest.service.js';
 
 interface BatchRow {
   id: number;
@@ -52,6 +53,7 @@ export class RouteBatchFinalApprovalService {
     private readonly events: EventEmitter2,
     private readonly resources: RouteBatchResourcesService,
     private readonly orderEvents: OrderDispatchEventsService,
+    private readonly manifests: RouteManifestService,
   ) {}
 
   async approve(routeBatchId: number, dto: ApproveFinalRouteBatchDto, actorUserId: number): Promise<ApproveFinalRouteBatchResponseDto> {
@@ -211,6 +213,8 @@ export class RouteBatchFinalApprovalService {
        VALUES ($1, 'final_approved', $2, 'user', $3, $4::jsonb)`,
       [batch.id, actorUserId, APPROVAL_REASON, JSON.stringify({ previousStatus: batch.status, status: RouteBatchStatusEnum.CONFIRMED, previousVersion: batch.version, version: approvedVersion, driverId, vehicleId, dispatchIds })],
     );
+    // ST-302.2: the route as approved is frozen in the same transaction, with the version it just reached.
+    await this.manifests.record(manager, { routeBatchId: batch.id, kind: 'confirmed', actorUserId });
 
     const event: RouteAssignedEvent = {
       routeId: batch.id,

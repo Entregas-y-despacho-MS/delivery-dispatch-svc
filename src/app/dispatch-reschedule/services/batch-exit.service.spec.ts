@@ -13,10 +13,11 @@ function build(closed = false) {
     const query = vi.fn(async (sql: string) => (sql.startsWith('UPDATE dispatches\n') || sql.includes('RETURNING version') ? [[{ version: 3 }], 1] : []));
     const manager = { query } as unknown as EntityManager;
     const closing = { closeIfComplete: vi.fn().mockResolvedValue(closed) };
-    const service = new BatchExitService(closing as unknown as RouteBatchClosingService);
+    const manifests = { record: vi.fn().mockResolvedValue({ routeManifestId: 1, manifestVersion: 2, routeVersion: 7, stops: [] }) };
+    const service = new BatchExitService(closing as unknown as RouteBatchClosingService, manifests as never);
     const sqls = () => query.mock.calls.map(([sql]) => String(sql));
     const events = () => query.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO route_batch_events'));
-    return { service, manager, closing, query, sqls, events };
+    return { service, manager, closing, manifests, query, sqls, events };
 }
 
 describe('BatchExitService.leave', () => {
@@ -72,6 +73,45 @@ describe('BatchExitService.leave', () => {
         expect(await service.leave(manager, batch('in_execution', [{ id: 1, seq: 1 }, { id: 2, seq: 2 }]), 2, audit))
             .toMatchObject({ closed: false, batchStatusAfter: 'in_execution', batchVersion: 7 });
     });
+
+    it('in_execution: freezes a revised manifest with the reason, once the batch is up to date', async () => {
+        const { service, manager, manifests, sqls } = build();
+
+        await service.leave(manager, batch('in_execution', [{ id: 1, seq: 1 }, { id: 2, seq: 2 }]), 2, audit);
+
+        expect(manifests.record).toHaveBeenCalledTimes(1);
+        expect(manifests.record).toHaveBeenCalledWith(manager, { routeBatchId: 50, kind: 'revised', actorUserId: 9, reason: audit.reason });
+        // The manifest reads the batch after its version was bumped.
+        const bumped = sqls().findIndex((sql) => sql.includes('UPDATE route_batches'));
+        expect(bumped).toBeGreaterThanOrEqual(0);
+    });
+
+    it('in_execution: gives a reason to the revision even if the caller sent a blank one', async () => {
+        const { service, manager, manifests } = build();
+
+        await service.leave(manager, batch('in_execution', [{ id: 1, seq: 1 }, { id: 2, seq: 2 }]), 2, { ...audit, reason: '  ' });
+
+        expect(manifests.record).toHaveBeenCalledWith(manager, expect.objectContaining({ reason: 'dispatch_left_the_batch' }));
+    });
+
+    it('in_execution: writes no manifest when the caller defers it for a whole operation', async () => {
+        const { service, manager, manifests } = build();
+
+        await service.leave(manager, batch('in_execution', [{ id: 1, seq: 1 }, { id: 2, seq: 2 }]), 2, { ...audit, deferManifest: true });
+
+        expect(manifests.record).not.toHaveBeenCalled();
+    });
+
+    it.each(['provisional', 'pending_final_review', 'confirmed', 'closed', 'cancelled'])(
+        '%s: the route has not left (or is over), so no revised manifest is written',
+        async (status) => {
+            const { service, manager, manifests } = build();
+
+            await service.leave(manager, batch(status, [{ id: 1, seq: 1 }, { id: 2, seq: 2 }]), 2, audit);
+
+            expect(manifests.record).not.toHaveBeenCalled();
+        },
+    );
 
     it.each(['closed', 'cancelled'])('%s: the dispatch leaves and the event is written, the batch is not touched', async (status) => {
         const { service, manager, sqls, events, closing } = build();

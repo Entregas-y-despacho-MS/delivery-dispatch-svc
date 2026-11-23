@@ -12,6 +12,7 @@ import { ORDER_DISPATCH_ACTIONS } from '../../../audit/order-dispatch-events/dom
 import { OrderDispatchEventsService } from '../../../audit/order-dispatch-events/services/order-dispatch-events.service.js';
 import { PlanningAlertsService } from '../../../../app/planning/services/planning-alerts.service.js';
 import { OutboxService } from '../../../messaging/outbound-messages/services/outbox.service.js';
+import { RouteManifestService } from '../../route-manifests/services/route-manifest.service.js';
 import { RouteBatchNotFoundException } from '../exceptions/route-batch-not-found.exception.js';
 import { RouteBatchStartConflictException } from '../exceptions/route-batch-start-conflict.exception.js';
 import { StartRouteBatchDto } from '../dto/start-route-batch.dto.js';
@@ -63,6 +64,7 @@ export class RouteBatchStartService {
     private readonly events: EventEmitter2,
     private readonly alerts: PlanningAlertsService,
     private readonly orderEvents: OrderDispatchEventsService,
+    private readonly manifests: RouteManifestService,
   ) {}
 
   async start(
@@ -337,6 +339,15 @@ export class RouteBatchStartService {
         updatedAt: dispatchUpdatedAt,
       });
     }
+
+    // ST-302.2: the baseline to measure completion. Frozen with the stops that leave and the ones held back by the
+    // package check, in the same transaction as the start; a replay of the same eventId returned before reaching here.
+    await this.manifests.record(manager, {
+      routeBatchId,
+      kind: 'started',
+      actorUserId,
+      excludedDispatchIds,
+    });
 
     const metadata: StartedMetadata = {
       eventId: dto.eventId,

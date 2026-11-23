@@ -3,6 +3,7 @@ import { EntityManager } from 'typeorm';
 import { RouteBatchStatusEnum } from '../../../shared/enums/route-batch-status.enum.js';
 import { closeGap, type CurrentStop } from '../../public-tracking/domain/reschedule-layout.js';
 import { RouteBatchClosingService } from '../../route-batch-closing/services/route-batch-closing.service.js';
+import { RouteManifestService } from '../../../modules/dispatch/route-manifests/services/route-manifest.service.js';
 import { batchExitPolicy } from '../domain/batch-exit-policy.js';
 
 export interface LockedBatch {
@@ -23,6 +24,11 @@ export interface BatchExitAudit {
     reason: string;
     /** Stored in the `order_removed` event, next to what this service adds (batch state before and after...). */
     metadata: Record<string, unknown>;
+    /**
+     * A stop that leaves a batch already `in_execution` writes a `revised` route manifest (ST-302.2). A caller that makes
+     * several exits in one operation sets this and writes one manifest for the whole operation instead of one per stop.
+     */
+    deferManifest?: boolean;
 }
 
 export interface BatchExitResult {
@@ -61,7 +67,10 @@ interface StopRow {
  */
 @Injectable()
 export class BatchExitService {
-    constructor(private readonly closing: RouteBatchClosingService) {}
+    constructor(
+        private readonly closing: RouteBatchClosingService,
+        private readonly manifests: RouteManifestService,
+    ) {}
 
     async lock(manager: EntityManager, batchId: number): Promise<LockedBatch | null> {
         const [batch]: BatchRow[] = await manager.query(
@@ -149,6 +158,17 @@ export class BatchExitService {
                  VALUES ($1, NULL, 'cancelled', $2, 'user', 'dispatch_left_and_batch_emptied', $3::jsonb)`,
                 [locked.id, audit.actorUserId, JSON.stringify({ lastDispatchId: dispatchId, ...audit.metadata })],
             );
+        }
+        // ST-302.2: the route already left, so its stops changed after the `started` baseline: a new version, with the reason.
+        // A batch cancelled by this exit has no route left to describe, and one that had not started is covered by comparing
+        // its `confirmed` manifest with its `started` one.
+        if (locked.status === RouteBatchStatusEnum.IN_EXECUTION && !cancelled && !audit.deferManifest) {
+            await this.manifests.record(manager, {
+                routeBatchId: locked.id,
+                kind: 'revised',
+                actorUserId: audit.actorUserId,
+                reason: audit.reason.trim() || 'dispatch_left_the_batch',
+            });
         }
         return {
             batchId: locked.id,
