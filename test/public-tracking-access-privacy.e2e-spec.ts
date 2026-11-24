@@ -54,6 +54,8 @@ const sha256 = (value: string): string => createHash('sha256').update(value).dig
 const fingerprintOf = (trackingCode: string): string => sha256(trackingCode.trim().toUpperCase());
 const accessKey = (kind: string, trackingCode: string): string => `public-tracking:access:${kind}:${fingerprintOf(trackingCode)}`;
 const sessionKey = (session: string): string => `public-tracking:access-session:${sha256(session)}`;
+/** Samples per path in the timing test: the median of 10 is stable on a loaded machine. */
+const SAMPLES = 10;
 const median = (values: number[]): number => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 /** Everything a client sees of an error except the instant it was produced. */
@@ -318,8 +320,8 @@ describe('Tracking access: privacy and resistance to enumeration (e2e, ST-309.3)
         });
 
         it('takes the same time for an existing and an unknown code, even when the mail server is slow', async () => {
-            const reals = await Promise.all(Array.from({ length: 5 }, () => fixtures.create()));
-            const unknowns = Array.from({ length: 5 }, unknownCode);
+            const reals = await Promise.all(Array.from({ length: SAMPLES }, () => fixtures.create()));
+            const unknowns = Array.from({ length: SAMPLES }, unknownCode);
             // Warm-up: the first bcrypt and the first query of each path are slower than the rest.
             await askCode(unknownCode());
             await verify(unknownCode(), '123456');
@@ -327,31 +329,40 @@ describe('Tracking access: privacy and resistance to enumeration (e2e, ST-309.3)
             mailDelayMs = 1_500;
             const realAsk: number[] = [];
             const unknownAsk: number[] = [];
-            for (let i = 0; i < 5; i++) {
-                const known = await timed(() => askCode(reals[i].trackingCode));
-                const other = await timed(() => askCode(unknowns[i]));
-                expect([known.res.status, other.res.status]).toEqual([200, 200]);
-                realAsk.push(known.ms);
-                unknownAsk.push(other.ms);
+            try {
+                // The real per-IP limit (20 per minute) is emptied outside the measured calls: 10 samples need more requests.
+                for (let i = 0; i < SAMPLES; i++) {
+                    throttler.storage.clear();
+                    const known = await timed(() => askCode(reals[i].trackingCode));
+                    const other = await timed(() => askCode(unknowns[i]));
+                    expect([known.res.status, other.res.status]).toEqual([200, 200]);
+                    realAsk.push(known.ms);
+                    unknownAsk.push(other.ms);
+                }
+                // The answer never waits for the mail: a code that exists is not told apart by a 1.5 s delay.
+                expect(Math.max(...realAsk)).toBeLessThan(mailDelayMs);
+            } finally {
+                // Restored even when an assertion fails, so a slow mailer never leaks into the next tests.
+                await access.whenIdle();
+                mailDelayMs = 0;
             }
-            // The answer never waits for the mail: a code that exists is not told apart by a 1.5 s delay.
-            expect(Math.max(...realAsk)).toBeLessThan(mailDelayMs);
-            await access.whenIdle();
-            mailDelayMs = 0;
 
             // A wrong code: for a real code issued, for a decoy issued (the unknowns above) and for a code never asked for.
-            const neverAsked = Array.from({ length: 5 }, unknownCode);
+            const neverAsked = Array.from({ length: SAMPLES }, unknownCode);
             const realVerify: number[] = [];
             const decoyVerify: number[] = [];
             const nothingVerify: number[] = [];
-            for (let i = 0; i < 5; i++) {
+            for (let i = 0; i < SAMPLES; i++) {
+                throttler.storage.clear();
                 const right = String(mails.find((mail) => mail.metadata?.dispatchId === reals[i].dispatchId)!.context!.code);
                 realVerify.push((await timed(() => verify(reals[i].trackingCode, wrongOf(right)))).ms);
                 decoyVerify.push((await timed(() => verify(unknowns[i], '123456'))).ms);
                 nothingVerify.push((await timed(() => verify(neverAsked[i], '123456'))).ms);
             }
 
-            // Each path does one bcrypt (≈ tens of ms); a path that skipped it would be several times faster.
+            // Each path does one bcrypt (≈ tens of ms); a path that skipped it would be several times faster. The 0.5 ratio
+            // between medians leaves room for a slow or loaded machine (a real difference is a factor of 3 or more: the
+            // bcrypt mutations measured ≈ 0.1-0.3) without letting a path that skips the bcrypt pass.
             const similar = (a: number[], b: number[]): void => {
                 const [x, y] = [median(a), median(b)];
                 expect(Math.min(x, y) / Math.max(x, y), `medians ${x.toFixed(1)} ms vs ${y.toFixed(1)} ms`).toBeGreaterThan(0.5);
@@ -469,6 +480,32 @@ describe('Tracking access: privacy and resistance to enumeration (e2e, ST-309.3)
             const ownA = await verify(a.trackingCode, codeA);
             expect(ownA.status).toBe(200);
             touchedSessions.add(ownA.body.session);
+            // Each session reads only its own dispatch.
+            expect((await view(ownA.body.session)).body.trackingCode).toBe(a.trackingCode);
+            expect((await view(own.body.session)).body.trackingCode).toBe(b.trackingCode);
+
+            // Another dispatch named in the query or in headers next to the session changes nothing: the session decides.
+            const withForeignIds = await http()
+                .get(`${base()}/access/view`)
+                .query({ trackingCode: a.trackingCode, dispatchId: a.dispatchId })
+                .set('X-Tracking-Session', own.body.session)
+                .set('X-Tracking-Code', a.trackingCode)
+                .set('X-Dispatch-Id', String(a.dispatchId));
+            expect(withForeignIds.status).toBe(200);
+            expect(withForeignIds.body).toEqual((await view(own.body.session)).body);
+        });
+
+        it('a code already used to open a session is refused the second time, like a wrong one', async () => {
+            const { trackingCode } = await fixtures.create();
+            const code = await codeFor(trackingCode);
+            const first = await verify(trackingCode, code);
+            expect(first.status).toBe(200);
+            touchedSessions.add(first.body.session);
+
+            const again = await verify(trackingCode, code);
+            const wrong = await verify(trackingCode, wrongOf(code));
+            expect(again.status).toBe(400);
+            expect(again.body).toEqual({ ...wrong.body, timestamp: again.body.timestamp });
         });
 
         it('audits the burn of a code once, as the customer, with no secret, however many tries follow', async () => {
@@ -579,19 +616,23 @@ describe('Tracking access: privacy and resistance to enumeration (e2e, ST-309.3)
             ))[0];
             const before = await snapshot();
 
-            const attempts = [
-                http().get(`${base()}/${session}`),
-                http().post(`${base()}/${session}/confirm`).set('X-Tracking-Session', session),
-                http().post(`${base()}/${session}/verification-code`).set('X-Tracking-Session', session),
-                http().post(`${base()}/${session}/reschedule`).set('X-Tracking-Session', session).send({ slotId: 'x' }),
-                http().post(`${base()}/${session}/change-request`).set('X-Tracking-Session', session).send({}),
-                http().post(`${base()}/${session}/rating`).set('X-Tracking-Session', session).send({ score: 5 }),
-                http().get(`${base()}/${session}/slots`).set('X-Tracking-Session', session),
+            const attempts: [string, request.Test][] = [
+                ['GET page', http().get(`${base()}/${session}`)],
+                ['POST confirm', http().post(`${base()}/${session}/confirm`).set('X-Tracking-Session', session)],
+                ['POST verification-code', http().post(`${base()}/${session}/verification-code`).set('X-Tracking-Session', session)],
+                // Valid bodies, so the request reaches the link check instead of failing on validation.
+                ['POST reschedule', http().post(`${base()}/${session}/reschedule`).set('X-Tracking-Session', session).send({ slotId: '1767225600.1' })],
+                ['POST change-request', http().post(`${base()}/${session}/change-request`).set('X-Tracking-Session', session).send({ detail: 'Necesito la entrega otro día.' })],
+                ['POST rating', http().post(`${base()}/${session}/rating`).set('X-Tracking-Session', session).send({ score: 5 })],
+                ['GET slots', http().get(`${base()}/${session}/slots`).set('X-Tracking-Session', session)],
             ];
-            for (const res of await Promise.all(attempts)) {
-                expect(res.status).toBeGreaterThanOrEqual(400);
-                expect(res.status).toBeLessThan(500);
-            }
+            // A session is not a link token: every route of the link answers 404 TRACKING_LINK_NOT_FOUND, the same as an
+            // unknown token, and never a validation error that would stop before the check.
+            const answers = await Promise.all(attempts.map(async ([label, req]) => {
+                const res = await req;
+                return [label, res.status, res.body.error];
+            }));
+            expect(answers).toEqual(attempts.map(([label]) => [label, 404, 'TRACKING_LINK_NOT_FOUND']));
             await access.whenIdle();
             expect(await snapshot()).toEqual(before);
         });
@@ -778,7 +819,11 @@ describe('Tracking access: privacy and resistance to enumeration (e2e, ST-309.3)
     });
 });
 
-/** The in-memory adapter keeps two maps; the suite reads them to see what is stored and for how long. */
+/**
+ * The in-memory adapter keeps two maps; the suite reads them to see what is stored and for how long. It depends on the
+ * private fields `values` and `expiresAt` of that adapter: if they are renamed, this throws a clear error instead of
+ * passing without checking anything.
+ */
 function memoryAtRest(cache: CacheServiceType): AtRest {
     const values = Reflect.get(cache, 'values') as Map<string, string> | undefined;
     const expiresAt = Reflect.get(cache, 'expiresAt') as Map<string, number> | undefined;
