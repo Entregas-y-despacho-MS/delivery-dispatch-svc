@@ -7,6 +7,7 @@ import { OrderDispatchEventsService } from '../../../modules/audit/order-dispatc
 import { ORDER_DISPATCH_ACTIONS } from '../../../modules/audit/order-dispatch-events/domain/order-dispatch-event-actions.js';
 import { DispatchStatusPublicationService } from '../../../modules/dispatch/dispatch-status-publication/dispatch-status-publication.service.js';
 import { DispatchStatusEnum } from '../../../shared/enums/dispatch-status.enum.js';
+import { RouteBatchStatusEnum } from '../../../shared/enums/route-batch-status.enum.js';
 import { DISPATCH_STATUS_CHANGED_EVENT, type DispatchStatusChangedEvent } from '../../dispatch-status/dispatch-status-changed.event.js';
 import { RouteBatchClosingService } from '../../route-batch-closing/services/route-batch-closing.service.js';
 import { CancelDispatchResultDto } from '../dto/cancel-dispatch-result.dto.js';
@@ -31,6 +32,22 @@ export interface CancelDispatchOptions {
  */
 const PUBLISHES_CANCELLATION_TYPES: readonly string[] = ['delivery'];
 
+/** Batches that have not left yet: an `assigned` stop cancelled in one of them goes out of the batch. */
+const NOT_STARTED_BATCH_STATUSES: readonly string[] = [
+    RouteBatchStatusEnum.PROVISIONAL,
+    RouteBatchStatusEnum.PENDING_FINAL_REVIEW,
+    RouteBatchStatusEnum.CONFIRMED,
+];
+
+/**
+ * An `assigned` stop cancelled before its route leaves goes out of the batch, like a planned one. In a batch
+ * `in_execution` it stays: it is a stop the driver cannot take (for example after a failed cotejo). A `closed` or
+ * `cancelled` batch is history and is not touched.
+ */
+function leavesBatchBeforeStart(dispatchStatus: string, batchStatus: string): boolean {
+    return dispatchStatus === DispatchStatusEnum.ASSIGNED && NOT_STARTED_BATCH_STATUSES.includes(batchStatus);
+}
+
 interface Applied {
     result: CancelDispatchResultDto;
     event: DispatchStatusChangedEvent;
@@ -47,10 +64,11 @@ interface Applied {
  * `outboundRecordVersion` kept in the event metadata), the dispatch becomes `cancelled` with an explicit `closed_at`,
  * the audit event is written and the batch is closed when nothing in it is left open (`RouteBatchClosingService`).
  *
- * From `assigned` the dispatch stays linked to its route batch (the history takes the driver and the vehicle from it)
- * and its planning `version` does not move: a cancellation is not a change of plan. From `in_planning` and `scheduled`
- * it is still in a batch that is being planned, so it leaves it (`BatchExitService`, D-09: the `version` of the dispatch
- * and of the batch go up) and the capacity of the batch is free again.
+ * From `assigned` in a batch already on the street (`in_execution`, the stop left out by a failed cotejo) the dispatch
+ * stays linked to its route batch (the history takes the driver and the vehicle from it) and its planning `version`
+ * does not move. From `assigned` in a batch that has not left yet (`confirmed`), and from `in_planning` and `scheduled`,
+ * it leaves the batch (`BatchExitService`, D-09: the `version` of the dispatch and of the batch go up): otherwise the
+ * route could not start with a cancelled stop inside, and the stop would enter the `started` manifest as departing.
  */
 @Injectable()
 export class DispatchCancelService {
@@ -90,7 +108,7 @@ export class DispatchCancelService {
         }
 
         let exit: BatchExitResult | null = null;
-        if (batch && leavesBatchWhenCancelled(dispatch.status)) {
+        if (batch && (leavesBatchWhenCancelled(dispatch.status) || leavesBatchBeforeStart(dispatch.status, batch.status))) {
             exit = await this.batchExit.leave(manager, batch, dispatchId, {
                 actorUserId: userId,
                 reason: dto.reason,

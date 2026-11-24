@@ -79,6 +79,26 @@ describe('DispatchCancelService', () => {
         expect(orderEvents.recordForDispatch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: 'dispatch.cancelled', newStatus: 'cancelled', routeBatchId: expect.any(Number) }), expect.anything());
     });
 
+    it.each(['confirmed', 'pending_final_review'])('assigned en un lote %s que todavía no salió: sale del lote antes de cancelarse', async (status) => {
+        const { service, batchExit, closing } = build({ status: 'assigned', batch: { ...batch, status } });
+        batchExit.leave.mockResolvedValue({ batchId: 9, batchStatusBefore: status, batchStatusAfter: status, batchVersion: 4, dispatchVersion: 3, cancelled: false, closed: false, shiftedDispatchIds: [] });
+
+        const result = await service.cancel(5, dto, 7, {}, NOW);
+
+        expect(batchExit.leave).toHaveBeenCalledWith(expect.anything(), { ...batch, status }, 5, expect.objectContaining({ actorUserId: 7, reason: dto.reason }));
+        expect(closing.closeIfComplete).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ routeBatchId: null, previousStatus: 'assigned', status: 'cancelled' });
+    });
+
+    it.each(['closed', 'cancelled'])('assigned en un lote %s: el lote es historia y el despacho no sale de él', async (status) => {
+        const { service, batchExit } = build({ status: 'assigned', batch: { ...batch, status } });
+
+        const result = await service.cancel(5, dto, 7, {}, NOW);
+
+        expect(batchExit.leave).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ routeBatchId: 9 });
+    });
+
     it.each(['out_for_delivery', 'in_transit', 'delivered', 'incident', 'not_delivered', 'rescheduled', 'returned', 'cancelled'])('%s → DISPATCH_CANCEL_NOT_ALLOWED sin escribir nada', async (status) => {
         const { service, publication, manager } = build({ status });
 
