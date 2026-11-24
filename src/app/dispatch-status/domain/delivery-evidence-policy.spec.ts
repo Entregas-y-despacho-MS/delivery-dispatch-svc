@@ -74,6 +74,11 @@ describe('assertDeliveryEvidence', () => {
         expect(codeOf(() => check('contactless_delivery', 'photo', stored('signature')))).toBe('DISPATCH_EVIDENCE_TYPE_MISMATCH');
     });
 
+    it('rejects a reference that declares another type than the correct stored record', () => {
+        expect(codeOf(() => check('contactless_delivery', 'signature', stored('photo')))).toBe('DISPATCH_EVIDENCE_TYPE_MISMATCH');
+        expect(codeOf(() => check('high_value_control', 'photo', stored('otp')))).toBe('DISPATCH_EVIDENCE_TYPE_MISMATCH');
+    });
+
     it.each([
         ['photo', { fileUrl: null }],
         ['photo', { fileUrl: '  ' }],
