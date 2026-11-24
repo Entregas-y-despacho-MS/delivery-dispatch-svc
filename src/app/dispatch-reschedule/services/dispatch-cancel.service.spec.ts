@@ -90,6 +90,15 @@ describe('DispatchCancelService', () => {
         expect(result).toMatchObject({ routeBatchId: null, previousStatus: 'assigned', status: 'cancelled' });
     });
 
+    it.each(['closed', 'cancelled'])('assigned en un lote %s: el lote es historia y el despacho no sale de él', async (status) => {
+        const { service, batchExit } = build({ status: 'assigned', batch: { ...batch, status } });
+
+        const result = await service.cancel(5, dto, 7, {}, NOW);
+
+        expect(batchExit.leave).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ routeBatchId: 9 });
+    });
+
     it.each(['out_for_delivery', 'in_transit', 'delivered', 'incident', 'not_delivered', 'rescheduled', 'returned', 'cancelled'])('%s → DISPATCH_CANCEL_NOT_ALLOWED sin escribir nada', async (status) => {
         const { service, publication, manager } = build({ status });
 

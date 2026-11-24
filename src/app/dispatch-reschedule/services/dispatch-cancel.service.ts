@@ -32,6 +32,22 @@ export interface CancelDispatchOptions {
  */
 const PUBLISHES_CANCELLATION_TYPES: readonly string[] = ['delivery'];
 
+/** Batches that have not left yet: an `assigned` stop cancelled in one of them goes out of the batch. */
+const NOT_STARTED_BATCH_STATUSES: readonly string[] = [
+    RouteBatchStatusEnum.PROVISIONAL,
+    RouteBatchStatusEnum.PENDING_FINAL_REVIEW,
+    RouteBatchStatusEnum.CONFIRMED,
+];
+
+/**
+ * An `assigned` stop cancelled before its route leaves goes out of the batch, like a planned one. In a batch
+ * `in_execution` it stays: it is a stop the driver cannot take (for example after a failed cotejo). A `closed` or
+ * `cancelled` batch is history and is not touched.
+ */
+function leavesBatchBeforeStart(dispatchStatus: string, batchStatus: string): boolean {
+    return dispatchStatus === DispatchStatusEnum.ASSIGNED && NOT_STARTED_BATCH_STATUSES.includes(batchStatus);
+}
+
 interface Applied {
     result: CancelDispatchResultDto;
     event: DispatchStatusChangedEvent;
@@ -54,14 +70,6 @@ interface Applied {
  * it leaves the batch (`BatchExitService`, D-09: the `version` of the dispatch and of the batch go up): otherwise the
  * route could not start with a cancelled stop inside, and the stop would enter the `started` manifest as departing.
  */
-/**
- * An `assigned` stop cancelled before its route leaves goes out of the batch, like a planned one. Once the batch is
- * `in_execution` it stays: it is a stop the driver cannot take (for example after a failed cotejo).
- */
-function leavesBatchBeforeStart(dispatchStatus: string, batchStatus: string): boolean {
-    return dispatchStatus === DispatchStatusEnum.ASSIGNED && batchStatus !== RouteBatchStatusEnum.IN_EXECUTION;
-}
-
 @Injectable()
 export class DispatchCancelService {
     constructor(
