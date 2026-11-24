@@ -68,6 +68,16 @@ describe('TrackingAccessService', () => {
             expect(unknown.sent).toHaveLength(0);
         });
 
+        it('stores a decoy for an unknown code that belongs to no dispatch, so it can never open a session', async () => {
+            const env = setup({ known: false });
+            await ask(env);
+
+            const decoy = JSON.parse((await env.cache.get(accessKey('code', trackingCodeFingerprint(CODE))))!);
+            expect(decoy.dispatchId).toBeNull();
+            expect(decoy.hash).toMatch(/^\$2[aby]\$/);
+            expect(env.sent).toHaveLength(0);
+        });
+
         it('treats a malformed code like an unknown one without reading the database', async () => {
             const env = setup();
 
@@ -188,6 +198,7 @@ describe('TrackingAccessService', () => {
             for (let i = 0; i < 5; i++) await expect(env.service.verify(CODE, wrongOf(right))).rejects.toMatchObject({ response: { error: 'INVALID_ACCESS_CODE' } });
             await expect(env.service.verify(CODE, right)).rejects.toMatchObject({ response: { error: 'INVALID_ACCESS_CODE' } });
             await expect(env.service.verify(CODE, right)).rejects.toMatchObject({ response: { error: 'INVALID_ACCESS_CODE' } });
+            await env.service.whenIdle();
             expect(env.events().map((e) => e[1])).toContain('tracking_access_locked');
         });
 

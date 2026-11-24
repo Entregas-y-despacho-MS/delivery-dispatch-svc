@@ -70,9 +70,9 @@ export class TrackingAccessService {
         const ttlSeconds = await this.ttlSeconds();
 
         const allowed = await this.cached(() => this.cache.setIfAbsent(accessKey('cooldown', fingerprint), '1', ACCESS_CODE_COOLDOWN_SECONDS));
-        if (!allowed) return await this.limited(fingerprint, null);
+        if (!allowed) return await this.limited();
         const sends = await this.cached(() => this.cache.increment(accessKey('sends', fingerprint), ACCESS_CODE_SEND_WINDOW_SECONDS));
-        if (sends > MAX_ACCESS_CODE_SENDS) return await this.limited(fingerprint, null);
+        if (sends > MAX_ACCESS_CODE_SENDS) return await this.limited();
 
         const target = isWellFormedTrackingCode(normalized) ? await this.findEligible(normalized, now) : null;
 
@@ -85,7 +85,7 @@ export class TrackingAccessService {
             await this.cache.delete(accessKey('attempts', fingerprint));
         });
 
-        if (target) this.sendInBackground(target, code, ttlSeconds, fingerprint, now);
+        if (target) this.sendInBackground(target, code, ttlSeconds, fingerprint, record.hash, now);
         return { accepted: true, expiresInSeconds: ttlSeconds };
     }
 
@@ -96,17 +96,20 @@ export class TrackingAccessService {
 
         // A cap on every try for this tracking code, whatever code is issued: asking for a new code never resets it.
         const verifies = await this.cached(() => this.cache.increment(accessKey('verifies', fingerprint), ACCESS_VERIFY_WINDOW_SECONDS));
-        if (verifies > MAX_ACCESS_VERIFY_PER_WINDOW) return await this.limited(fingerprint, null);
+        if (verifies > MAX_ACCESS_VERIFY_PER_WINDOW) return await this.limited();
 
         const attempts = await this.cached(() => this.cache.increment(accessKey('attempts', fingerprint), ttlSeconds));
         const stored = parseStored(await this.cached(() => this.cache.get(accessKey('code', fingerprint))));
-        if (!stored) throw new InvalidAccessCodeException();
+        if (!stored) {
+            // Nothing stored (a code whose email failed, an expired one): the same bcrypt work as with a record, so the time says nothing.
+            await comparePassword(code, await decoyHash());
+            throw new InvalidAccessCodeException();
+        }
         if (attempts > MAX_ACCESS_VERIFY_ATTEMPTS) {
             await this.cached(() => this.cache.delete(accessKey('code', fingerprint)));
+            // In the background, so a real code and a decoy answer in the same time.
             if (stored.dispatchId !== null) {
-                await this.recordEvent(stored.dispatchId, ACCESS_EVENT_LOCKED, 'Too many wrong access codes; the code was burned', {
-                    maxAttempts: MAX_ACCESS_VERIFY_ATTEMPTS,
-                });
+                this.audit(stored.dispatchId, ACCESS_EVENT_LOCKED, 'Too many wrong access codes; the code was burned', { maxAttempts: MAX_ACCESS_VERIFY_ATTEMPTS });
             }
             throw new InvalidAccessCodeException();
         }
@@ -114,7 +117,13 @@ export class TrackingAccessService {
 
         // Of two parallel requests with the right code only one takes it; the other finds nothing.
         const taken = parseStored(await this.cached(() => this.cache.take(accessKey('code', fingerprint))));
-        if (!taken || taken.dispatchId === null) throw new InvalidAccessCodeException();
+        if (!taken) throw new InvalidAccessCodeException();
+        if (taken.hash !== stored.hash) {
+            // A new code replaced the one that was checked while this request ran: it was not verified, so it is given back.
+            await this.cached(() => this.cache.setIfAbsent(accessKey('code', fingerprint), JSON.stringify(taken), ttlSeconds));
+            throw new InvalidAccessCodeException();
+        }
+        if (taken.dispatchId === null) throw new InvalidAccessCodeException();
 
         const session = randomBytes(32).toString('hex');
         const expiresAt = new Date(now.getTime() + ttlSeconds * 1000);
@@ -123,9 +132,10 @@ export class TrackingAccessService {
             await this.cache.setWithTtl(accessSessionKey(hashToken(session)), JSON.stringify(record), ttlSeconds);
             await this.cache.delete(accessKey('attempts', fingerprint));
         });
+        // The session exists already: a failure of the audit trail must not turn into a 500 that hides it from the customer.
         await this.recordEvent(taken.dispatchId, ACCESS_EVENT_VERIFIED, 'Access code checked; session opened', {
             expiresAt: expiresAt.toISOString(),
-        });
+        }).catch((error) => this.logger.error(`The audit event ${ACCESS_EVENT_VERIFIED} of dispatch ${taken.dispatchId} was not saved (${errorName(error)}).`));
         return { session, expiresAt };
     }
 
@@ -156,7 +166,7 @@ export class TrackingAccessService {
         return row ?? null;
     }
 
-    private sendInBackground(target: EligibleDispatch, code: string, ttlSeconds: number, fingerprint: string, now: Date): void {
+    private sendInBackground(target: EligibleDispatch, code: string, ttlSeconds: number, fingerprint: string, hash: string, now: Date): void {
         const task = (async () => {
             try {
                 const result = await this.mailer.send({
@@ -172,18 +182,35 @@ export class TrackingAccessService {
                 });
             } catch (error) {
                 // A code nobody received must not stay valid. The customer is not told: the answer was already the generic one.
-                this.logger.warn(`The access code of dispatch ${target.dispatch_id} was not sent (${error instanceof Error ? error.message : 'unknown error'}).`);
-                await this.cache.delete(accessKey('code', fingerprint)).catch(() => undefined);
+                // Only the kind of failure is logged: the message of a mail server may carry the address.
+                this.logger.warn(`The access code of dispatch ${target.dispatch_id} was not sent (${errorName(error)}).`);
+                // Only the code that was issued for THIS email: a newer one, asked for after the cooldown, is left alone.
+                await this.cache.get(accessKey('code', fingerprint))
+                    .then(async (stored) => {
+                        if (parseStored(stored)?.hash === hash) await this.cache.delete(accessKey('code', fingerprint));
+                    })
+                    .catch(() => undefined);
             }
         })();
+        this.track(task);
+    }
+
+    /** An audit event written without making the answer wait for it; a failure is logged and never reaches the customer. */
+    private audit(dispatchId: number, eventType: string, reason: string, metadata: Record<string, unknown>): void {
+        this.track(
+            this.recordEvent(dispatchId, eventType, reason, metadata)
+                .catch((error) => this.logger.error(`The audit event ${eventType} of dispatch ${dispatchId} was not saved (${errorName(error)}).`)),
+        );
+    }
+
+    private track(task: Promise<void>): void {
         this.inflight.add(task);
         void task.finally(() => this.inflight.delete(task));
     }
 
-    /** The limit was hit: the same answer for any code. Only a short fingerprint is logged, never the code. */
-    private async limited(fingerprint: string, dispatchId: number | null): Promise<never> {
-        this.logger.warn(`Tracking access limit reached for code ${fingerprint.slice(0, 8)}.`);
-        if (dispatchId !== null) await this.recordEvent(dispatchId, ACCESS_EVENT_LOCKED, 'Access limit reached', {});
+    /** The limit was hit: the same answer for any code. Nothing that identifies the tracking code is logged. */
+    private async limited(): Promise<never> {
+        this.logger.warn('A tracking access limit was reached.');
         throw new TrackingAccessRateLimitedException();
     }
 
@@ -208,6 +235,18 @@ export class TrackingAccessService {
             throw error;
         }
     }
+}
+
+/** A bcrypt hash of a random value nobody knows, computed once: what a check against "nothing stored" compares with. */
+let decoyHashPromise: Promise<string> | undefined;
+function decoyHash(): Promise<string> {
+    decoyHashPromise ??= hashPassword(randomBytes(16).toString('hex'));
+    return decoyHashPromise;
+}
+
+/** The class of an error, never its message: that of a mail server or a driver can carry an address or a value. */
+function errorName(error: unknown): string {
+    return error instanceof Error ? error.name : 'unknown error';
 }
 
 function parseStored(stored: string | null): StoredAccessCode | null {

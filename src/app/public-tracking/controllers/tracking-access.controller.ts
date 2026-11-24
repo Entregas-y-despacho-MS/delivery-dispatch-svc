@@ -15,6 +15,13 @@ const RATE_LIMITED = {
     schema: { example: errorBody(429, 'TRACKING_ACCESS_RATE_LIMITED', 'Too many attempts. Wait a few minutes and try again.') },
 };
 
+/** `GET /view` carries no tracking code, so only the per-IP limit can apply. */
+const VIEW_RATE_LIMITED = {
+    status: 429,
+    description: 'Too many requests from this IP (`TOO_MANY_REQUESTS`). Wait and try again.',
+    schema: { example: errorBody(429, 'TOO_MANY_REQUESTS', 'ThrottlerException: Too Many Requests') },
+};
+
 /**
  * RF-U14 (ST-309.1, ES-309) — the customer's page opened with the tracking code and a one-time code sent to the
  * registered email. No login. It is the alternative to the link of ST-224.1 (`GET /public/tracking/:token`), which
@@ -80,7 +87,7 @@ export class TrackingAccessController {
     @ApiHeader({ name: 'x-tracking-session', required: true, description: 'The `session` returned by the verification of the code. It is not the tracking code and it is not the tracking token of the link.' })
     @ApiOkResponse({ type: PublicTrackingSessionViewDto })
     @ApiUnauthorized({ code: 'TRACKING_SESSION_INVALID', message: 'The tracking session is not valid or has expired. Verify your tracking code again.' })
-    @ApiResponse(RATE_LIMITED)
+    @ApiResponse(VIEW_RATE_LIMITED)
     @ApiServiceUnavailableResponse({
         description: 'The store of sessions is down (`VERIFICATION_UNAVAILABLE`). Try again in a moment.',
         schema: { example: errorBody(503, 'VERIFICATION_UNAVAILABLE', 'Verification is temporarily unavailable. Try again in a moment.') },
