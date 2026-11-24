@@ -632,6 +632,150 @@ describe('Tracking access: privacy and resistance to enumeration (e2e, ST-309.3)
             expect(tokenAfter).toBe(tokenBefore);
         });
     });
+
+    describe('privacy', () => {
+        it('shows the driver and the position of a delivery in transit, but nothing to reach the customer or the driver', async () => {
+            const [warehouse] = await fixtures.warehouses();
+            const zoneId = await fixtures.createZone('P');
+            const vehicleId = await fixtures.createVehicle();
+            const [{ user_id }] = await db.query(
+                `INSERT INTO users (role_id, full_name, username, email, password_hash, requires_pwd_change)
+                 VALUES ((SELECT role_id FROM roles WHERE name = 'driver'), 'Repartidor Privado', $1, $2, 'not-a-hash', FALSE) RETURNING user_id`,
+                [`e2e_accpriv_${run}`.toLowerCase().slice(0, 50), `driver.${run}@example.test`.toLowerCase()],
+            );
+            driverUserId = Number(user_id);
+            const routeBatchId = await fixtures.createBatch({ shiftDate: '2026-10-20', vehicleId, zoneId, warehouseId: warehouse.id });
+            await db.query(`UPDATE route_batches SET driver_id = $2 WHERE route_batch_id = $1`, [routeBatchId, driverUserId]);
+            const email = `client.${run}@example.test`.toLowerCase();
+            const dispatch = await fixtures.create({ status: 'in_transit', routeBatchId, zoneId, warehouseId: warehouse.id, email });
+            await db.query(
+                `UPDATE dispatches SET last_latitude = -16.5, last_longitude = -68.15, last_location_at = NOW() WHERE dispatch_id = $1`,
+                [dispatch.dispatchId],
+            );
+
+            otherKeys.add(`tracking:eta:${dispatch.dispatchId}`); // the page of a delivery on its way caches its ETA
+            const session = await sessionFor(dispatch.trackingCode);
+            const page = await view(session);
+
+            expect(page.status).toBe(200);
+            expect(Object.keys(page.body).sort()).toEqual(['deliveryDate', 'driver', 'eta', 'location', 'status', 'trackingCode', 'windowEnd', 'windowStart']);
+            expect(page.body.status).toBe('in_transit');
+            expect(page.body.driver).toEqual({ name: 'Repartidor Privado', vehicleType: 'camioneta', vehiclePlate: expect.any(String) });
+            expect(Object.keys(page.body.location).sort()).toEqual(['latitude', 'longitude', 'recordedAt']);
+            const shown = JSON.stringify(page.body);
+            for (const secret of [
+                email, `driver.${run}`.toLowerCase(), `e2e_accpriv_${run}`.toLowerCase(), 'Calle Secreta', '70000000', 'E2E customer',
+                dispatch.token, dispatch.ref, session, `"dispatchId"`, `"routeBatchId"`, 'otp', 'selfService', 'rating',
+            ]) expect(shown).not.toContain(secret);
+        });
+
+        it('keeps nothing in clear in the cache: fingerprints as keys, a bcrypt hash of the code, a session record of dispatch and expiry', async () => {
+            const { trackingCode, dispatchId, token } = await fixtures.create();
+            const unknown = unknownCode();
+            const code = await codeFor(trackingCode);
+            expect((await askCode(unknown)).status).toBe(200);
+            expect((await verify(trackingCode, wrongOf(code))).status).toBe(400);
+            await access.whenIdle();
+
+            // Before the session: the code record of a real dispatch and the decoy of an unknown code look alike.
+            const real = JSON.parse((await cache.get(accessKey('code', trackingCode)))!) as Record<string, unknown>;
+            const decoy = JSON.parse((await cache.get(accessKey('code', unknown)))!) as Record<string, unknown>;
+            expect(real).toEqual({ hash: expect.stringMatching(/^\$2[aby]\$10\$/), dispatchId });
+            expect(decoy).toEqual({ hash: expect.stringMatching(/^\$2[aby]\$10\$/), dispatchId: null });
+            const around = (seconds: number | null, expected: number): void => {
+                expect(seconds).not.toBeNull();
+                expect(seconds!).toBeGreaterThan(expected - 30);
+                expect(seconds!).toBeLessThanOrEqual(expected);
+            };
+            for (const asked of [trackingCode, unknown]) {
+                around(await atRest.ttlSeconds(accessKey('code', asked)), TTL);
+                around(await atRest.ttlSeconds(accessKey('sends', asked)), 15 * 60);
+                around(await atRest.ttlSeconds(accessKey('cooldown', asked)), 60);
+            }
+            around(await atRest.ttlSeconds(accessKey('verifies', trackingCode)), 15 * 60);
+
+            const opened = await verify(trackingCode, code);
+            expect(opened.status).toBe(200);
+            const session: string = opened.body.session;
+            touchedSessions.add(session);
+            expect(await cache.get(accessKey('code', trackingCode))).toBeNull();
+            const stored = JSON.parse((await cache.get(sessionKey(session)))!) as Record<string, unknown>;
+            expect(stored).toEqual({ dispatchId, expiresAt: new Date(opened.body.expiresAt).getTime() });
+            around(await atRest.ttlSeconds(sessionKey(session)), TTL);
+
+            const keys = await atRest.keys();
+            expect(keys).toContain(sessionKey(session));
+            const everything = JSON.stringify(await Promise.all(keys.map(async (key) => [key, await cache.get(key)])));
+            for (const secret of [trackingCode, trackingCode.toLowerCase(), unknown, session, token, 'customer@example.test', `"${code}"`, `:${code}`]) {
+                expect(everything).not.toContain(secret);
+            }
+        });
+
+        it('writes no code, session, tracking code, link token or email to the logs, the events, the notifications, the outbox or the audit', async () => {
+            const email = `trail.${run}@example.test`.toLowerCase();
+            const failing = await fixtures.create({ email: `fail.${run}@example.test`.toLowerCase() });
+            const dispatch = await fixtures.create({ email });
+            const logsBefore = logs.length;
+
+            // An SMTP error that carries the address, a session opened, a burn and both limits.
+            mailMode = 'throws';
+            await askCode(failing.trackingCode);
+            await access.whenIdle();
+            const failedCode = lastAccessCode();
+            mailMode = 'sent';
+            const code = await codeFor(dispatch.trackingCode);
+            const opened = await verify(dispatch.trackingCode, code);
+            const session: string = opened.body.session;
+            touchedSessions.add(session);
+            expect((await view(session)).status).toBe(200);
+            await endCooldown(dispatch.trackingCode);
+            const burned = await codeFor(dispatch.trackingCode);
+            for (let i = 0; i < 6; i++) await verify(dispatch.trackingCode, wrongOf(burned));
+            for (let i = 0; i < 4; i++) await verify(dispatch.trackingCode, '123456');
+            expect((await askCode(dispatch.trackingCode)).status).toBe(429);
+            await access.whenIdle();
+
+            // The spy really saw the app's lines: the failed email and the limits.
+            const written = logs.slice(logsBefore).join('\n');
+            expect(written).toContain(`dispatch ${failing.dispatchId} was not sent`);
+            expect(written).toContain('A tracking access limit was reached.');
+            const clearSecrets = [
+                session, failing.trackingCode, dispatch.trackingCode, failing.token, dispatch.token, email, `fail.${run}`.toLowerCase(),
+                sha256(session), // not even the fingerprint of the session
+            ];
+            for (const secret of [...clearSecrets, failedCode, code, burned]) expect(written).not.toContain(secret);
+
+            // Events of both dispatches: the code can only be looked for where free text lives (not in timestamps).
+            const events = await db.query(
+                `SELECT event_type, actor_type, reason, detail, metadata FROM dispatch_events WHERE dispatch_id = ANY($1::int[])`,
+                [[failing.dispatchId, dispatch.dispatchId]],
+            );
+            expect(events.map((event: { event_type: string }) => event.event_type).sort())
+                .toEqual(['tracking_access_code_sent', 'tracking_access_code_sent', 'tracking_access_locked', 'tracking_access_verified']);
+            const eventText = JSON.stringify(events);
+            for (const secret of [...clearSecrets, failedCode, code, burned]) expect(eventText).not.toContain(secret);
+
+            // Every row any table of the trail got during this suite.
+            for (const table of ['dispatch_events', 'customer_notifications', 'outbound_messages', 'audit_logs', 'admin_audit_events']) {
+                const [{ n }] = await db.query(
+                    `SELECT COUNT(*)::int AS n FROM ${table} t WHERE t.created_at >= $1 AND row_to_json(t)::text LIKE ANY($2::text[])`,
+                    [startedAt, clearSecrets.map((secret) => `%${secret}%`)],
+                );
+                expect(n, table).toBe(0);
+            }
+            const [{ n: notices }] = await db.query(
+                `SELECT COUNT(*)::int AS n FROM customer_notifications WHERE dispatch_id = ANY($1::int[])`,
+                [[failing.dispatchId, dispatch.dispatchId]],
+            );
+            expect(notices).toBe(0);
+
+            // The mailed code only travels in the body of the email, never in its subject nor in a link.
+            const mail = accessMails().at(-1)!;
+            expect(mail.to).toBe(email);
+            expect(mail.subject).not.toContain(burned);
+            expect(JSON.stringify(mail.metadata)).toBe(JSON.stringify({ dispatchId: dispatch.dispatchId }));
+        });
+    });
 });
 
 /** The in-memory adapter keeps two maps; the suite reads them to see what is stored and for how long. */
