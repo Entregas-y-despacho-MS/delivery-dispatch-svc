@@ -127,6 +127,12 @@ describe('buildAuditPdfHtml', () => {
         expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
     });
 
+    it('forces a light page, so the text stays readable whatever color scheme the rendering browser prefers', () => {
+        const html = buildAuditPdfHtml(context(), []);
+        expect(html).toContain('color-scheme: only light');
+        expect(html).toMatch(/body \{[^}]*background: #fff/);
+    });
+
     it('blocks scripts and network requests with a content security policy', () => {
         expect(buildAuditPdfHtml(context(), [])).toContain(`content="default-src 'none'; style-src 'unsafe-inline'"`);
     });

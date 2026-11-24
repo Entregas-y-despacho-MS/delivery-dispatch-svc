@@ -25,7 +25,9 @@ export interface AuditActionOptions {
     bodyFields?: readonly string[];
     /**
      * Query string parameters copied to `metadata` (allow-list), for actions whose request is a `GET` with filters
-     * (an export). Same rules as `bodyFields`: only scalar values, trimmed, and secrets or personal data are refused.
+     * (an export). Same rules as `bodyFields`: only scalar values (a repeated parameter is dropped), cut to a bounded
+     * length, and secrets or personal data are refused. The value is stored as it arrived in the query string: the
+     * interceptor runs before the validation pipe, so a rejected request is recorded with what was asked, not normalized.
      */
     queryFields?: readonly string[];
     /**

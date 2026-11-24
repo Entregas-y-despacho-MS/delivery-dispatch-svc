@@ -115,7 +115,8 @@ export function escapeHtml(value: string | number | null | undefined): string {
 
 const PDF_STYLES = `
     @page { margin: 12mm 8mm; }
-    body { font-family: Arial, Helvetica, sans-serif; font-size: 8px; color: #111; }
+    html { color-scheme: only light; background: #fff; }
+    body { font-family: Arial, Helvetica, sans-serif; font-size: 8px; color: #111; background: #fff; }
     h1 { font-size: 15px; margin: 0 0 6px; }
     dl { display: grid; grid-template-columns: max-content 1fr; gap: 1px 10px; margin: 0 0 10px; font-size: 9px; }
     dt { font-weight: bold; }

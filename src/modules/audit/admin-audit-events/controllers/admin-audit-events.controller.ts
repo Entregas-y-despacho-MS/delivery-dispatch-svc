@@ -1,9 +1,9 @@
 import { Controller, Get, Header, Query, StreamableFile } from '@nestjs/common';
-import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiProduces, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiInternalServerErrorResponse, ApiOkResponse, ApiOperation, ApiProduces, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { AdminOnly } from '../../../../app/auth/decorators/index.js';
 import { CurrentUser } from '../../../../shared/decorators/current-user.decorator.js';
 import { RoleEnum } from '../../../../shared/enums/index.js';
-import { ApiBadRequests, ApiForbidden, ApiUnauthorized } from '../../../../shared/utils/swagger/index.js';
+import { ApiBadRequests, ApiForbidden, ApiUnauthorized, errorBody } from '../../../../shared/utils/swagger/index.js';
 import { AuditAction } from '../decorators/audit-action.decorator.js';
 import { ExportAdminAuditEventsParamsDto } from '../dto/export-admin-audit-events-params.dto.js';
 import { FindAdminAuditEventsParamsDto } from '../dto/find-admin-audit-events-params.dto.js';
@@ -66,22 +66,34 @@ export class AdminAuditEventsController {
     @ApiProduces('text/csv', 'application/pdf')
     @ApiOkResponse({
         description: 'The file (`Content-Disposition: attachment; filename="auditoria-admin-YYYY-MM-DD.csv"` or `.pdf`).',
+        headers: {
+            'Content-Disposition': { description: 'Attachment with the file name: `auditoria-admin-YYYY-MM-DD.csv` or `.pdf` (Bolivia day).', schema: { type: 'string' } },
+            'Cache-Control': { description: 'Always `no-store`: the file is not kept by caches.', schema: { type: 'string' } },
+        },
         content: {
             'text/csv': { schema: { type: 'string', format: 'binary' } },
             'application/pdf': { schema: { type: 'string', format: 'binary' } },
         },
     })
+    @ApiQuery({ name: 'page', required: false, type: 'integer', description: 'Accepted and ignored by the export: the file always holds the whole filtered result, never a page.' })
+    @ApiQuery({ name: 'limit', required: false, type: 'integer', description: 'Accepted and ignored by the export: the file always holds the whole filtered result, never a page. The row maximum depends on the format.' })
     @ApiBadRequests({
         validation: true,
         example: ["The 'format' parameter must be one of: csv, pdf.", "The 'from' parameter must be an ISO 8601 date-time with an explicit offset (e.g. 2026-11-20T00:00:00-04:00)."],
         errors: [
+            { code: 'INVALID_AUDIT_RANGE', message: "The 'from' parameter must be before 'to'." },
             { code: 'INVALID_AUDIT_RANGE', message: "The range between 'from' and 'to' must not exceed 31 days." },
             { code: 'INVALID_AUDIT_FILTER', message: "The 'entityId' parameter requires 'entityType'." },
             { code: 'AUDIT_EXPORT_LIMIT_EXCEEDED', message: "The export has more than 10000 rows, the maximum for CSV. Narrow the 'from'/'to' window or add filters and export again." },
+            { code: 'AUDIT_EXPORT_LIMIT_EXCEEDED', message: "The export has more than 2000 rows, the maximum for PDF. Narrow the 'from'/'to' window or add filters and export again." },
         ],
     })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     @ApiForbidden({ code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' })
+    @ApiInternalServerErrorResponse({
+        description: 'Only for `format=pdf`: the PDF engine failed while rendering (`PDF_GENERATION_FAILED`). No file is sent; the failure is recorded in the audit as `failed`, and the same request can be retried or exported as CSV.',
+        schema: { example: errorBody(500, 'PDF_GENERATION_FAILED', 'PDF generation failed.') },
+    })
     async exportEvents(
         @Query() params: ExportAdminAuditEventsParamsDto,
         @CurrentUser('role') role: RoleEnum,
