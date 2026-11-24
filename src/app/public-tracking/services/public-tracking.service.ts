@@ -8,7 +8,11 @@ import { evaluateSelfService, type SelfServiceState } from '../domain/self-servi
 import { isWellFormedTrackingToken } from '../domain/tracking-token.js';
 import { DispatchStatusEnum } from '../../../shared/enums/dispatch-status.enum.js';
 import { DriverDto, LocationDto, PublicTrackingDto, RatingDto } from '../dto/public-tracking.dto.js';
-import { RatingAlreadySubmittedException, RatingNotAllowedException, RescheduleNotAvailableException, TrackingLinkNotFoundException } from '../exceptions/index.js';
+import { PublicTrackingSessionViewDto } from '../dto/tracking-access.dto.js';
+import {
+    RatingAlreadySubmittedException, RatingNotAllowedException, RescheduleNotAvailableException, TrackingLinkNotFoundException,
+    TrackingSessionInvalidException,
+} from '../exceptions/index.js';
 import { TrackingEtaService } from './tracking-eta.service.js';
 
 export const MAX_RESCHEDULE_ATTEMPTS_KEY = 'max_reschedule_attempts';
@@ -31,6 +35,16 @@ interface TrackingRow {
     contact_email: string | null;
     has_contact_email: boolean;
     reschedule_attempts: number;
+}
+
+interface SessionViewRow {
+    dispatch_id: number;
+    status: string;
+    tracking_code: string | null;
+    route_batch_id: number | null;
+    scheduled_window_start: Date | null;
+    scheduled_window_end: Date | null;
+    delivery_date: string | null;
 }
 
 interface LiveRow {
@@ -129,6 +143,45 @@ export class PublicTrackingService {
         };
     }
 
+    /**
+     * The public page of ONE dispatch for a session opened with its tracking code and a one-time code (ST-309.1). The
+     * dispatch id comes from the server-side session, never from the request. Same fields and same rules as the page of
+     * the link for the state, the slot, the ETA, the driver and the position, and nothing to act on: no `selfService`, no
+     * rating, no address, no contact data. Raises `TrackingSessionInvalidException` when the dispatch is not reachable
+     * any more (it is not a delivery, or its link expired), as for any other bad session.
+     */
+    async sessionView(dispatchId: number, now: Date = new Date()): Promise<PublicTrackingSessionViewDto> {
+        const [row]: SessionViewRow[] = await this.dataSource.query(
+            `SELECT d.dispatch_id, ds.name AS status, d.tracking_code, d.route_batch_id,
+                    d.scheduled_window_start, d.scheduled_window_end,
+                    to_char(rb.shift_date, 'YYYY-MM-DD') AS delivery_date
+               FROM dispatches d
+               JOIN dispatch_statuses ds ON ds.dispatch_status_id = d.dispatch_status_id
+               JOIN dispatch_types dt ON dt.dispatch_type_id = d.dispatch_type_id AND dt.name = 'delivery'
+               LEFT JOIN route_batches rb ON rb.route_batch_id = d.route_batch_id
+              WHERE d.dispatch_id = $1
+                AND (d.tracking_token_expires_at IS NULL OR d.tracking_token_expires_at > $2)`,
+            [dispatchId, now],
+        );
+        if (!row) throw new TrackingSessionInvalidException();
+
+        const live = await this.liveData(row);
+        const eta = await this.etaService.estimate(
+            { dispatchId: row.dispatch_id, status: row.status, routeBatchId: row.route_batch_id, windowEnd: row.scheduled_window_end },
+            now,
+        );
+        return {
+            trackingCode: row.tracking_code,
+            status: row.status,
+            deliveryDate: row.delivery_date,
+            windowStart: row.scheduled_window_start,
+            windowEnd: row.scheduled_window_end,
+            eta,
+            driver: live.driver,
+            location: live.location,
+        };
+    }
+
     /** Stores one rating for a delivered dispatch and refreshes the assigned driver's cached metrics. */
     async rate(token: string, score: number, comment?: string | null, now: Date = new Date()): Promise<RatingDto> {
         const context = await this.resolve(token, now);
@@ -187,7 +240,7 @@ export class PublicTrackingService {
      * the order is `out_for_delivery` or `in_transit`, `location` only in `in_transit` (it is this customer's
      * turn). Never the phone: the query does not even select it.
      */
-    private async liveData(row: TrackingRow): Promise<{ driver: DriverDto | null; location: LocationDto | null }> {
+    private async liveData(row: Pick<TrackingRow, 'dispatch_id' | 'status' | 'route_batch_id'>): Promise<{ driver: DriverDto | null; location: LocationDto | null }> {
         const none = { driver: null, location: null };
         if (!LIVE_STATUSES.includes(row.status as DispatchStatusEnum) || row.route_batch_id === null) return none;
 
