@@ -150,3 +150,20 @@ describe('buildFirstAttempt', () => {
         expect(unavailableFirstAttempt()).toMatchObject({ available: false, reason: 'attempt_not_normalized', percentage: null, denominator: 0, coverage: { from: null, complete: false } });
     });
 });
+
+describe('normalizeAttempts — hadIncident (ST-300.1)', () => {
+    it('marks the attempt whose result is an incident', () => {
+        const history = normalizeAttempts([event('in_transit', 0), event('incident', 5, { countsAsAttempt: true })]);
+        expect(history.attempts.map((a) => a.hadIncident)).toEqual([true]);
+    });
+
+    it('marks the not_delivered attempt the incident belongs to, without opening another', () => {
+        const history = normalizeAttempts([event('in_transit', 0), event('not_delivered', 10), event('incident', 11, { countsAsAttempt: true })]);
+        expect(history.attempts.map((a) => a.hadIncident)).toEqual([true]);
+    });
+
+    it('does not mark an attempt for an incident that does not consume one, nor a delivered one', () => {
+        const history = normalizeAttempts([event('in_transit', 0), event('incident', 5), event('delivered', 10)]);
+        expect(history.attempts.map((a) => a.hadIncident)).toEqual([false]);
+    });
+});

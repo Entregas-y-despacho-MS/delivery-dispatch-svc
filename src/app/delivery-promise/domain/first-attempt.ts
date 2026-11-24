@@ -45,6 +45,8 @@ export interface NormalizedAttempt {
     order: number;
     outcome: AttemptOutcome;
     occurredAt: Date;
+    /** An incident that consumes an attempt belongs to this attempt: it is its result, or it came after a `not_delivered` of the same trip (ST-300.1). */
+    hadIncident: boolean;
 }
 
 export interface DispatchAttempts {
@@ -75,9 +77,17 @@ export function normalizeAttempts(events: AttemptEvent[]): DispatchAttempts {
         if (!outcome) continue;
         if (!tripStarted) {
             if (attempts.length === 0) reconstructable = false;
+            else if (outcome === AttemptOutcome.INCIDENT) {
+                // The incident that caused a `not_delivered` of the same trip: it is that attempt, not a new one.
+                const last = attempts[attempts.length - 1];
+                if (last.outcome === AttemptOutcome.NOT_DELIVERED) last.hadIncident = true;
+            }
             continue;
         }
-        attempts.push({ attemptId: event.clientEventId ?? `event-${event.eventId}`, order: attempts.length + 1, outcome, occurredAt: event.occurredAt });
+        attempts.push({
+            attemptId: event.clientEventId ?? `event-${event.eventId}`, order: attempts.length + 1, outcome, occurredAt: event.occurredAt,
+            hadIncident: outcome === AttemptOutcome.INCIDENT,
+        });
         tripStarted = false;
     }
     return reconstructable ? { attempts, reconstructable } : { attempts: [], reconstructable };
