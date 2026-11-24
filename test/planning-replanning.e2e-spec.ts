@@ -152,10 +152,11 @@ describe('Planning cohort after replanning, load and route completion (e2e, ST-3
 
     let lastOccurredAt = Date.now();
     /** Transición del repartidor por el endpoint real, con un instante siempre creciente. */
-    const driverStatus = (token: string, dispatchId: number, status: 'in_transit' | 'delivered' | 'not_delivered') => {
+    /** `evidence` is the reference to the POD already registered; `delivered` requires it. */
+    const driverStatus = (token: string, dispatchId: number, status: 'in_transit' | 'delivered' | 'not_delivered', evidence?: { evidenceId: string; type: 'signature' | 'photo' | 'otp' }) => {
         lastOccurredAt = Math.max(lastOccurredAt + 1000, Date.now());
         return request(app.getHttpServer()).patch(api(`/dispatches/${dispatchId}/status`)).set(as(token))
-            .send({ status, eventId: uuidv7(), occurredAt: new Date(lastOccurredAt).toISOString(), lat: -16.5, lng: -68.13, accuracy: 5 });
+            .send({ status, eventId: uuidv7(), occurredAt: new Date(lastOccurredAt).toISOString(), lat: -16.5, lng: -68.13, accuracy: 5, ...(evidence && { evidence }) });
     };
 
     const makeUser = async (key: string, role: string, roles: Record<string, number>, passwordHash: string): Promise<number> => {
@@ -545,12 +546,13 @@ describe('Planning cohort after replanning, load and route completion (e2e, ST-3
 
         it('the destination route delivers the reassigned stop', async () => {
             expect((await driverStatus(tokens.driverB, id.a1, 'in_transit')).status).toBe(200);
+            const evidenceId = uuidv7();
             await dataSource.query(
                 `INSERT INTO delivery_evidences (delivery_evidence_id, dispatch_id, type, file_url, captured_at, receiver_name, receiver_document)
                  VALUES ($1, $2, 'signature', 'e2e://signature.png', NOW(), 'Receptor E2E', '1234567')`,
-                [uuidv7(), id.a1],
+                [evidenceId, id.a1],
             );
-            expect((await driverStatus(tokens.driverB, id.a1, 'delivered')).status).toBe(200);
+            expect((await driverStatus(tokens.driverB, id.a1, 'delivered', { evidenceId, type: 'signature' })).status).toBe(200);
             expect(await dispatchRow('a1')).toMatchObject({ status: 'delivered', route_batch_id: batch.B });
         });
     });
