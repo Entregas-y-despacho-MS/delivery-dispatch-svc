@@ -327,14 +327,14 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
         expect(await dispatchRow(id)).toMatchObject({ status: 'in_transit' });
     });
 
-    it('rechaza delivered con evidencia de otro despacho aunque sea del tipo correcto', async () => {
+    it('rechaza delivered con evidencia de otro despacho aunque sea del tipo correcto, igual que un id desconocido', async () => {
         const batch = await newBatch('driver1');
         const mine = await newDispatch(batch, 'in_transit', 'contactless_delivery');
         const other = await newDispatch(batch, 'out_for_delivery', 'contactless_delivery');
         const foreign = await addEvidence(other, 'photo');
         const response = await patch(mine, body('delivered', uuidv7(), foreign));
         expect(response.status).toBe(422);
-        expect(response.body.error).toBe('DISPATCH_EVIDENCE_FOREIGN');
+        expect(response.body.error).toBe('DISPATCH_EVIDENCE_NOT_FOUND');
         expect(await dispatchRow(mine)).toMatchObject({ status: 'in_transit' });
         expect(await eventsFor(mine)).toHaveLength(0);
     });

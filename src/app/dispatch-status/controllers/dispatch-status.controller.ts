@@ -1,9 +1,9 @@
 import { Body, Controller, Param, Patch, Res } from '@nestjs/common';
-import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { CurrentUser } from '../../../shared/decorators/current-user.decorator.js';
 import { ParseIdPipe } from '../../../shared/pipes/index.js';
-import { ApiBadRequests, ApiConflict, ApiForbidden, ApiNotFound, ApiUnauthorized } from '../../../shared/utils/swagger/index.js';
+import { ApiBadRequests, ApiConflict, ApiForbidden, ApiNotFound, ApiUnauthorized, ApiUnprocessableEntity } from '../../../shared/utils/swagger/index.js';
 import { DriverOnly } from '../../auth/decorators/index.js';
 import { DispatchStatusResponseDto } from '../dto/dispatch-status-response.dto.js';
 import { UpdateDispatchStatusDto } from '../dto/update-dispatch-status.dto.js';
@@ -39,11 +39,13 @@ export class DispatchStatusController {
         { code: 'DISPATCH_STATUS_EVENT_TIME_INVALID', message: 'occurredAt is in the future or more than 30 days old.' },
         { code: 'DISPATCH_STATUS_UNKNOWN', message: 'The requested status is not configured.' },
     )
-    @ApiResponse({
-        status: 422,
-        description: 'The evidence required to mark the dispatch delivered is missing or invalid. Codes: `DISPATCH_EVIDENCE_REQUIRED` (no reference sent), `DISPATCH_EVIDENCE_NOT_FOUND` (unknown evidenceId), `DISPATCH_EVIDENCE_FOREIGN` (belongs to another dispatch), `DISPATCH_EVIDENCE_TYPE_MISMATCH` (not the type the policy requires) and `DISPATCH_EVIDENCE_INCOMPLETE` (file or receiver data missing).',
-        schema: { example: { statusCode: 422, error: 'DISPATCH_EVIDENCE_REQUIRED', message: 'The delivery requires signature evidence before it can be marked delivered.' } },
-    })
+    @ApiUnprocessableEntity(
+        { code: 'DISPATCH_EVIDENCE_REQUIRED', message: 'The delivery requires signature evidence before it can be marked delivered.' },
+        { code: 'DISPATCH_EVIDENCE_NOT_FOUND', message: 'The referenced evidence is not registered for this dispatch.' },
+        { code: 'DISPATCH_EVIDENCE_TYPE_MISMATCH', message: 'This dispatch requires signature evidence; the referenced evidence cannot replace it.' },
+        { code: 'DISPATCH_EVIDENCE_INCOMPLETE', message: 'The signature evidence is incomplete: missing receiverDocument.' },
+        { code: 'DISPATCH_EVIDENCE_POLICY_UNKNOWN', message: 'The evidence policy of this dispatch is not supported.' },
+    )
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async updateStatus(
         @Param('id', ParseIdPipe) dispatchId: number,

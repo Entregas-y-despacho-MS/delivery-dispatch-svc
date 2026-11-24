@@ -49,16 +49,20 @@ describe('assertDeliveryEvidence', () => {
         expect(() => check('contactless_delivery', 'photo', null, false)).toThrow(DispatchEvidenceRequiredException);
     });
 
-    it('refuses an unknown policy even with a reference', () => {
-        expect(() => check('mystery', 'photo', stored('photo'))).toThrow(DispatchEvidenceRequiredException);
+    it('refuses an unknown policy even with a reference, without echoing it', () => {
+        const message = (() => { try { check('mystery', 'photo', stored('photo')); } catch (err) { return (err as Error).message; } return ''; })();
+        expect(codeOf(() => check('mystery', 'photo', stored('photo')))).toBe('DISPATCH_EVIDENCE_POLICY_UNKNOWN');
+        expect(message).not.toContain('mystery');
     });
 
     it('rejects an evidence id with no record', () => {
         expect(codeOf(() => check('contactless_delivery', 'photo', null))).toBe('DISPATCH_EVIDENCE_NOT_FOUND');
     });
 
-    it('rejects evidence of another dispatch', () => {
-        expect(codeOf(() => check('contactless_delivery', 'photo', stored('photo', { dispatchId: 8 })))).toBe('DISPATCH_EVIDENCE_FOREIGN');
+    it('answers evidence of another dispatch exactly like an unknown id, so ids elsewhere are not revealed', () => {
+        const answer = (record: StoredEvidence | null) => { try { check('contactless_delivery', 'photo', record); } catch (err) { return (err as { getResponse(): unknown }).getResponse(); } return null; };
+        expect(answer(stored('photo', { dispatchId: 8 }))).toEqual(answer(null));
+        expect(codeOf(() => check('contactless_delivery', 'photo', stored('photo', { dispatchId: 8 })))).toBe('DISPATCH_EVIDENCE_NOT_FOUND');
     });
 
     it.each([

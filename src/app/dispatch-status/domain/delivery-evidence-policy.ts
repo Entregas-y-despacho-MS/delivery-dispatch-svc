@@ -50,20 +50,17 @@ export function assertDeliveryEvidence(input: {
     stored: StoredEvidence | null;
 }): void {
     const required = requiredEvidenceType(input.policy);
-    // A policy this code does not know cannot be satisfied: refuse instead of delivering without proof.
-    if (!required) throw new DispatchEvidenceRequiredException(input.policy);
+    // A policy this code does not know cannot be satisfied: refuse instead of delivering without proof (the stored value is not echoed).
+    if (!required) throw new DispatchEvidenceInvalidException('DISPATCH_EVIDENCE_POLICY_UNKNOWN', 'The evidence policy of this dispatch is not supported.');
     if (!input.reference) throw new DispatchEvidenceRequiredException(required);
 
     const { stored, reference } = input;
-    if (!stored) throw new DispatchEvidenceInvalidException('DISPATCH_EVIDENCE_NOT_FOUND', 'The referenced evidence is not registered.');
-    if (stored.dispatchId !== input.dispatchId) {
-        throw new DispatchEvidenceInvalidException('DISPATCH_EVIDENCE_FOREIGN', 'The referenced evidence belongs to another dispatch.');
+    // Evidence of another dispatch answers exactly like an unknown id: the endpoint must not reveal which ids exist elsewhere.
+    if (!stored || stored.dispatchId !== input.dispatchId) {
+        throw new DispatchEvidenceInvalidException('DISPATCH_EVIDENCE_NOT_FOUND', 'The referenced evidence is not registered for this dispatch.');
     }
     if (reference.type !== required || stored.type !== required) {
-        throw new DispatchEvidenceInvalidException(
-            'DISPATCH_EVIDENCE_TYPE_MISMATCH',
-            `This dispatch requires ${required} evidence; ${stored.type === reference.type ? stored.type : `${reference.type} (stored as ${stored.type})`} cannot replace it.`,
-        );
+        throw new DispatchEvidenceInvalidException('DISPATCH_EVIDENCE_TYPE_MISMATCH', `This dispatch requires ${required} evidence; the referenced evidence cannot replace it.`);
     }
     const missing = missingFields(stored);
     if (missing.length > 0) {

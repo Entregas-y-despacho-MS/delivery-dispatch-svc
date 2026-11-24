@@ -2,7 +2,7 @@ import { UnprocessableEntityException } from '@nestjs/common';
 
 export type DispatchEvidenceInvalidCode =
     | 'DISPATCH_EVIDENCE_NOT_FOUND'
-    | 'DISPATCH_EVIDENCE_FOREIGN'
+    | 'DISPATCH_EVIDENCE_POLICY_UNKNOWN'
     | 'DISPATCH_EVIDENCE_TYPE_MISMATCH'
     | 'DISPATCH_EVIDENCE_INCOMPLETE';
 

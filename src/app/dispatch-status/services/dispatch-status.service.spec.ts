@@ -220,7 +220,7 @@ describe('DispatchStatusService.update', () => {
 
     it.each([
         ['an unknown evidence id', null, 'DISPATCH_EVIDENCE_NOT_FOUND'],
-        ['evidence of another dispatch', storedSignature({ dispatchId: 99 }), 'DISPATCH_EVIDENCE_FOREIGN'],
+        ['evidence of another dispatch', storedSignature({ dispatchId: 99 }), 'DISPATCH_EVIDENCE_NOT_FOUND'],
         ['evidence of a type the policy does not allow', storedSignature({ type: 'photo' }), 'DISPATCH_EVIDENCE_TYPE_MISMATCH'],
         ['an incomplete signature', storedSignature({ receiverDocument: null }), 'DISPATCH_EVIDENCE_INCOMPLETE'],
     ])('rejects delivered with %s and writes nothing', async (_name, evidence, code) => {
