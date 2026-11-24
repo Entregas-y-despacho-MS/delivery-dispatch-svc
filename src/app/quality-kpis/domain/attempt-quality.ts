@@ -27,17 +27,25 @@ export interface AttemptQuality {
 
 const INCIDENT = 'incident';
 
-/** Distinct events by `client_event_id` (the offline retry key) or, without one, by `dispatch_event_id`. */
-function distinctIncidentKeys(events: AttemptEvent[], countsAsAttempt: boolean): Set<string> {
+/**
+ * Which incidents the «motivo» filter lets through, by incident key (the incident id): `undefined` = every incident.
+ * It narrows the numerator only; the denominator stays the valid attempts of the cohort.
+ */
+export type IncidentKeyFilter = ReadonlySet<string> | undefined;
+
+/** Distinct incidents that do not consume an attempt, by `client_event_id` (the offline retry key) or, without one, by `dispatch_event_id`. */
+function nonAttemptIncidentKeys(events: AttemptEvent[], filter: IncidentKeyFilter): Set<string> {
     const keys = new Set<string>();
     for (const event of events) {
-        if (event.status === INCIDENT && event.countsAsAttempt === countsAsAttempt) keys.add(event.clientEventId ?? `event-${event.eventId}`);
+        if (event.status !== INCIDENT || event.countsAsAttempt) continue;
+        const key = event.clientEventId ?? `event-${event.eventId}`;
+        if (!filter || filter.has(key)) keys.add(key);
     }
     return keys;
 }
 
 /** Counts per attempt and per dispatch, never per event row. Reuses the attempt rule of ST-301.3. */
-export function summarizeAttemptQuality(sources: QualitySource[]): AttemptQuality {
+export function summarizeAttemptQuality(sources: QualitySource[], filter?: IncidentKeyFilter): AttemptQuality {
     const quality: AttemptQuality = {
         attemptCount: 0, attemptsWithIncidentCount: 0, dispatchesWithIncidentCount: 0,
         incidentEventCount: 0, incidentsWithoutAttemptCount: 0, notReconstructableCount: 0,
@@ -48,12 +56,13 @@ export function summarizeAttemptQuality(sources: QualitySource[]): AttemptQualit
             quality.notReconstructableCount += 1;
             continue;
         }
-        const withIncident = history.attempts.filter((attempt) => attempt.hadIncident).length;
+        const matching = history.attempts.map((attempt) => attempt.incidentKeys.filter((key) => !filter || filter.has(key)));
+        const withIncident = matching.filter((keys) => keys.length > 0).length;
         quality.attemptCount += history.attempts.length;
         quality.attemptsWithIncidentCount += withIncident;
         if (withIncident > 0) quality.dispatchesWithIncidentCount += 1;
-        quality.incidentEventCount += distinctIncidentKeys(source.events, true).size;
-        quality.incidentsWithoutAttemptCount += distinctIncidentKeys(source.events, false).size;
+        quality.incidentEventCount += matching.reduce((sum, keys) => sum + keys.length, 0);
+        quality.incidentsWithoutAttemptCount += nonAttemptIncidentKeys(source.events, filter).size;
     }
     return quality;
 }

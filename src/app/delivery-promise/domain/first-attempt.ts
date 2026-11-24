@@ -45,8 +45,12 @@ export interface NormalizedAttempt {
     order: number;
     outcome: AttemptOutcome;
     occurredAt: Date;
-    /** An incident that consumes an attempt belongs to this attempt: it is its result, or it came after a `not_delivered` of the same trip (ST-300.1). */
-    hadIncident: boolean;
+    /**
+     * The incidents that consume an attempt and belong to this one (ST-300.1): the one that is its result, or the ones that came
+     * after it in the same trip (an incident after a `not_delivered`, a second incident). Same key as `attemptId`: the event's
+     * `client_event_id` (the incident id) or `event-<id>`. A repeated event is listed once.
+     */
+    incidentKeys: string[];
 }
 
 export interface DispatchAttempts {
@@ -75,18 +79,19 @@ export function normalizeAttempts(events: AttemptEvent[]): DispatchAttempts {
         }
         const outcome = outcomeOf(event);
         if (!outcome) continue;
+        const key = event.clientEventId ?? `event-${event.eventId}`;
         if (!tripStarted) {
             if (attempts.length === 0) reconstructable = false;
             else if (outcome === AttemptOutcome.INCIDENT) {
-                // The incident that caused a `not_delivered` of the same trip: it is that attempt, not a new one.
+                // An incident of the same trip as the last attempt (the one that caused a `not_delivered`, or a second one): it is that attempt, not a new one.
                 const last = attempts[attempts.length - 1];
-                if (last.outcome === AttemptOutcome.NOT_DELIVERED) last.hadIncident = true;
+                if (last.outcome !== AttemptOutcome.DELIVERED && !last.incidentKeys.includes(key)) last.incidentKeys.push(key);
             }
             continue;
         }
         attempts.push({
-            attemptId: event.clientEventId ?? `event-${event.eventId}`, order: attempts.length + 1, outcome, occurredAt: event.occurredAt,
-            hadIncident: outcome === AttemptOutcome.INCIDENT,
+            attemptId: key, order: attempts.length + 1, outcome, occurredAt: event.occurredAt,
+            incidentKeys: outcome === AttemptOutcome.INCIDENT ? [key] : [],
         });
         tripStarted = false;
     }

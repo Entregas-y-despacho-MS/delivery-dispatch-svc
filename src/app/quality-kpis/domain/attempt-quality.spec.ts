@@ -81,3 +81,22 @@ describe('summarizeReschedules', () => {
         expect(rescheduleRateKpi(summarizeReschedules([]), 0)).toMatchObject({ available: true, value: null });
     });
 });
+
+describe('summarizeAttemptQuality — «motivo» filter', () => {
+    const sources = [
+        source(1, [event('in_transit', 0), incident(5, 'i-a'), event('in_transit', 60), event('delivered', 70)]),
+        source(2, [event('in_transit', 0), incident(5, 'i-b')]),
+        source(3, [event('in_transit', 0), event('delivered', 10)]),
+    ];
+
+    it('narrows only the numerator: the denominator stays the valid attempts of the cohort', () => {
+        const quality = summarizeAttemptQuality(sources, new Set(['i-b']));
+        expect(quality).toMatchObject({ attemptCount: 4, attemptsWithIncidentCount: 1, dispatchesWithIncidentCount: 1, incidentEventCount: 1 });
+        expect(incidentRateKpi(quality, true).value).toBe(25);
+    });
+
+    it('with an empty set of matching incidents the numerator is 0 and the rate is 0, over a real denominator', () => {
+        const kpi = incidentRateKpi(summarizeAttemptQuality(sources, new Set()), true);
+        expect([kpi.numerator, kpi.denominator, kpi.value]).toEqual([0, 4, 0]);
+    });
+});
