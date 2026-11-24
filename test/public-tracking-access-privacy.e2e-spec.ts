@@ -534,6 +534,104 @@ describe('Tracking access: privacy and resistance to enumeration (e2e, ST-309.3)
             touchedSessions.add(opened.body.session);
         });
     });
+
+    describe('scope of the session', () => {
+        it('rejects a revoked, an expired, a tampered or a misplaced session with the one 401 of an unknown session', async () => {
+            const { trackingCode } = await fixtures.create();
+            const unknown = await view('e'.repeat(64));
+            expect(comparable(unknown)).toMatchObject({ status: 401, error: 'TRACKING_SESSION_INVALID' });
+            const sameAsUnknown = (res: Res): void => expect(comparable(res)).toEqual(comparable(unknown));
+            // A session put in the URL by the client is ignored; the error echoes the URL as it came (see the report).
+            const ignored = (res: Res): void => expect({ ...comparable(res), path: '' }).toEqual({ ...comparable(unknown), path: '' });
+
+            // Revoked: the cache let the key expire.
+            const revoked = await sessionFor(trackingCode);
+            expect((await view(revoked)).status).toBe(200);
+            await atRest.expire(sessionKey(revoked));
+            sameAsUnknown(await view(revoked));
+
+            // Expired by its own record: the key is still in the cache, but the session ended a second ago.
+            await endCooldown(trackingCode);
+            const stale = await sessionFor(trackingCode);
+            const record = JSON.parse((await cache.get(sessionKey(stale)))!) as { dispatchId: number; expiresAt: number };
+            await cache.setWithTtl(sessionKey(stale), JSON.stringify({ ...record, expiresAt: Date.now() - 1_000 }), TTL);
+            sameAsUnknown(await view(stale));
+
+            await endCooldown(trackingCode);
+            const live = await sessionFor(trackingCode);
+            const flipped = live.slice(0, -1) + (live.endsWith('0') ? '1' : '0');
+            for (const tampered of [flipped, live.toUpperCase(), `${live}0`, live.slice(1)]) sameAsUnknown(await view(tampered));
+            // Never read from the URL nor from a bearer token.
+            ignored(await http().get(`${base()}/access/view?session=${live}&x-tracking-session=${live}`));
+            sameAsUnknown(await http().get(`${base()}/access/view`).set('Authorization', `Bearer ${live}`));
+            sameAsUnknown(await http().get(`${base()}/access/view`).set('Cookie', `x-tracking-session=${live}`));
+            expect((await view(live)).status).toBe(200);
+        });
+
+        it('cannot act on the dispatch nor read the full page of the link with a session', async () => {
+            const { trackingCode, dispatchId } = await fixtures.create();
+            const session = await sessionFor(trackingCode);
+            const snapshot = async () => (await db.query(
+                `SELECT d.customer_confirmation, d.version, d.scheduled_window_start, d.tracking_token,
+                        (SELECT COUNT(*)::int FROM dispatch_events e WHERE e.dispatch_id = d.dispatch_id) AS events
+                   FROM dispatches d WHERE d.dispatch_id = $1`,
+                [dispatchId],
+            ))[0];
+            const before = await snapshot();
+
+            const attempts = [
+                http().get(`${base()}/${session}`),
+                http().post(`${base()}/${session}/confirm`).set('X-Tracking-Session', session),
+                http().post(`${base()}/${session}/verification-code`).set('X-Tracking-Session', session),
+                http().post(`${base()}/${session}/reschedule`).set('X-Tracking-Session', session).send({ slotId: 'x' }),
+                http().post(`${base()}/${session}/change-request`).set('X-Tracking-Session', session).send({}),
+                http().post(`${base()}/${session}/rating`).set('X-Tracking-Session', session).send({ score: 5 }),
+                http().get(`${base()}/${session}/slots`).set('X-Tracking-Session', session),
+            ];
+            for (const res of await Promise.all(attempts)) {
+                expect(res.status).toBeGreaterThanOrEqual(400);
+                expect(res.status).toBeLessThan(500);
+            }
+            await access.whenIdle();
+            expect(await snapshot()).toEqual(before);
+        });
+
+        it('keeps the reschedule link and the access by code apart: neither code opens the other flow, and the link is untouched', async () => {
+            const { trackingCode, token, dispatchId } = await fixtures.create();
+            // The keys of the link's own rescheduling code, by dispatch.
+            for (const kind of ['code', 'attempts', 'sends', 'proof']) otherKeys.add(`public-tracking:${kind}:${dispatchId}`);
+            const [{ tracking_token: tokenBefore }] = await db.query(`SELECT tracking_token FROM dispatches WHERE dispatch_id = $1`, [dispatchId]);
+
+            // The rescheduling code of the link does not open a session.
+            const sent = await http().post(`${base()}/${token}/verification-code`);
+            expect(sent.status).toBe(200);
+            await access.whenIdle();
+            const linkMail = mails.at(-1)!;
+            expect(linkMail.template).not.toBe(ACCESS_TEMPLATE);
+            const linkCode = String(linkMail.context!.code);
+            expect((await verify(trackingCode, linkCode)).status).toBe(400);
+
+            // The access code does not pass the link's verification.
+            const accessCode = await codeFor(trackingCode);
+            if (accessCode !== linkCode) {
+                const crossed = await http().post(`${base()}/${token}/verification-code/verify`).send({ code: accessCode });
+                expect(crossed.status).toBe(400);
+                expect(crossed.body.proof).toBeUndefined();
+            }
+
+            // Each code still works in its own flow, and the session left the link as it was.
+            const proof = await http().post(`${base()}/${token}/verification-code/verify`).send({ code: linkCode });
+            expect(proof.status).toBe(200);
+            const opened = await verify(trackingCode, accessCode);
+            expect(opened.status).toBe(200);
+            touchedSessions.add(opened.body.session);
+            const page = await http().get(`${base()}/${token}`);
+            expect(page.status).toBe(200);
+            expect(page.body.selfService).toBeDefined();
+            const [{ tracking_token: tokenAfter }] = await db.query(`SELECT tracking_token FROM dispatches WHERE dispatch_id = $1`, [dispatchId]);
+            expect(tokenAfter).toBe(tokenBefore);
+        });
+    });
 });
 
 /** The in-memory adapter keeps two maps; the suite reads them to see what is stored and for how long. */
