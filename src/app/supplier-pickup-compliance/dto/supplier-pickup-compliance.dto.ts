@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiExtraModels, ApiProperty, getSchemaPath } from '@nestjs/swagger';
 import { AppointmentCategory } from '../domain/appointment-classifier.js';
 
 export class ComplianceFiltersDto {
@@ -25,7 +25,7 @@ export class ComplianceMetricsDto {
     @ApiProperty({ type: 'integer', minimum: 0, example: 10, description: 'Sample size of the rate; the same figure as `denominator`, shown with the rate' })
     n!: number;
 
-    @ApiProperty({ type: 'number', format: 'double', nullable: true, minimum: 0, maximum: 100, example: 60, description: 'numerator / denominator as a percentage with one decimal; 100 only when none is out of the appointment. null (N/D, shown as "Sin datos") when the denominator is 0, never 0' })
+    @ApiProperty({ type: 'number', format: 'double', nullable: true, minimum: 0, maximum: 100, example: 60, description: 'numerator / denominator as a percentage with one decimal; 100 only when none is out of the appointment. null (N/D, shown as "no data") when the denominator is 0, never 0' })
     percentage!: number | null;
 
     @ApiProperty({ type: String, nullable: true, enum: ['missing_timestamp', 'no_valid_results'], description: 'Why `percentage` is null: `missing_timestamp` when the only expired pickups say they were collected but have no custody time, `no_valid_results` when no expired appointment has a result. null when there is a rate' })
@@ -42,7 +42,7 @@ export class ComplianceCountsDto {
     @ApiProperty({ type: 'integer', minimum: 0, description: 'Expired appointment, not collected, whose status says it failed (`incident`, `not_delivered`)' })
     failed!: number;
 
-    @ApiProperty({ type: 'integer', minimum: 0, description: 'Expired appointment, not collected and still active: an actionable exception with no result yet, out of the rate' })
+    @ApiProperty({ type: 'integer', minimum: 0, description: 'Expired appointment, not collected and not failed: an actionable exception with no result yet, out of the rate' })
     openOverdue!: number;
 
     @ApiProperty({ type: 'integer', minimum: 0, description: 'Appointment whose window ends at or after the moment of the query (even if already collected early): out of the rate' })
@@ -74,6 +74,7 @@ export class ComplianceSupplierDto {
     name!: string | null;
 }
 
+@ApiExtraModels(ComplianceSupplierDto, ComplianceWindowDto)
 export class ComplianceExceptionDto {
     @ApiProperty({ type: 'integer', description: 'Dispatch of the supplier pickup' })
     dispatchId!: number;
@@ -87,16 +88,16 @@ export class ComplianceExceptionDto {
     @ApiProperty({ type: String, description: 'Purchase order that originated the pickup' })
     purchaseOrderRef!: string;
 
-    @ApiProperty({ type: ComplianceSupplierDto, nullable: true, description: 'Supplier of the pickup; null when no event carries it' })
+    @ApiProperty({ allOf: [{ $ref: getSchemaPath(ComplianceSupplierDto) }], nullable: true, description: 'Supplier of the pickup; null when no event carries it' })
     supplier!: ComplianceSupplierDto | null;
 
     @ApiProperty({ type: 'integer', nullable: true, description: 'Warehouse where the cargo will be received; null when unknown' })
     destinationWarehouseId!: number | null;
 
-    @ApiProperty({ type: ComplianceWindowDto, nullable: true, description: 'Window in force (the last one accepted); null when it is missing' })
+    @ApiProperty({ allOf: [{ $ref: getSchemaPath(ComplianceWindowDto) }], nullable: true, description: 'Window in force (the last one accepted); null when it is missing' })
     window!: ComplianceWindowDto | null;
 
-    @ApiProperty({ type: ComplianceWindowDto, nullable: true, description: 'Original window, kept for audit: the one the first reschedule replaced. null when it was never rescheduled' })
+    @ApiProperty({ allOf: [{ $ref: getSchemaPath(ComplianceWindowDto) }], nullable: true, description: 'Original window, kept for audit: the one the first window change replaced. null when the window was never changed' })
     originalWindow!: ComplianceWindowDto | null;
 
     @ApiProperty({ type: String, format: 'date-time', nullable: true, description: 'Moment of the first reschedule; null when it was never rescheduled' })
@@ -146,6 +147,6 @@ export class SupplierPickupComplianceDto {
     @ApiProperty({ type: [ComplianceExceptionDto], description: 'Actionable exceptions, the most overdue first, up to `exceptionLimit`' })
     exceptions!: ComplianceExceptionDto[];
 
-    @ApiProperty({ type: Boolean, description: 'true when no pickup matches the filters ("Sin datos")' })
+    @ApiProperty({ type: Boolean, description: 'true when no pickup matches the filters ("no data")' })
     empty!: boolean;
 }

@@ -10,7 +10,8 @@ import type { ComplianceQuery, PickupAppointmentRow } from '../domain/compliance
  *
  * - The anchor of the range is the end of the window in force; with no valid window it is the closing time, else the creation
  *   time, so a pickup without appointment does not disappear.
- * - The supplier is not a column: it is read from the last dispatch event that carries it (`created` or `supplier_pickup_updated`).
+ * - The supplier is not a column: it is read from the last dispatch event that carries `metadata.supplier.supplierId`
+ *   (the intake writes it in `created` and `supplier_pickup_updated`; no event type is filtered).
  * - The original appointment is the window the FIRST reschedule replaced (`dispatch_reschedules` is append-only).
  * - Nothing is classified here: the rows go to `buildComplianceReport`.
  */
