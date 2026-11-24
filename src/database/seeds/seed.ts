@@ -6,6 +6,7 @@ import { User } from '../../modules/auth/users/entities/user.entity.js';
 import { Role } from '../../modules/auth/roles/entities/role.entity.js';
 import { hashPassword } from '../../shared/utils/crypto.util.js';
 import { EnvironmentEnum } from '../../shared/enums/environment.enum.js';
+import { seedRootUser } from './root-bootstrap.js';
 
 const GREEN  = '\x1b[32m';
 const YELLOW = '\x1b[33m';
@@ -32,45 +33,6 @@ async function seedRoles(): Promise<void> {
         await repo.save(role);
         console.log(`  ${GREEN}✔  Role created${RESET} → ${name}`);
     }
-}
-
-/**
- * Inserts the root user if it does not already exist.
- * Idempotent — safe to run multiple times.
- */
-async function seedRootUser(): Promise<void> {
-    const username = process.env.SEED_ROOT_USERNAME  ?? 'root';
-    const fullName  = process.env.SEED_ROOT_FULL_NAME ?? 'Root';
-    const email     = process.env.SEED_ROOT_EMAIL     ?? 'root@app.com';
-    const password  = process.env.SEED_ROOT_PASSWORD  ?? 'Root1234!';
-
-    const userRepo = AppDataSource.getRepository(User);
-    const roleRepo = AppDataSource.getRepository(Role);
-
-    const existing = await userRepo.findOne({ where: { username } });
-    if (existing) {
-        console.log(`  ${YELLOW}⚠  Root user already exists${RESET} (${username}) — skipping.`);
-        return;
-    }
-
-    const rootRole = await roleRepo.findOneBy({ name: 'root' });
-    if (!rootRole) throw new Error('Root role not found — seedRoles() must run before seedRootUser().');
-
-    const hashed = await hashPassword(password);
-
-    const user = userRepo.create({
-        username,
-        fullName,
-        email,
-        passwordHash:      hashed,
-        passwordChangedAt: new Date(),
-        roleId:            rootRole.id,
-        requiresPwdChange: false,
-    });
-    await userRepo.save(user);
-
-    console.log(`  ${GREEN}✔  Root user created${RESET} → ${BOLD}${username}${RESET}`);
-    console.log(`  ${YELLOW}⚠  Change the root password in production.${RESET}`);
 }
 
 interface DemoUserSpec {
@@ -158,7 +120,7 @@ async function seed(): Promise<void> {
 
     try {
         await seedRoles();
-        await seedRootUser();
+        await seedRootUser(AppDataSource.getRepository(User), AppDataSource.getRepository(Role));
         if (demoUsersEnabled()) {
             for (const spec of DEMO_USERS) await seedDemoUser(spec);
         } else {
