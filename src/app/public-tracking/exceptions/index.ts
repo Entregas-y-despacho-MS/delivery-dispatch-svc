@@ -11,3 +11,6 @@ export * from './verification-required.exception.js';
 export * from './slot-no-longer-available.exception.js';
 export * from './rating-not-allowed.exception.js';
 export * from './rating-already-submitted.exception.js';
+export * from './invalid-access-code.exception.js';
+export * from './tracking-access-rate-limited.exception.js';
+export * from './tracking-session-invalid.exception.js';
