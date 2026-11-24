@@ -12,7 +12,10 @@ export interface QualityKpisFilters {
     /** Last Bolivia day (YYYY-MM-DD), inclusive. */
     to: string;
     zoneId?: number;
-    /** Current status of the dispatch. */
+    /**
+     * Current status of the dispatch, applied to every cohort. Claims and rating only look at delivered dispatches, so any other status leaves them
+     * in «Sin datos»; `delivered` leaves incidents and reschedules measuring only the dispatches that ended well.
+     */
     status?: string;
     /** «Motivo»: only incidents with this reason count in the numerator of the incident rate. */
     incidentReasonId?: number;

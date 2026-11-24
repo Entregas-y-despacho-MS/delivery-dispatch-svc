@@ -1,4 +1,4 @@
-import { normalizeAttempts, type AttemptEvent } from '../../delivery-promise/domain/first-attempt.js';
+import { RESULT_STATUSES, normalizeAttempts, type AttemptEvent } from '../../delivery-promise/domain/first-attempt.js';
 import { KpiUnavailableReason, rateKpi, type QualityKpi } from './kpi.js';
 
 export const INCIDENT_KPI_DATE_BASIS = 'promise_window_end';
@@ -7,6 +7,8 @@ export const RESCHEDULE_KPI_DATE_BASIS = 'promise_window_end';
 /** The events of one dispatch of the cohort, as `AttemptsRepository` reads them. */
 export interface QualitySource {
     dispatchId: number;
+    /** Current status: a dispatch already `delivered` or `not_delivered` with no attempt rebuilt is history we cannot read (as in ST-301.3). */
+    status: string;
     events: AttemptEvent[];
 }
 
@@ -52,7 +54,7 @@ export function summarizeAttemptQuality(sources: QualitySource[], filter?: Incid
     };
     for (const source of sources) {
         const history = normalizeAttempts(source.events);
-        if (!history.reconstructable) {
+        if (!history.reconstructable || (history.attempts.length === 0 && RESULT_STATUSES.has(source.status))) {
             quality.notReconstructableCount += 1;
             continue;
         }

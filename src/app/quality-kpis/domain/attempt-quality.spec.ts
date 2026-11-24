@@ -9,7 +9,7 @@ const at = (minutes: number) => new Date(Date.UTC(2026, 10, 10, 12, minutes));
 function event(status: string, minutes: number, overrides: Partial<AttemptEvent> = {}): AttemptEvent {
     return { eventId: nextId++, clientEventId: null, occurredAt: at(minutes), previousStatus: null, status, countsAsAttempt: false, ...overrides };
 }
-const source = (dispatchId: number, events: AttemptEvent[]): QualitySource => ({ dispatchId, events });
+const source = (dispatchId: number, events: AttemptEvent[]): QualitySource => ({ dispatchId, status: 'delivered', events });
 const incident = (minutes: number, id: string, counts = true) => event('incident', minutes, { clientEventId: id, countsAsAttempt: counts });
 
 describe('summarizeAttemptQuality', () => {
@@ -46,6 +46,16 @@ describe('summarizeAttemptQuality', () => {
     it('leaves a dispatch that cannot be rebuilt out of both sides and counts it', () => {
         const quality = summarizeAttemptQuality([source(1, [incident(5, 'i-1')]), source(2, [event('in_transit', 0), event('delivered', 10)])]);
         expect(quality).toMatchObject({ attemptCount: 1, attemptsWithIncidentCount: 0, notReconstructableCount: 1 });
+    });
+
+    it('counts a delivered or not_delivered dispatch with no attempt as not reconstructable, but not an open one that has had no chance yet', () => {
+        const quality = summarizeAttemptQuality([
+            { dispatchId: 1, status: 'delivered', events: [] },
+            { dispatchId: 2, status: 'not_delivered', events: [] },
+            { dispatchId: 3, status: 'assigned', events: [] },
+            { dispatchId: 4, status: 'delivered', events: [event('in_transit', 0), event('delivered', 10)] },
+        ]);
+        expect(quality).toMatchObject({ attemptCount: 1, notReconstructableCount: 2 });
     });
 
     it('is Sin datos (available, no value) with no attempts, not a 0', () => {

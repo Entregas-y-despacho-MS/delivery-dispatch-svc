@@ -77,9 +77,10 @@ describe('QualityKpisService.getQualityKpis', () => {
     });
 
     it('omits the rating with its cause when the caller is not authorized, and the response rate is N/D', async () => {
-        const { service } = build({ delivered: [{ dispatchId: 1, rescheduled: false }], scores: [5] });
+        const { service, quality } = build({ delivered: [{ dispatchId: 1, rescheduled: false }], scores: [5] });
         const report = await service.getQualityKpis(FILTERS, { ratingsAuthorized: false, now: NOW });
         expect(report.kpis.ratingAverage).toMatchObject({ available: false, value: null, n: 0, reason: KpiUnavailableReason.RATING_NOT_AUTHORIZED });
+        expect(quality.listRatingScores).not.toHaveBeenCalled();
         expect(report.kpis.responseRate).toMatchObject({ available: false, reason: KpiUnavailableReason.RESPONSE_OPPORTUNITY_NOT_RECORDED });
     });
 

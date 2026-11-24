@@ -71,15 +71,15 @@ describe('investigationTimeKpi', () => {
 
 describe('ratingKpi / responseRateKpi', () => {
     it('averages the scores with n when authorized: (5, 4, 3) → 4', () => {
-        expect(ratingKpi([5, 4, 3], true)).toMatchObject({ value: 4, n: 3, available: true });
+        expect(ratingKpi([5, 4, 3])).toMatchObject({ value: 4, n: 3, available: true });
     });
 
     it('is omitted with its cause, and shows no figure, when not authorized', () => {
-        expect(ratingKpi([5, 4, 3], false)).toMatchObject({ available: false, value: null, n: 0, numerator: null, reason: KpiUnavailableReason.RATING_NOT_AUTHORIZED });
+        expect(ratingKpi(null)).toMatchObject({ available: false, value: null, n: 0, numerator: null, reason: KpiUnavailableReason.RATING_NOT_AUTHORIZED });
     });
 
     it('is Sin datos when authorized and nothing was rated', () => {
-        expect(ratingKpi([], true)).toMatchObject({ available: true, value: null, n: 0 });
+        expect(ratingKpi([])).toMatchObject({ available: true, value: null, n: 0 });
     });
 
     it('the response rate is always N/D until the opportunity to answer is recorded', () => {

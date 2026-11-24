@@ -26,7 +26,7 @@ export interface ComplaintQuality {
     dispatchesWithCaseCount: number;
     /** Minutes from `investigationStartedAt` to `decidedAt`, only for cases with both. */
     investigationMinutes: number[];
-    /** Decided cases that miss a timestamp: out of the median and shown apart. */
+    /** Decided cases whose timestamps are missing or inverted (decision before the start): out of the median and shown apart. */
     decidedWithoutTimestampsCount: number;
     open: OpenCases;
 }
@@ -81,11 +81,11 @@ export function investigationTimeKpi(quality: ComplaintQuality): QualityKpi {
     };
 }
 
-/** Average rating of the delivered dispatches of the cohort. Omitted (N/D, no figure) unless the caller may read the global rating. */
-export function ratingKpi(scores: number[], authorized: boolean): QualityKpi {
+/** Average rating of the delivered dispatches of the cohort. `scores` is null when the caller may not read the global rating: omitted (N/D, no figure), and never read. */
+export function ratingKpi(scores: number[] | null): QualityKpi {
     const code = 'rating_average';
     const formula = 'mean score of the ratings of the delivered dispatches of the cohort';
-    if (!authorized) return unavailableKpi({ code, formula, dateBasis: RATING_KPI_DATE_BASIS, unit: KpiUnit.SCORE, reason: KpiUnavailableReason.RATING_NOT_AUTHORIZED });
+    if (scores === null) return unavailableKpi({ code, formula, dateBasis: RATING_KPI_DATE_BASIS, unit: KpiUnit.SCORE, reason: KpiUnavailableReason.RATING_NOT_AUTHORIZED });
     const n = scores.length;
     return {
         code, formula, unit: KpiUnit.SCORE, numerator: n === 0 ? null : scores.reduce((sum, s) => sum + s, 0), denominator: n === 0 ? null : n, n,

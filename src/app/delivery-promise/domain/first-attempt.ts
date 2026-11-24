@@ -113,7 +113,7 @@ export interface CommittedWindow {
 }
 
 /** A dispatch in one of these statuses has had its result: with no attempt rebuilt, it is history we cannot read, not «not yet». */
-const RESULT_STATUSES: ReadonlySet<string> = new Set([AttemptOutcome.DELIVERED, AttemptOutcome.NOT_DELIVERED]);
+export const RESULT_STATUSES: ReadonlySet<string> = new Set([AttemptOutcome.DELIVERED, AttemptOutcome.NOT_DELIVERED]);
 
 /** The first attempt of a dispatch against the window in force (both ends included, as the OTD measures it). `status` is its current status. */
 export function classifyFirstAttempt(history: DispatchAttempts, window: CommittedWindow, status: string): FirstAttemptResult {

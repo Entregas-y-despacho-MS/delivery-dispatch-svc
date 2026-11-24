@@ -55,7 +55,11 @@ export class QualityKpisService {
         const incidentFilter = filters.incidentReasonId === undefined
             ? undefined
             : await this.quality.listIncidentIdsByReason(filters.incidentReasonId, cohortSources.map((source) => source.dispatchId));
-        const [cases, scores] = await Promise.all([this.quality.listComplaintCases(deliveredIds), this.quality.listRatingScores(deliveredIds)]);
+        // The global rating is not even read unless the caller may see it.
+        const [cases, scores] = await Promise.all([
+            this.quality.listComplaintCases(deliveredIds),
+            options.ratingsAuthorized ? this.quality.listRatingScores(deliveredIds) : Promise.resolve(null),
+        ]);
 
         const attemptQuality = summarizeAttemptQuality(cohortSources, incidentFilter);
         const rescheduleQuality = summarizeReschedules(rescheduleRows);
@@ -72,7 +76,7 @@ export class QualityKpisService {
                 rescheduleRate: rescheduleRateKpi(rescheduleQuality, eligibleIds.size),
                 complaintRate: complaintRateKpi(complaintQuality, deliveredIds.length),
                 investigationTime: investigationTimeKpi(complaintQuality),
-                ratingAverage: ratingKpi(scores, options.ratingsAuthorized),
+                ratingAverage: ratingKpi(scores),
                 responseRate: responseRateKpi(),
             },
             details: {

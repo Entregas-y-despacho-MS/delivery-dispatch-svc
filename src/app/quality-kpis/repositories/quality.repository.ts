@@ -5,8 +5,12 @@ import { DispatchStatusEnum } from '../../../shared/enums/dispatch-status.enum.j
 import { FILTERS_SQL, FROM_TS, TO_TS, filterParams, type DeliveryPromiseFilters } from '../../delivery-promise/repositories/delivery-promise.sql.js';
 import type { ComplaintCaseRow } from '../domain/case-quality.js';
 
-/** A reschedule changed the window only if the window moved: a row that just moved the route (reassignment) has both windows equal. */
-const WINDOW_CHANGED_SQL = '(r.new_window_start IS DISTINCT FROM r.previous_window_start OR r.new_window_end IS DISTINCT FROM r.previous_window_end)';
+/**
+ * A reschedule changed the window only if it set a new one and it is not the one it had: a route reassignment has no new window
+ * (`new_window_start` NULL), whatever it kept in `previous_window_*`, and a row that repeats the same window did not move anything.
+ */
+const WINDOW_CHANGED_SQL = `(r.new_window_start IS NOT NULL
+        AND (r.new_window_start IS DISTINCT FROM r.previous_window_start OR r.new_window_end IS DISTINCT FROM r.previous_window_end))`;
 
 /**
  * The delivery dispatches of the cohort of the promise (the end of their committed window; else their closing; else their creation,
