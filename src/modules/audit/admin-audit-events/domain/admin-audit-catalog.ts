@@ -45,6 +45,9 @@ export const ADMIN_AUDIT_CATALOG = {
     // Customer credential
     'tracking_link.revealed': { entityType: 'dispatch', description: 'Reveal a customer\'s tracking link (the customer\'s credential)', endpoints: ['POST /dispatches/change-requests/:id/tracking-link'] },
 
+    // The audit trail itself
+    'audit.exported':         { entityType: 'audit', description: 'Export the administrative audit trail as CSV or PDF', endpoints: ['GET /audit/admin-events/export'] },
+
     // Planning and route control
     'planning.run':           { entityType: 'planning', description: 'Generate a plan or run the cutoff', endpoints: ['POST /planning/generate', 'POST /planning/cutoff'] },
     'route_batch.approved':   { entityType: 'route_batch', description: 'Approve the promises or the final plan of a batch', endpoints: ['POST /route-batches/:id/approve-promises', 'POST /route-batches/:id/approve-final'] },
