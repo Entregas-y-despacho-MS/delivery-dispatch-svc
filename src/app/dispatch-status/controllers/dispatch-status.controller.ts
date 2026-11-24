@@ -1,9 +1,9 @@
 import { Body, Controller, Param, Patch, Res } from '@nestjs/common';
-import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { CurrentUser } from '../../../shared/decorators/current-user.decorator.js';
 import { ParseIdPipe } from '../../../shared/pipes/index.js';
-import { ApiBadRequests, ApiConflict, ApiForbidden, ApiNotFound, ApiUnauthorized } from '../../../shared/utils/swagger/index.js';
+import { ApiBadRequests, ApiConflict, ApiForbidden, ApiNotFound, ApiUnauthorized, ApiUnprocessableEntity } from '../../../shared/utils/swagger/index.js';
 import { DriverOnly } from '../../auth/decorators/index.js';
 import { DispatchStatusResponseDto } from '../dto/dispatch-status-response.dto.js';
 import { UpdateDispatchStatusDto } from '../dto/update-dispatch-status.dto.js';
@@ -22,7 +22,7 @@ export class DispatchStatusController {
     @ApiParam({ name: 'id', type: Number, description: 'Numeric dispatch identifier.' })
     @ApiOperation({
         summary: 'Update a dispatch status from the driver app',
-        description: 'The single-item status endpoint for mobile transitions. Accepts status by name, a UUID v7 eventId for safe offline retries, occurredAt in UTC and GPS coordinates. Only the driver assigned to the route can update it. `out_for_delivery` is set by the separate route-start flow (ST-51.5); incident registration uses POST /dispatches/:id/incidents. Marking a dispatch delivered requires the evidence type selected by its evidence policy to have already been registered.',
+        description: 'The single-item status endpoint for mobile transitions. Accepts status by name, a UUID v7 eventId for safe offline retries, occurredAt in UTC and GPS coordinates. Only the driver assigned to the route can update it. `out_for_delivery` is set by the separate route-start flow (ST-51.5); incident registration uses POST /dispatches/:id/incidents. Marking a dispatch delivered requires an `evidence` reference (`evidenceId` + `type`) to POD evidence already registered through `POST /dispatches/:id/evidences` or `POST /dispatches/:id/otp/validate`. The evidence must belong to this dispatch, be of the type its evidence policy requires (`signature`, `photo` or `otp`, never substituted) and be complete; the OTP is never sent here, only the evidence its verification created. The `evidenceId` and type are stored with the status event. A retry with the same `eventId` returns the original result and creates nothing.',
     })
     @ApiOkResponse({ type: DispatchStatusResponseDto, description: 'Status updated, or this eventId was already processed.', headers: { [SETTINGS_VERSION_HEADER]: { description: 'Current operational settings version. Reload settings when this value changes.', schema: { type: 'integer' } } } })
     @ApiBadRequests({ validation: true, id: true, example: ['eventId must be a UUID v 7'] })
@@ -39,7 +39,13 @@ export class DispatchStatusController {
         { code: 'DISPATCH_STATUS_EVENT_TIME_INVALID', message: 'occurredAt is in the future or more than 30 days old.' },
         { code: 'DISPATCH_STATUS_UNKNOWN', message: 'The requested status is not configured.' },
     )
-    @ApiResponse({ status: 422, description: 'The evidence required by the dispatch policy has not been registered.', schema: { example: { statusCode: 422, error: 'DISPATCH_EVIDENCE_REQUIRED', message: 'The delivery requires signature evidence before it can be marked delivered.' } } })
+    @ApiUnprocessableEntity(
+        { code: 'DISPATCH_EVIDENCE_REQUIRED', message: 'The delivery requires signature evidence before it can be marked delivered.' },
+        { code: 'DISPATCH_EVIDENCE_NOT_FOUND', message: 'The referenced evidence is not registered for this dispatch.' },
+        { code: 'DISPATCH_EVIDENCE_TYPE_MISMATCH', message: 'This dispatch requires signature evidence; the referenced evidence cannot replace it.' },
+        { code: 'DISPATCH_EVIDENCE_INCOMPLETE', message: 'The signature evidence is incomplete: missing receiverDocument.' },
+        { code: 'DISPATCH_EVIDENCE_POLICY_UNKNOWN', message: 'The evidence policy of this dispatch is not supported.' },
+    )
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
     async updateStatus(
         @Param('id', ParseIdPipe) dispatchId: number,

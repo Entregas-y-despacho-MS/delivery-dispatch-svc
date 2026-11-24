@@ -1,5 +1,7 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsDateString, IsIn, IsNumber, IsUUID, Matches, Max, Min } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
+import { IsDateString, IsIn, IsNumber, IsOptional, IsUUID, Matches, Max, Min, ValidateNested } from 'class-validator';
+import { DeliveryEvidenceRefDto } from './delivery-evidence-ref.dto.js';
 
 export const DRIVER_DISPATCH_STATUS = {
     IN_TRANSIT:    'in_transit',
@@ -39,4 +41,10 @@ export class UpdateDispatchStatusDto {
     @IsNumber({ allowNaN: false, allowInfinity: false })
     @Min(0)
     accuracy!: number;
+
+    @ApiPropertyOptional({ type: DeliveryEvidenceRefDto, description: 'Reference to the already registered POD evidence. **Required when `status` is `delivered`** (422 `DISPATCH_EVIDENCE_REQUIRED` otherwise); ignored for the other statuses. Never carries bytes, base64 or an OTP code.' })
+    @IsOptional()
+    @ValidateNested()
+    @Type(() => DeliveryEvidenceRefDto)
+    evidence?: DeliveryEvidenceRefDto;
 }

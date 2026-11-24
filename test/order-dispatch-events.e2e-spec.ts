@@ -26,10 +26,10 @@ describe('order/dispatch event history (e2e, ST-69.2)', () => {
     const prefix = `ST692-${tag}`;
     let sequence = 0;
 
-    const patch = (id: number, status: string, requestId?: string) => {
+    const patch = (id: number, status: string, requestId?: string, evidence?: { evidenceId: string; type: string }) => {
         const call = request(app.getHttpServer()).patch(`/${apiPrefix}/dispatches/${id}/status`).set('Authorization', `Bearer ${token}`);
         if (requestId) call.set('X-Request-Id', requestId);
-        return call.send({ status, eventId: uuidv7(), occurredAt: new Date().toISOString(), lat: -16.5, lng: -68.1, accuracy: 8.4 });
+        return call.send({ status, eventId: uuidv7(), occurredAt: new Date().toISOString(), lat: -16.5, lng: -68.1, accuracy: 8.4, ...(evidence && { evidence }) });
     };
 
     const newDispatch = async () => {
@@ -98,11 +98,13 @@ describe('order/dispatch event history (e2e, ST-69.2)', () => {
     it('rebuilds the sequence departure → delivery result from a read, with actor, statuses, link and the request correlation id', async () => {
         const { id, ref, batchId } = await newDispatch();
         expect((await patch(id, 'in_transit', `req-departure-${tag}`)).status).toBe(200);
+        const evidenceId = uuidv7();
         await dataSource.query(
-            `INSERT INTO delivery_evidences (delivery_evidence_id, dispatch_id, type, file_url) VALUES ($1, $2, 'signature', 'https://example.test/e2e')`,
-            [uuidv7(), id],
+            `INSERT INTO delivery_evidences (delivery_evidence_id, dispatch_id, type, file_url, captured_at, receiver_name, receiver_document)
+             VALUES ($1, $2, 'signature', 'https://example.test/e2e', now(), 'Maria Lopez', '1234567')`,
+            [evidenceId, id],
         );
-        expect((await patch(id, 'delivered', `req-delivered-${tag}`)).status).toBe(200);
+        expect((await patch(id, 'delivered', `req-delivered-${tag}`, { evidenceId, type: 'signature' })).status).toBe(200);
 
         const rows = await history(ref);
         expect(rows).toMatchObject([

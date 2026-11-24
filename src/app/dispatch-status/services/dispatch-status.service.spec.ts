@@ -13,8 +13,15 @@ import { RouteBatchClosingService } from '../../route-batch-closing/services/rou
 import { DispatchStatusPublicationService } from '../../../modules/dispatch/dispatch-status-publication/dispatch-status-publication.service.js';
 
 const eventId = '01933b6e-7f2a-7c3d-9a1b-2f8e6c4d5a10';
+const evidenceId = '01933b6e-7f2a-7c3d-9a1b-2f8e6c4d5a11';
+// The fixture dispatch has policy `hand_delivery_standard`, so a delivery presents a signature.
 const dto = (status: UpdateDispatchStatusDto['status']): UpdateDispatchStatusDto => ({
     status, eventId, occurredAt: new Date().toISOString(), lat: -16.5, lng: -68.1, accuracy: 8.4,
+    ...(status === DispatchStatusEnum.DELIVERED && { evidence: { evidenceId, type: 'signature' as const } }),
+});
+const storedSignature = (override: Record<string, unknown> = {}) => ({
+    id: evidenceId, dispatchId: 12, type: 'signature', fileUrl: 'https://files.test/s.png', capturedAt: new Date(),
+    receiverName: 'Maria Lopez', receiverDocument: '1234567', ...override,
 });
 
 function setup(options: {
@@ -31,7 +38,8 @@ function setup(options: {
     remaining?: { dispatch_id: number }[];
     closed?: { closed_at: Date }[];
     previous?: { dispatchId: number; eventType: string; createdAt: Date; metadata: Record<string, unknown> } | null;
-    evidence?: boolean;
+    /** What `delivery_evidences` holds for the referenced id: a complete signature by default, `null` for no row. */
+    evidence?: Record<string, unknown> | null;
 } = {}) {
     const saved = new Date();
     const state = {
@@ -106,7 +114,7 @@ function setup(options: {
         findByClientEventId: vi.fn().mockResolvedValue(options.previous ?? null),
         create: vi.fn().mockResolvedValue(undefined),
     };
-    const deliveryEvidences = { existsByDispatchAndType: vi.fn().mockResolvedValue(options.evidence ?? true) };
+    const deliveryEvidences = { findById: vi.fn().mockResolvedValue(options.evidence === undefined ? storedSignature() : options.evidence) };
     const statusPublication = { publish: vi.fn().mockResolvedValue(1) };
     const events = { emit: vi.fn() };
     const orderEvents = { recordForDispatch: vi.fn().mockResolvedValue('event-id'), record: vi.fn() };
@@ -201,10 +209,56 @@ describe('DispatchStatusService.update', () => {
         await expect(started.service.update(12, dto(DispatchStatusEnum.IN_TRANSIT), 7)).resolves.toMatchObject({ status: DispatchStatusEnum.IN_TRANSIT });
     });
 
-    it('requires policy evidence before delivered', async () => {
-        const ctx = setup({ current: DispatchStatusEnum.IN_TRANSIT, evidence: false });
-        await expect(ctx.service.update(12, dto(DispatchStatusEnum.DELIVERED), 7)).rejects.toBeInstanceOf(UnprocessableEntityException);
-        expect(ctx.deliveryEvidences.existsByDispatchAndType).toHaveBeenCalledWith(12, 'signature', { manager: ctx.manager });
+    it('requires the evidence reference before delivered, without reading any record', async () => {
+        const ctx = setup({ current: DispatchStatusEnum.IN_TRANSIT });
+        const { evidence: _omitted, ...withoutEvidence } = dto(DispatchStatusEnum.DELIVERED);
+        await expect(ctx.service.update(12, withoutEvidence, 7)).rejects.toMatchObject({ response: { error: 'DISPATCH_EVIDENCE_REQUIRED' } });
+        expect(ctx.deliveryEvidences.findById).not.toHaveBeenCalled();
+        expect(ctx.dispatchEvents.create).not.toHaveBeenCalled();
+        expect(ctx.events.emit).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ['an unknown evidence id', null, 'DISPATCH_EVIDENCE_NOT_FOUND'],
+        ['evidence of another dispatch', storedSignature({ dispatchId: 99 }), 'DISPATCH_EVIDENCE_NOT_FOUND'],
+        ['evidence of a type the policy does not allow', storedSignature({ type: 'photo' }), 'DISPATCH_EVIDENCE_TYPE_MISMATCH'],
+        ['an incomplete signature', storedSignature({ receiverDocument: null }), 'DISPATCH_EVIDENCE_INCOMPLETE'],
+    ])('rejects delivered with %s and writes nothing', async (_name, evidence, code) => {
+        const ctx = setup({ current: DispatchStatusEnum.IN_TRANSIT, evidence });
+        const rejected = ctx.service.update(12, dto(DispatchStatusEnum.DELIVERED), 7);
+        await expect(rejected).rejects.toBeInstanceOf(UnprocessableEntityException);
+        await expect(rejected).rejects.toMatchObject({ response: { error: code } });
+        expect(ctx.deliveryEvidences.findById).toHaveBeenCalledWith(evidenceId, { manager: ctx.manager });
+        expect(ctx.dispatchEvents.create).not.toHaveBeenCalled();
+        expect(ctx.statusPublication.publish).not.toHaveBeenCalled();
+        expect(ctx.events.emit).not.toHaveBeenCalled();
+    });
+
+    it('links the accepted evidence to the delivered event, inside the same transaction', async () => {
+        const ctx = setup({ current: DispatchStatusEnum.IN_TRANSIT });
+        await ctx.service.update(12, dto(DispatchStatusEnum.DELIVERED), 7);
+        expect(ctx.deliveryEvidences.findById).toHaveBeenCalledWith(evidenceId, { manager: ctx.manager });
+        expect(ctx.dispatchEvents.create).toHaveBeenCalledWith(expect.objectContaining({
+            clientEventId: eventId, metadata: expect.objectContaining({ evidenceId, evidenceType: 'signature' }),
+        }), { manager: ctx.manager });
+    });
+
+    it('does not look for evidence on other statuses, even if one is sent', async () => {
+        const ctx = setup({ current: DispatchStatusEnum.IN_TRANSIT });
+        await ctx.service.update(12, { ...dto(DispatchStatusEnum.NOT_DELIVERED), evidence: { evidenceId, type: 'signature' } }, 7);
+        expect(ctx.deliveryEvidences.findById).not.toHaveBeenCalled();
+        const [{ metadata }] = ctx.dispatchEvents.create.mock.calls[0];
+        expect(metadata).not.toHaveProperty('evidenceId');
+    });
+
+    it('answers a retry of a delivered event with the original result, without validating or storing anything again', async () => {
+        const ctx = setup({
+            current: DispatchStatusEnum.DELIVERED, evidence: null,
+            previous: { dispatchId: 12, eventType: 'status_changed', createdAt: new Date(), metadata: { previousStatus: 'in_transit' } },
+        });
+        const result = await ctx.service.update(12, dto(DispatchStatusEnum.DELIVERED), 7);
+        expect(result).toMatchObject({ dispatchId: 12, status: 'delivered', previousStatus: 'in_transit' });
+        expect(ctx.deliveryEvidences.findById).not.toHaveBeenCalled();
         expect(ctx.dispatchEvents.create).not.toHaveBeenCalled();
         expect(ctx.events.emit).not.toHaveBeenCalled();
     });

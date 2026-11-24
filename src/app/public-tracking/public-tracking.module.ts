@@ -4,6 +4,8 @@ import { PlanningModule } from '../planning/planning.module.js';
 import { PromiseFirmingModule } from '../promise-firming/promise-firming.module.js';
 import { DriverMetricsModule } from '../driver-metrics/driver-metrics.module.js';
 import { PublicTrackingController } from './controllers/public-tracking.controller.js';
+import { TrackingAccessController } from './controllers/tracking-access.controller.js';
+import { TrackingAccessService } from './services/tracking-access.service.js';
 import { CustomerRescheduleService } from './services/customer-reschedule.service.js';
 import { CustomerResponseService } from './services/customer-response.service.js';
 import { PublicTrackingService } from './services/public-tracking.service.js';
@@ -17,8 +19,12 @@ import { VerificationCodeService } from './services/verification-code.service.js
  */
 @Module({
     imports: [PlanningModule, PromiseFirmingModule, RouteBatchesModule, DriverMetricsModule],
-    controllers: [PublicTrackingController],
-    providers: [PublicTrackingService, TrackingEtaService, VerificationCodeService, CustomerResponseService, SlotOfferService, CustomerRescheduleService],
-    exports: [PublicTrackingService, VerificationCodeService, CustomerResponseService, SlotOfferService, CustomerRescheduleService],
+    // `TrackingAccessController` first: its fixed `access/...` paths must not be read as a `:token`.
+    controllers: [TrackingAccessController, PublicTrackingController],
+    providers: [
+        PublicTrackingService, TrackingEtaService, VerificationCodeService, CustomerResponseService, SlotOfferService, CustomerRescheduleService,
+        TrackingAccessService,
+    ],
+    exports: [PublicTrackingService, VerificationCodeService, CustomerResponseService, SlotOfferService, CustomerRescheduleService, TrackingAccessService],
 })
 export class PublicTrackingModule {}

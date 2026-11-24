@@ -10,7 +10,8 @@ import { DispatchNotFoundException } from '../../../modules/dispatch/dispatches/
 import { FINAL_STATUSES } from '../../../modules/dispatch/dispatches/services/dispatches.service.js';
 import { isTerminalDispatchStatus } from '../../../modules/dispatch/dispatches/utils/terminal-statuses.js';
 import { DispatchStatusEnum } from '../../../shared/enums/dispatch-status.enum.js';
-import { DispatchEvidenceRequiredException } from '../exceptions/dispatch-evidence-required.exception.js';
+import { assertDeliveryEvidence } from '../domain/delivery-evidence-policy.js';
+import type { DeliveryEvidenceRefDto } from '../dto/delivery-evidence-ref.dto.js';
 import { DispatchStatusConflictException } from '../exceptions/dispatch-status-conflict.exception.js';
 import { DispatchStatusResponseDto } from '../dto/dispatch-status-response.dto.js';
 import { UpdateDispatchStatusDto } from '../dto/update-dispatch-status.dto.js';
@@ -61,12 +62,6 @@ function orderEventAction(status: string): OrderDispatchAction | null {
 
 const MAX_FUTURE_MS = 60 * 60 * 1000;
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-
-const EVIDENCE_FOR_POLICY: Readonly<Record<string, string>> = {
-    hand_delivery_standard: 'signature',
-    contactless_delivery:   'photo',
-    high_value_control:     'otp',
-};
 
 @Injectable()
 export class DispatchStatusService {
@@ -176,11 +171,13 @@ export class DispatchStatusService {
             }
         }
 
+        // ST-304.2: the app presents the evidence it registered (a reference, never bytes or an OTP code). It is read inside
+        // this transaction, under the dispatch lock, and must belong to this dispatch, match its policy and be complete.
+        let deliveredEvidence: DeliveryEvidenceRefDto | undefined;
         if (dto.status === DispatchStatusEnum.DELIVERED) {
-            const evidenceType = EVIDENCE_FOR_POLICY[dispatch.evidence_policy];
-            if (!evidenceType || !(await this.deliveryEvidences.existsByDispatchAndType(dispatchId, evidenceType, { manager }))) {
-                throw new DispatchEvidenceRequiredException(evidenceType ?? dispatch.evidence_policy);
-            }
+            const stored = dto.evidence ? await this.deliveryEvidences.findById(dto.evidence.evidenceId, { manager }) : null;
+            assertDeliveryEvidence({ dispatchId, policy: dispatch.evidence_policy, reference: dto.evidence, stored });
+            deliveredEvidence = dto.evidence;
         }
 
         const [target]: { dispatch_status_id: number }[] = await manager.query(
@@ -223,6 +220,7 @@ export class DispatchStatusService {
                 version: dispatch.version,
                 occurredAt: dto.occurredAt,
                 ...(outboundRecordVersion !== null && { outboundRecordVersion }),
+                ...(deliveredEvidence && { evidenceId: deliveredEvidence.evidenceId, evidenceType: deliveredEvidence.type }),
                 lat: dto.lat,
                 lng: dto.lng,
                 accuracy: dto.accuracy,
