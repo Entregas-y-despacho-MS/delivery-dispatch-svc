@@ -361,6 +361,179 @@ describe('Tracking access: privacy and resistance to enumeration (e2e, ST-309.3)
             similar(realVerify, nothingVerify);
         });
     });
+
+    describe('limits', () => {
+        it('counts the limits on the normalised code: case and spaces open the session but do not buy more tries', async () => {
+            const { trackingCode } = await fixtures.create();
+            const spellings = [trackingCode, trackingCode.toLowerCase(), `  ${trackingCode} `, ` ${trackingCode.toLowerCase()}`];
+
+            // One request with one spelling is the cooldown of all of them.
+            expect((await askCode(spellings[1])).status).toBe(200);
+            await access.whenIdle();
+            for (const spelling of spellings) expect((await askCode(spelling)).status).toBe(429);
+
+            // The code mailed to the lowercase spelling opens the session with another spelling.
+            const session = await verify(spellings[2], lastAccessCode());
+            expect(session.status).toBe(200);
+            touchedSessions.add(session.body.session);
+            expect((await view(session.body.session)).body.trackingCode).toBe(trackingCode);
+
+            // 1 verification done; 9 more spread over the spellings, and the 11th is refused whatever the spelling.
+            for (let i = 0; i < 9; i++) expect((await verify(spellings[i % spellings.length], '123456')).status).toBe(400);
+            for (const spelling of spellings) expect((await verify(spelling, '123456')).status).toBe(429);
+        });
+
+        it('never resets the 10 verifications of the window by asking for a new code', async () => {
+            const { trackingCode, dispatchId } = await fixtures.create();
+
+            const first = await codeFor(trackingCode);
+            for (let i = 0; i < 5; i++) expect((await verify(trackingCode, wrongOf(first))).status).toBe(400);
+            await endCooldown(trackingCode);
+            const second = await codeFor(trackingCode);
+            for (let i = 0; i < 5; i++) expect((await verify(trackingCode, wrongOf(second))).status).toBe(400);
+
+            const right = await verify(trackingCode, second);
+            expect(right.status).toBe(429);
+            expect(right.body.error).toBe('TRACKING_ACCESS_RATE_LIMITED');
+            await access.whenIdle();
+            expect((await accessEvents(dispatchId)).map((event) => event.event_type)).not.toContain('tracking_access_verified');
+        });
+
+        it('sends one code when the same tracking code is requested many times at once', async () => {
+            const { trackingCode } = await fixtures.create();
+            const before = accessMails().length;
+
+            // Every answer of the cache arrives 50 ms after it was read, so the requests overlap: a read followed by a write
+            // would let all of them through; only an atomic "set if absent" lets one.
+            const realGet = cache.get.bind(cache);
+            const slowGet = vi.spyOn(cache, 'get').mockImplementation(async (key: string) => {
+                const value = await realGet(key);
+                await sleep(50);
+                return value;
+            });
+            let results: Res[];
+            try {
+                results = await Promise.all(Array.from({ length: 6 }, () => askCode(trackingCode)));
+                await access.whenIdle();
+            } finally {
+                slowGet.mockRestore();
+            }
+
+            expect(results.map((res) => res.status).sort()).toEqual([200, 429, 429, 429, 429, 429]);
+            expect(accessMails().length).toBe(before + 1);
+        });
+
+        it(`limits one client IP to ${IP_LIMIT} tries a minute on each route, whatever the codes and the X-Forwarded-For it sends`, async () => {
+            const real = await fixtures.create();
+            const session = await sessionFor(real.trackingCode);
+            throttler.storage.clear();
+            const forged = (i: number): string => `203.0.113.${i + 1}`;
+
+            for (let i = 0; i < IP_LIMIT; i++) expect((await askCode(unknownCode(), forged(i))).status).toBe(200);
+            const askBlocked = [await askCode(unknownCode(), forged(99)), await askCode(real.trackingCode, forged(100))];
+
+            for (let i = 0; i < IP_LIMIT; i++) expect((await verify(unknownCode(), '123456', forged(i))).status).toBe(400);
+            const verifyBlocked = [await verify(unknownCode(), '123456', forged(99)), await verify(real.trackingCode, '123456', forged(100))];
+
+            for (let i = 0; i < IP_LIMIT - 1; i++) expect((await view('f'.repeat(64)).set('X-Forwarded-For', forged(i))).status).toBe(401);
+            expect((await view(session)).status).toBe(200);
+            const viewBlocked = await view(session).set('X-Forwarded-For', forged(99));
+
+            for (const res of [...askBlocked, ...verifyBlocked, viewBlocked]) {
+                expect(res.status).toBe(429);
+                expect(res.body.error).toBe('TOO_MANY_REQUESTS');
+            }
+            expect(comparable(askBlocked[1])).toEqual(comparable(askBlocked[0]));
+            expect(comparable(verifyBlocked[1])).toEqual(comparable(verifyBlocked[0]));
+            // The blocked request for the real code reached nothing: no code was mailed for it.
+            await access.whenIdle();
+            expect(accessMails().filter((mail) => mail.metadata?.dispatchId === real.dispatchId)).toHaveLength(1);
+        });
+    });
+
+    describe('brute force', () => {
+        it('does not open a dispatch with the code mailed for another one', async () => {
+            const a = await fixtures.create();
+            const b = await fixtures.create();
+            const codeA = await codeFor(a.trackingCode);
+            const codeB = await codeFor(b.trackingCode);
+
+            const crossed = await verify(b.trackingCode, codeA);
+            expect(crossed.status).toBe(codeA === codeB ? 200 : 400);
+            if (codeA === codeB) return; // one chance in a million: the codes happen to be equal
+
+            const own = await verify(b.trackingCode, codeB);
+            expect(own.status).toBe(200);
+            touchedSessions.add(own.body.session);
+            expect((await view(own.body.session)).body.trackingCode).toBe(b.trackingCode);
+            const ownA = await verify(a.trackingCode, codeA);
+            expect(ownA.status).toBe(200);
+            touchedSessions.add(ownA.body.session);
+        });
+
+        it('audits the burn of a code once, as the customer, with no secret, however many tries follow', async () => {
+            const { trackingCode, dispatchId } = await fixtures.create();
+            const right = await codeFor(trackingCode);
+
+            for (let i = 0; i < 9; i++) expect((await verify(trackingCode, wrongOf(right))).status).toBe(400);
+            await access.whenIdle();
+
+            const locked = (await accessEvents(dispatchId)).filter((event) => event.event_type === 'tracking_access_locked');
+            expect(locked).toHaveLength(1);
+            expect(locked[0]).toMatchObject({ actor_type: 'customer', metadata: { maxAttempts: 5 } });
+            expect(JSON.stringify(locked)).not.toMatch(new RegExp(`${right}|${trackingCode}|customer@example\\.test`));
+            // The 10th verification of the window: the right code no longer exists.
+            expect((await verify(trackingCode, right)).status).toBe(400);
+        });
+
+        it('does not accept a code whose email bounced or failed, and only a new code sent afterwards opens the session', async () => {
+            for (const mode of ['bounced', 'throws'] as const) {
+                const { trackingCode, dispatchId } = await fixtures.create();
+                mailMode = mode;
+                const asked = await askCode(trackingCode);
+                expect(asked.body).toEqual({ accepted: true, expiresInSeconds: TTL });
+                await access.whenIdle();
+                const undelivered = lastAccessCode();
+                mailMode = 'sent';
+
+                const tried = await verify(trackingCode, undelivered);
+                expect(tried.status).toBe(400);
+                expect(tried.body.error).toBe('INVALID_ACCESS_CODE');
+                expect((await accessEvents(dispatchId)).map((event) => event.event_type)).toEqual([]);
+
+                await endCooldown(trackingCode);
+                const fresh = await codeFor(trackingCode);
+                const opened = await verify(trackingCode, fresh);
+                expect(opened.status).toBe(200);
+                touchedSessions.add(opened.body.session);
+            }
+        });
+
+        it('rejects an expired code with the same 400 as an unknown tracking code', async () => {
+            const { trackingCode, dispatchId } = await fixtures.create();
+            const code = await codeFor(trackingCode);
+            await atRest.expire(accessKey('code', trackingCode));
+
+            const expired = await verify(trackingCode, code);
+            const unknown = await verify(unknownCode(), code);
+            expect(comparable(expired)).toMatchObject({ status: 400, error: 'INVALID_ACCESS_CODE' });
+            expect(comparable(expired)).toEqual(comparable(unknown));
+            expect((await accessEvents(dispatchId)).map((event) => event.event_type)).toEqual(['tracking_access_code_sent']);
+        });
+
+        it('stops the previous code from working once a new one is asked for', async () => {
+            const { trackingCode } = await fixtures.create();
+            const old = await codeFor(trackingCode);
+            await endCooldown(trackingCode);
+            const fresh = await codeFor(trackingCode);
+            if (old === fresh) return; // one chance in a million
+
+            expect((await verify(trackingCode, old)).status).toBe(400);
+            const opened = await verify(trackingCode, fresh);
+            expect(opened.status).toBe(200);
+            touchedSessions.add(opened.body.session);
+        });
+    });
 });
 
 /** The in-memory adapter keeps two maps; the suite reads them to see what is stored and for how long. */
