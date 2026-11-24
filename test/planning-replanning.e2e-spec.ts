@@ -151,8 +151,10 @@ describe('Planning cohort after replanning, load and route completion (e2e, ST-3
     const completion = (query: string) => get(`/planning/route-completion?date=${shiftDate}&${query}`);
 
     let lastOccurredAt = Date.now();
-    /** Transición del repartidor por el endpoint real, con un instante siempre creciente. */
-    /** `evidence` is the reference to the POD already registered; `delivered` requires it. */
+    /**
+     * Transición del repartidor por el endpoint real, con un instante siempre creciente. `evidence` es la referencia a
+     * la evidencia POD ya registrada: `delivered` la exige.
+     */
     const driverStatus = (token: string, dispatchId: number, status: 'in_transit' | 'delivered' | 'not_delivered', evidence?: { evidenceId: string; type: 'signature' | 'photo' | 'otp' }) => {
         lastOccurredAt = Math.max(lastOccurredAt + 1000, Date.now());
         return request(app.getHttpServer()).patch(api(`/dispatches/${dispatchId}/status`)).set(as(token))
