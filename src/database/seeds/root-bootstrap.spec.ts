@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import { RootSeedPasswordError, requireRootPassword, seedRootUser } from './root-bootstrap.js';
+import { RootSeedPasswordError, describeSeedError, requireRootPassword, seedRootUser } from './root-bootstrap.js';
 import { comparePassword } from '../../shared/utils/crypto.util.js';
 
 // ST-310.2 — bootstrap of the root account. bcrypt stays real (see rules/back-testing.md).
@@ -30,12 +30,53 @@ describe('requireRootPassword', () => {
         expect(message).not.toContain(weak);
     });
 
+    it.each([
+        ['solo espacios', '        '],
+        ['espacio al final', 'Abcdef1! '],
+        ['salto de línea al final (.env de Windows)', 'Abcdef1!\r\n'],
+        ['espacio al inicio', ' Abcdef1!'],
+    ])('rechaza espacios en los extremos sin recortarlos: %s', (_label, value) => {
+        expect(() => requireRootPassword({ SEED_ROOT_PASSWORD: value })).toThrow(RootSeedPasswordError);
+    });
+
+    it.each([
+        ['sin mayúscula', 'abcdef1!'],
+        ['sin minúscula', 'ABCDEF1!'],
+        ['sin número', 'Abcdefg!'],
+        ['sin símbolo', 'Abcdefg1'],
+        ['menos de 8 caracteres', 'Abc1!'],
+    ])('exige cada requisito de la política: %s', (_label, value) => {
+        expect(() => requireRootPassword({ SEED_ROOT_PASSWORD: value })).toThrow(/password policy/);
+        expect(requireRootPassword({ SEED_ROOT_PASSWORD: 'Abcdef1!' })).toBe('Abcdef1!');
+    });
+
     it('nunca acepta la antigua contraseña fija como valor implícito', () => {
         expect(() => requireRootPassword({ NODE_ENV: 'production' })).toThrow();
     });
 
     it('devuelve el secreto cuando está presente y es válido', () => {
         expect(requireRootPassword({ NODE_ENV: 'production', SEED_ROOT_PASSWORD: SECRET })).toBe(SECRET);
+    });
+});
+
+describe('describeSeedError', () => {
+    it('no vuelca parámetros ni query de un error de base de datos (el hash no llega al log)', () => {
+        const hash = '$2b$10$abcdefghijklmnopqrstuv';
+        const dbError = Object.assign(new Error('duplicate key value violates unique constraint "uq_users_username"'), {
+            name: 'QueryFailedError',
+            query: 'INSERT INTO users (password_hash) VALUES ($1)',
+            parameters: [hash],
+        });
+
+        const text = describeSeedError(dbError);
+
+        expect(text).toContain('duplicate key value');
+        expect(text).not.toContain(hash);
+        expect(text).not.toContain('INSERT INTO');
+    });
+
+    it('no revela el contenido de algo que no es un Error', () => {
+        expect(describeSeedError({ password: SECRET })).toBe('Unknown error');
     });
 });
 

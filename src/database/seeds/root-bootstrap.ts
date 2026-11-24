@@ -53,6 +53,13 @@ export function requireRootPassword(env: RootSeedEnv): string {
             'Set it to a strong secret and run the seed again (there is no default password).',
         );
     }
+    // A value copied from a .env written on Windows often ends in a space or CR/LF, which isStrongPassword would
+    // count as a "symbol"; the account would then need that invisible character to log in. Reject it, never trim.
+    if (password !== password.trim()) {
+        throw new RootSeedPasswordError(
+            'SEED_ROOT_PASSWORD must not start or end with whitespace (check for a trailing space or line break).',
+        );
+    }
     if (!isStrongPassword(password, STRONG_PASSWORD_OPTIONS)) {
         throw new RootSeedPasswordError(
             'SEED_ROOT_PASSWORD does not meet the password policy: at least 8 characters with an uppercase letter, ' +
@@ -60,6 +67,16 @@ export function requireRootPassword(env: RootSeedEnv): string {
         );
     }
     return password;
+}
+
+/**
+ * Text safe to print when the seed fails. Never the error object itself: a TypeORM `QueryFailedError` carries
+ * `query` and `parameters`, and a failed INSERT of the root would put its `password_hash` in the container logs
+ * (the Dockerfile runs the seed on every boot).
+ */
+export function describeSeedError(error: unknown): string {
+    if (error instanceof Error) return `${error.name}: ${error.message}`;
+    return 'Unknown error';
 }
 
 /**

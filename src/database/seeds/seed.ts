@@ -6,7 +6,7 @@ import { User } from '../../modules/auth/users/entities/user.entity.js';
 import { Role } from '../../modules/auth/roles/entities/role.entity.js';
 import { hashPassword } from '../../shared/utils/crypto.util.js';
 import { EnvironmentEnum } from '../../shared/enums/environment.enum.js';
-import { seedRootUser } from './root-bootstrap.js';
+import { describeSeedError, seedRootUser } from './root-bootstrap.js';
 
 const GREEN  = '\x1b[32m';
 const YELLOW = '\x1b[33m';
@@ -130,7 +130,7 @@ async function seed(): Promise<void> {
 
         console.log(`\n${GREEN}${BOLD}✔  Seed completed.${RESET}\n`);
     } catch (error) {
-        console.error(`\n${RED}${BOLD}✘  Seed failed:${RESET}`, error);
+        console.error(`\n${RED}${BOLD}✘  Seed failed:${RESET} ${describeSeedError(error)}`);
         process.exit(1);
     } finally {
         await AppDataSource.destroy();
