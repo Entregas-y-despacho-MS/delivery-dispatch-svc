@@ -43,10 +43,14 @@ describe('order/dispatch history: immutability, order and atomicity (e2e, ST-69.
     const batchIds: number[] = [];
     const username = `e2e_st693_driver_${tag}`.toLowerCase();
 
+    // A delivery presents the evidence `withEvidence` registered for that dispatch (ST-304.2).
+    const evidenceOf = new Map<number, { evidenceId: string; type: 'signature' }>();
+
     const patch = (id: number, status: string, options: { requestId?: string; occurredAt?: Date } = {}) => {
         const call = request(app.getHttpServer()).patch(`/${api}/dispatches/${id}/status`).set('Authorization', `Bearer ${token}`);
         if (options.requestId) call.set('X-Request-Id', options.requestId);
-        return call.send({ status, eventId: uuidv7(), occurredAt: (options.occurredAt ?? new Date()).toISOString(), lat: -16.5, lng: -68.1, accuracy: 8.4 });
+        const evidence = status === 'delivered' ? evidenceOf.get(id) : undefined;
+        return call.send({ status, eventId: uuidv7(), occurredAt: (options.occurredAt ?? new Date()).toISOString(), lat: -16.5, lng: -68.1, accuracy: 8.4, ...(evidence && { evidence }) });
     };
 
     /** A route batch already started, in execution, with `count` dispatches out for delivery. */
@@ -75,10 +79,15 @@ describe('order/dispatch history: immutability, order and atomicity (e2e, ST-69.
         return { batchId: batchId as number, dispatches };
     };
 
-    const withEvidence = async (dispatchId: number) => db.query(
-        `INSERT INTO delivery_evidences (delivery_evidence_id, dispatch_id, type, file_url) VALUES ($1, $2, 'signature', 'https://example.test/e2e')`,
-        [uuidv7(), dispatchId],
-    );
+    const withEvidence = async (dispatchId: number) => {
+        const evidenceId = uuidv7();
+        await db.query(
+            `INSERT INTO delivery_evidences (delivery_evidence_id, dispatch_id, type, file_url, captured_at, receiver_name, receiver_document)
+             VALUES ($1, $2, 'signature', 'https://example.test/e2e', now(), 'Maria Lopez', '1234567')`,
+            [evidenceId, dispatchId],
+        );
+        evidenceOf.set(dispatchId, { evidenceId, type: 'signature' });
+    };
 
     const historyOf = async (where: string, params: unknown[]): Promise<HistoryRow[]> => db.query(
         `SELECT order_dispatch_event_id, action, previous_status, new_status, dispatch_id, route_batch_id, source_order_ref, correlation_id, occurred_at

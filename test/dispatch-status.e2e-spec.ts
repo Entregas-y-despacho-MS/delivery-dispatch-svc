@@ -104,9 +104,11 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
     const auth = (driver: 'driver1' | 'driver2') => ({ Authorization: `Bearer ${tokens[driver]}` });
     const patch = (id: number, body: object, driver: 'driver1' | 'driver2' = 'driver1') =>
         request(app.getHttpServer()).patch(`/${apiPrefix}/dispatches/${id}/status`).set(auth(driver)).send(body);
-    const body = (status: string, eventId = uuidv7()) => ({
+    const body = (status: string, eventId = uuidv7(), evidence?: { evidenceId: string; type: string }) => ({
         status, eventId, occurredAt: new Date().toISOString(), lat: -16.5, lng: -68.1, accuracy: 8.4,
+        ...(evidence && { evidence }),
     });
+    const evidenceRows = async (id: number) => dataSource.query(`SELECT delivery_evidence_id FROM delivery_evidences WHERE dispatch_id = $1`, [id]);
 
     const newBatch = async (driver: 'driver1' | 'driver2') => {
         const [{ route_batch_id: id }] = await dataSource.query(
@@ -140,12 +142,24 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
         return id as number;
     };
 
-    const addEvidence = async (dispatchId: number, type: 'signature' | 'photo' | 'otp') => {
+    /** Inserts a complete evidence row (as the evidence endpoints leave it) and returns the reference the app sends. */
+    const addEvidence = async (
+        dispatchId: number,
+        type: 'signature' | 'photo' | 'otp',
+        incomplete: { fileUrl?: null; receiverDocument?: null } = {},
+    ) => {
+        const evidenceId = uuidv7();
         await dataSource.query(
-            `INSERT INTO delivery_evidences (delivery_evidence_id, dispatch_id, type, file_url, otp_code)
-             VALUES ($1, $2, $3, $4, $5)`,
-            [uuidv7(), dispatchId, type, type === 'otp' ? null : 'https://example.test/e2e-evidence', null],
+            `INSERT INTO delivery_evidences (delivery_evidence_id, dispatch_id, type, file_url, otp_code, captured_at, receiver_name, receiver_document)
+             VALUES ($1, $2, $3, $4, NULL, now(), $5, $6)`,
+            [
+                evidenceId, dispatchId, type,
+                type === 'otp' || 'fileUrl' in incomplete ? null : 'https://example.test/e2e-evidence',
+                type === 'signature' ? 'Maria Lopez' : null,
+                type === 'signature' && !('receiverDocument' in incomplete) ? '1234567' : null,
+            ],
         );
+        return { evidenceId, type };
     };
 
     const dispatchRow = async (id: number) => (await dataSource.query(
@@ -288,16 +302,115 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
         ['high_value_control', 'otp'],
     ] as const)('requiere la evidencia %s → %s para confirmar entrega', async (policy, evidenceType) => {
         const id = await newDispatch(await newBatch('driver1'), 'in_transit', policy);
-        await addEvidence(id, evidenceType);
-        const response = await patch(id, body('delivered'));
+        const evidence = await addEvidence(id, evidenceType);
+        const response = await patch(id, body('delivered', uuidv7(), evidence));
         expect(response.status).toBe(200);
         expect(response.body.status).toBe('delivered');
+        expect(await eventsFor(id)).toMatchObject([{ metadata: { evidenceId: evidence.evidenceId, evidenceType } }]);
+    });
+
+    it('rechaza delivered con 422 si la evidencia registrada no se referencia', async () => {
+        const id = await newDispatch(await newBatch('driver1'), 'in_transit', 'contactless_delivery');
+        await addEvidence(id, 'photo');
+        const response = await patch(id, body('delivered'));
+        expect(response.status).toBe(422);
+        expect(response.body.error).toBe('DISPATCH_EVIDENCE_REQUIRED');
+        expect(await dispatchRow(id)).toMatchObject({ status: 'in_transit' });
+        expect(await eventsFor(id)).toHaveLength(0);
+    });
+
+    it('rechaza delivered con una referencia a evidencia inexistente', async () => {
+        const id = await newDispatch(await newBatch('driver1'), 'in_transit', 'contactless_delivery');
+        const response = await patch(id, body('delivered', uuidv7(), { evidenceId: uuidv7(), type: 'photo' }));
+        expect(response.status).toBe(422);
+        expect(response.body.error).toBe('DISPATCH_EVIDENCE_NOT_FOUND');
+        expect(await dispatchRow(id)).toMatchObject({ status: 'in_transit' });
+    });
+
+    it('rechaza delivered con evidencia de otro despacho aunque sea del tipo correcto, igual que un id desconocido', async () => {
+        const batch = await newBatch('driver1');
+        const mine = await newDispatch(batch, 'in_transit', 'contactless_delivery');
+        const other = await newDispatch(batch, 'out_for_delivery', 'contactless_delivery');
+        const foreign = await addEvidence(other, 'photo');
+        const response = await patch(mine, body('delivered', uuidv7(), foreign));
+        expect(response.status).toBe(422);
+        expect(response.body.error).toBe('DISPATCH_EVIDENCE_NOT_FOUND');
+        expect(await dispatchRow(mine)).toMatchObject({ status: 'in_transit' });
+        expect(await eventsFor(mine)).toHaveLength(0);
+    });
+
+    it('rechaza delivered si el tipo de la evidencia no es el de la política', async () => {
+        const id = await newDispatch(await newBatch('driver1'), 'in_transit', 'contactless_delivery');
+        const signature = await addEvidence(id, 'signature');
+        const response = await patch(id, body('delivered', uuidv7(), signature));
+        expect(response.status).toBe(422);
+        expect(response.body.error).toBe('DISPATCH_EVIDENCE_TYPE_MISMATCH');
+    });
+
+    it('rechaza delivered si la referencia declara un tipo distinto al registrado', async () => {
+        const id = await newDispatch(await newBatch('driver1'), 'in_transit', 'contactless_delivery');
+        const photo = await addEvidence(id, 'photo');
+        const response = await patch(id, body('delivered', uuidv7(), { evidenceId: photo.evidenceId, type: 'signature' }));
+        expect(response.status).toBe(422);
+        expect(response.body.error).toBe('DISPATCH_EVIDENCE_TYPE_MISMATCH');
+    });
+
+    it.each([
+        ['una firma sin archivo', 'signature', 'hand_delivery_standard', { fileUrl: null }],
+        ['una firma sin documento del receptor', 'signature', 'hand_delivery_standard', { receiverDocument: null }],
+        ['una foto sin archivo', 'photo', 'contactless_delivery', { fileUrl: null }],
+    ] as const)('rechaza delivered con %s', async (_name, type, policy, incomplete) => {
+        const id = await newDispatch(await newBatch('driver1'), 'in_transit', policy);
+        const evidence = await addEvidence(id, type, incomplete);
+        const response = await patch(id, body('delivered', uuidv7(), evidence));
+        expect(response.status).toBe(422);
+        expect(response.body.error).toBe('DISPATCH_EVIDENCE_INCOMPLETE');
+        expect(await dispatchRow(id)).toMatchObject({ status: 'in_transit' });
+    });
+
+    it('rechaza 400 un código OTP en el cuerpo y una evidencia con bytes o campos ajenos', async () => {
+        const id = await newDispatch(await newBatch('driver1'), 'in_transit', 'high_value_control');
+        const otp = await addEvidence(id, 'otp');
+        const withCode = await patch(id, { ...body('delivered', uuidv7(), otp), otpCode: '123456' });
+        expect(withCode.status).toBe(400);
+        const nestedCode = await patch(id, { ...body('delivered'), evidence: { ...otp, otpCode: '123456' } });
+        expect(nestedCode.status).toBe(400);
+        const base64 = await patch(id, { ...body('delivered'), evidence: { ...otp, base64: 'AAAA' } });
+        expect(base64.status).toBe(400);
+        const badId = await patch(id, body('delivered', uuidv7(), { evidenceId: 'no-es-uuid', type: 'otp' }));
+        expect(badId.status).toBe(400);
+        expect(await dispatchRow(id)).toMatchObject({ status: 'in_transit' });
+    });
+
+    it('un reintento del mismo evento no crea otro registro ni otro evento', async () => {
+        const id = await newDispatch(await newBatch('driver1'), 'in_transit', 'contactless_delivery');
+        const evidence = await addEvidence(id, 'photo');
+        const event = body('delivered', uuidv7(), evidence);
+        const first = await patch(id, event);
+        const retry = await patch(id, event);
+        expect(first.status).toBe(200);
+        expect(retry.status).toBe(200);
+        expect(retry.body).toMatchObject({ status: 'delivered', previousStatus: 'in_transit' });
+        expect(await eventsFor(id)).toHaveLength(1);
+        expect(await evidenceRows(id)).toHaveLength(1);
+        expect(await outboundFor(id)).toHaveLength(1);
+    });
+
+    it('un eventId usado con delivered no se reutiliza para otra evidencia de otro despacho', async () => {
+        const batch = await newBatch('driver1');
+        const id = await newDispatch(batch, 'in_transit', 'contactless_delivery');
+        const other = await newDispatch(batch, 'out_for_delivery', 'contactless_delivery');
+        const evidence = await addEvidence(id, 'photo');
+        const event = body('delivered', uuidv7(), evidence);
+        expect((await patch(id, event)).status).toBe(200);
+        const reused = await patch(other, event);
+        expect(reused.status).toBe(409);
+        expect(reused.body.error).toBe('EVENT_ID_ALREADY_USED');
     });
 
     it('encola delivered una sola vez con payload seguro y recordVersion auditable', async () => {
         const id = await newDispatch(await newBatch('driver1'), 'in_transit');
-        await addEvidence(id, 'signature');
-        const event = body('delivered');
+        const event = body('delivered', uuidv7(), await addEvidence(id, 'signature'));
 
         expect((await patch(id, event)).status).toBe(200);
         expect((await patch(id, event)).status).toBe(200);
@@ -427,20 +540,25 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
 
     it('no acepta foto ni firma como sustituto del OTP de high_value_control', async () => {
         const id = await newDispatch(await newBatch('driver1'), 'in_transit', 'high_value_control');
-        await addEvidence(id, 'signature');
-        await addEvidence(id, 'photo');
-        const response = await patch(id, body('delivered'));
-        expect(response.status).toBe(422);
-        expect(response.body.error).toBe('DISPATCH_EVIDENCE_REQUIRED');
+        const signature = await addEvidence(id, 'signature');
+        const photo = await addEvidence(id, 'photo');
+        for (const substitute of [signature, photo]) {
+            const response = await patch(id, body('delivered', uuidv7(), substitute));
+            expect(response.status).toBe(422);
+            expect(response.body.error).toBe('DISPATCH_EVIDENCE_TYPE_MISMATCH');
+        }
+        const without = await patch(id, body('delivered'));
+        expect(without.status).toBe(422);
+        expect(without.body.error).toBe('DISPATCH_EVIDENCE_REQUIRED');
         expect(await dispatchRow(id)).toMatchObject({ status: 'in_transit' });
     });
 
     it('cierra el lote y registra closed como system al entregar la última parada', async () => {
         const batch = await newBatch('driver1');
         const id = await newDispatch(batch, 'in_transit');
-        await addEvidence(id, 'signature');
+        const evidence = await addEvidence(id, 'signature');
 
-        const response = await patch(id, body('delivered'));
+        const response = await patch(id, body('delivered', uuidv7(), evidence));
 
         expect(response.status).toBe(200);
         expect(await batchRow(batch)).toMatchObject({ status: 'closed' });
@@ -456,9 +574,9 @@ describe('PATCH /dispatches/:id/status (e2e, ST-30.3)', () => {
         const batch = await newBatch('driver1');
         const inactive = await newDispatch(batch, inactiveStatus);
         const lastOpen = await newDispatch(batch, 'in_transit');
-        await addEvidence(lastOpen, 'signature');
+        const evidence = await addEvidence(lastOpen, 'signature');
 
-        const response = await patch(lastOpen, body('delivered'));
+        const response = await patch(lastOpen, body('delivered', uuidv7(), evidence));
 
         expect(response.status).toBe(200);
         expect(await dispatchRow(inactive)).toMatchObject({ status: inactiveStatus });

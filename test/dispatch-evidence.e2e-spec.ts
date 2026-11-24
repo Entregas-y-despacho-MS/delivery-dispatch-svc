@@ -184,7 +184,7 @@ describe('delivery evidence: signature, photo and OTP over HTTP + PostgreSQL (ST
         const evidence = await upload(id, fields('signature'), signature);
         expect(evidence.status).toBe(201);
 
-        const status = { status: 'delivered', eventId: uuidv7(), occurredAt: new Date().toISOString(), lat: -17.78, lng: -63.18, accuracy: 5 };
+        const status = { status: 'delivered', eventId: uuidv7(), occurredAt: new Date().toISOString(), lat: -17.78, lng: -63.18, accuracy: 5, evidence: { evidenceId: evidence.body.id as string, type: 'signature' } };
         const sendStatus = () => request(app.getHttpServer()).patch(`/${prefix}/dispatches/${id}/status`).set(auth()).send(status);
         const first = await sendStatus();
         expect(first.status).toBe(200);
