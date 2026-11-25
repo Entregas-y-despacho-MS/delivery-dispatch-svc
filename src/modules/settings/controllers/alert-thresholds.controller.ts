@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Put } from '@nestjs/common';
+import { Body, Controller, Get, Put, Req } from '@nestjs/common';
+import type { Request } from 'express';
 import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AlertThresholdsService } from '../services/alert-thresholds.service.js';
 import { AlertThresholdsDto } from '../dto/alert-thresholds.dto.js';
@@ -7,6 +8,8 @@ import { Roles, SupervisorOnly } from '../../../app/auth/decorators/index.js';
 import { RoleEnum } from '../../../shared/enums/index.js';
 import { ApiBadRequests, ApiNotFound, ApiUnauthorized } from '../../../shared/utils/swagger/index.js';
 import { AuditAction } from '../../audit/admin-audit-events/decorators/audit-action.decorator.js';
+import { annotateAudit } from '../../audit/admin-audit-events/domain/audit-annotation.js';
+import { ALERT_THRESHOLD_KEYS } from '../settings.constants.js';
 
 /**
  * Error dictionary: INVALID_SETTING_VALUE 400, SETTING_NOT_FOUND 404
@@ -48,7 +51,13 @@ export class AlertThresholdsController {
     @ApiOkResponse({ type: AlertThresholdsDto })
     @ApiNotFound({ code: 'SETTING_NOT_FOUND', message: 'Setting not found.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
-    async update(@Body() dto: UpdateAlertThresholdsDto): Promise<AlertThresholdsDto> {
-        return await this.thresholds.update(dto);
+    async update(@Body() dto: UpdateAlertThresholdsDto, @Req() request: Request): Promise<AlertThresholdsDto> {
+        const { thresholds, version, previous } = await this.thresholds.updateWithChange(dto);
+        // ES-68: besides the new values (bodyFields), the event says which version the change produced and what it replaced.
+        annotateAudit(request, {
+            settingsVersion: version,
+            ...Object.fromEntries(Object.entries(ALERT_THRESHOLD_KEYS).map(([field, key]) => [`previous${field[0]!.toUpperCase()}${field.slice(1)}`, /^\d+$/.test(previous[key] ?? '') ? Number(previous[key]) : previous[key]])),
+        });
+        return thresholds;
     }
 }

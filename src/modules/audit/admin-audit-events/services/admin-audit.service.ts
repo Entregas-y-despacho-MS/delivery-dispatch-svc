@@ -9,7 +9,7 @@ import { buildAuditEvent, resultForStatus, type AdminAuditEvent } from '../domai
 import { AdminAuditEventEntity } from '../entities/admin-audit-event.entity.js';
 
 /** Request after `correlationIdMiddleware` and the JWT strategy. */
-export type AuditedRequest = Request & { correlationId?: string; user?: AuthUser };
+export type AuditedRequest = Request & { correlationId?: string; user?: AuthUser; auditMetadata?: Record<string, unknown> };
 
 /** The declared fields present in a body or query; anything that is not a plain object yields nothing. */
 function pickFields(container: unknown, fields: readonly string[]): Record<string, unknown> {
@@ -60,6 +60,7 @@ export class AdminAuditService {
                 metadata: {
                     ...pickFields(request.query, declared.queryFields ?? []),
                     ...pickFields(request.body, declared.bodyFields ?? []),
+                    ...request.auditMetadata,
                     ...declared.metadata,
                 },
             });

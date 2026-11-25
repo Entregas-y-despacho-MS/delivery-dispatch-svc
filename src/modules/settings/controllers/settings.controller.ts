@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, Put } from '@nestjs/common';
+import { Body, Controller, Get, Param, Put, Req } from '@nestjs/common';
+import type { Request } from 'express';
 import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import { SettingsService } from '../services/settings.service.js';
 import { SettingDto } from '../dto/setting.dto.js';
@@ -12,6 +13,7 @@ import { CurrentUser } from '../../../shared/decorators/current-user.decorator.j
 import { RoleEnum } from '../../../shared/enums/index.js';
 import { ApiForbidden, ApiNotFound, ApiUnauthorized, ApiBadRequests } from '../../../shared/utils/swagger/index.js';
 import { AuditAction } from '../../audit/admin-audit-events/decorators/audit-action.decorator.js';
+import { annotateAudit } from '../../audit/admin-audit-events/domain/audit-annotation.js';
 
 @ApiTags('Settings')
 @ApiBearerAuth('access-token')
@@ -47,13 +49,16 @@ export class SettingsController {
         { code: 'INSUFFICIENT_PERMISSIONS', message: 'You do not have permission to perform this action.' },
         { code: 'SETTING_MANAGED_SEPARATELY', message: 'This setting is changed only through PUT /settings/alert-thresholds.' },
     )
-    async update(@Param('key') key: string, @Body() dto: UpdateSettingDto, @CurrentUser('role') role: RoleEnum): Promise<SettingDto> {
+    async update(@Param('key') key: string, @Body() dto: UpdateSettingDto, @CurrentUser('role') role: RoleEnum, @Req() request: Request): Promise<SettingDto> {
         // The key decides the role (RF-A10/A20/A25): the guard only knows the endpoint, not the setting.
         if (!canWriteSetting(key, role)) throw new InsufficientPermissionsException();
         // The alert thresholds belong to the supervisor and are saved together: only PUT /settings/alert-thresholds.
         if ((Object.values(ALERT_THRESHOLD_KEYS) as string[]).includes(key)) {
             throw new SettingManagedSeparatelyException('PUT /settings/alert-thresholds');
         }
-        return await this.settingsService.update(SettingDto, key, dto.value);
+        const { settings: [updated], version, previous } = await this.settingsService.applyUpdates(SettingDto, { [key]: dto.value });
+        // ES-68: the event also says which version the change produced and the value it replaced.
+        annotateAudit(request, { settingsVersion: version, previousValue: previous[key] });
+        return updated;
     }
 }

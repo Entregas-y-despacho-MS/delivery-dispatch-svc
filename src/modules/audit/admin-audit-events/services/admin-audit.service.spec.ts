@@ -130,6 +130,33 @@ describe('AdminAuditService.recordOutcome', () => {
         expect((insert.mock.calls[0] as any[])[0].metadata).toEqual({ step: 'enable', roleId: 3 });
     });
 
+    it('adds what the handler annotated (settings version, previous value) next to the body fields', async () => {
+        const { service, insert } = build();
+        const declared = { action: 'setting.updated', entityIdParam: 'key', bodyFields: ['value'] };
+        const req = request({ params: { key: 'password_require_symbol' }, body: { value: 'false' }, auditMetadata: { settingsVersion: 12, previousValue: 'true' } });
+        await service.recordOutcome(context(req, declared), 200);
+        expect((insert.mock.calls[0] as any[])[0]).toMatchObject({
+            entityId: 'password_require_symbol', actorUserId: 4, actorRole: 'ADMIN', correlationId: 'req-123456',
+            metadata: { value: 'false', settingsVersion: 12, previousValue: 'true' },
+        });
+    });
+
+    it('filters what the handler annotated like any other metadata: no secrets, and the declared values win', async () => {
+        const { service, insert } = build();
+        const declared = { action: 'auth.two_factor_changed', metadata: { step: 'enable' } };
+        const req = request({ auditMetadata: { step: 'disable', password: 'Secret123!', token: 'eyJ', settingsVersion: 3 } });
+        await service.recordOutcome(context(req, declared), 200);
+        const row = (insert.mock.calls[0] as any[])[0];
+        expect(row.metadata).toEqual({ step: 'enable', settingsVersion: 3 });
+        expect(JSON.stringify(row)).not.toContain('Secret123!');
+    });
+
+    it('records no annotation when the handler failed before annotating (denied or rejected request)', async () => {
+        const { service, insert } = build();
+        await service.recordOutcome(context(request({ body: { value: 'x' } }), { action: 'setting.updated', bodyFields: ['value'] }), 403);
+        expect((insert.mock.calls[0] as any[])[0]).toMatchObject({ result: 'denied', metadata: { value: 'x' } });
+    });
+
     it('ignores the route param when the entity id comes from the response or the actor', async () => {
         const { service, insert } = build();
         await service.recordOutcome(context(request({ params: { id: '999' } }), { action: 'user.created', entityIdFrom: 'response' }), 201, { id: 5 });

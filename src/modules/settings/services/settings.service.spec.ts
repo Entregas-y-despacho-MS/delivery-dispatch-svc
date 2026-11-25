@@ -99,6 +99,27 @@ describe('SettingsService', () => {
         await expect(service.getVersion()).resolves.toBe(1);
     });
 
+    describe('applyUpdates (audit data of a change)', () => {
+        it('returns the new values, the version the change produced and the values it replaced', async () => {
+            const { service } = build();
+
+            const change = await service.applyUpdates(SettingDto, { password_require_symbol: 'false', password_min_length: '12' });
+
+            expect(change.settings.map(({ key, value }) => [key, value])).toEqual([['password_require_symbol', 'false'], ['password_min_length', '12']]);
+            expect(change.version).toBe(1);
+            expect(change.previous).toEqual({ password_require_symbol: 'true', password_min_length: '8' });
+            expect((await service.applyUpdates(SettingDto, { password_require_symbol: 'true' })).previous).toEqual({ password_require_symbol: 'false' });
+        });
+
+        it('returns nothing to audit, and writes nothing, when the value is rejected', async () => {
+            const { service, repository } = build();
+
+            await expect(service.applyUpdates(SettingDto, { password_require_symbol: 'maybe' })).rejects.toThrow(InvalidSettingValueException);
+
+            expect(repository.update).not.toHaveBeenCalled();
+        });
+    });
+
     describe('password complexity options (ST-310.1)', () => {
         it('saves "false", bumps the version once and the next read sees it', async () => {
             const { service, repository } = build();

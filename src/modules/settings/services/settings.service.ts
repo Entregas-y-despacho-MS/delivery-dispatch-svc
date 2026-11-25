@@ -13,6 +13,13 @@ type SettingsSnapshot = {
     settings: Setting[];
 };
 
+/** The outcome of a settings change: the new values in the order asked, the version it produced and the old values. */
+export type SettingsChange<T> = {
+    settings: T[];
+    version:  number;
+    previous: Record<string, string>;
+};
+
 const CACHE_REFRESH_MS = 60_000;
 
 @Injectable()
@@ -99,8 +106,16 @@ export class SettingsService implements OnModuleInit, OnModuleDestroy {
      * of `entries`.
      */
     async updateMany<T extends object>(returnDto: new () => T, entries: Record<string, string>): Promise<T[]> {
+        return (await this.applyUpdates(returnDto, entries)).settings;
+    }
+
+    /**
+     * Same as `updateMany`, and also reports what an audit event needs (ST-310.1, ES-68): the settings version the
+     * change produced and the value each key had before it. Settings are business rules, not secrets.
+     */
+    async applyUpdates<T extends object>(returnDto: new () => T, entries: Record<string, string>): Promise<SettingsChange<T>> {
         const keys = Object.keys(entries);
-        if (keys.length === 0) return [];
+        if (keys.length === 0) return { settings: [], version: await this.getVersion(), previous: {} };
         if (keys.includes(SETTINGS_VERSION_KEY)) {
             throw new InvalidSettingValueException(`${SETTINGS_VERSION_KEY} is managed by the service and cannot be changed.`);
         }
@@ -122,6 +137,7 @@ export class SettingsService implements OnModuleInit, OnModuleDestroy {
             const values = Object.fromEntries(settings
                 .filter((setting) => setting.key !== SETTINGS_VERSION_KEY)
                 .map((setting) => [setting.key, setting.value]));
+            const previous = Object.fromEntries(keys.map((key) => [key, values[key]!]));
             Object.assign(values, entries);
             const configurationProblem = validateSettingConfiguration(values);
             if (configurationProblem) throw new InvalidSettingValueException(configurationProblem);
@@ -143,12 +159,17 @@ export class SettingsService implements OnModuleInit, OnModuleDestroy {
 
             return {
                 version,
+                previous,
                 settings: await repository.find({ order: { key: 'ASC' } }),
             };
         });
 
         await this.cacheSnapshot(result.settings, result.version);
-        return keys.map((key) => this.toDto(returnDto, result.settings.find((setting) => setting.key === key)!));
+        return {
+            settings: keys.map((key) => this.toDto(returnDto, result.settings.find((setting) => setting.key === key)!)),
+            version:  result.version,
+            previous: result.previous,
+        };
     }
 
     async findByKeys<T extends object>(dto: new () => T, keys: string[]): Promise<T[]> {
