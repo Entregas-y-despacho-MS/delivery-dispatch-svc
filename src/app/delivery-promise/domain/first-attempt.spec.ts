@@ -150,3 +150,24 @@ describe('buildFirstAttempt', () => {
         expect(unavailableFirstAttempt()).toMatchObject({ available: false, reason: 'attempt_not_normalized', percentage: null, denominator: 0, coverage: { from: null, complete: false } });
     });
 });
+
+describe('normalizeAttempts — incidentKeys (ST-300.1)', () => {
+    const keys = (events: AttemptEvent[]) => normalizeAttempts(events).attempts.map((a) => a.incidentKeys);
+
+    it('lists the incident that is the result of the attempt', () => {
+        expect(keys([event('in_transit', 0), event('incident', 5, { countsAsAttempt: true, clientEventId: 'i-1' })])).toEqual([['i-1']]);
+    });
+
+    it('lists the incident that caused a not_delivered under that attempt, without opening another', () => {
+        expect(keys([event('in_transit', 0), event('not_delivered', 10), event('incident', 11, { countsAsAttempt: true, clientEventId: 'i-1' })])).toEqual([['i-1']]);
+    });
+
+    it('lists a second incident of the same attempt once, and a repeated one once', () => {
+        const first = event('incident', 5, { countsAsAttempt: true, clientEventId: 'i-1' });
+        expect(keys([event('in_transit', 0), first, { ...first, eventId: nextId++ }, event('incident', 6, { countsAsAttempt: true, clientEventId: 'i-2' })])).toEqual([['i-1', 'i-2']]);
+    });
+
+    it('does not list an incident that does not consume an attempt, nor attach one to a delivered attempt', () => {
+        expect(keys([event('in_transit', 0), event('incident', 5), event('delivered', 10), event('incident', 11, { countsAsAttempt: true })])).toEqual([[]]);
+    });
+});

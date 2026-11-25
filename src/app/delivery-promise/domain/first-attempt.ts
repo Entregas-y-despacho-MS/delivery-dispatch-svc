@@ -45,6 +45,12 @@ export interface NormalizedAttempt {
     order: number;
     outcome: AttemptOutcome;
     occurredAt: Date;
+    /**
+     * The incidents that consume an attempt and belong to this one (ST-300.1): the one that is its result, or the ones that came
+     * after it in the same trip (an incident after a `not_delivered`, a second incident). Same key as `attemptId`: the event's
+     * `client_event_id` (the incident id) or `event-<id>`. A repeated event is listed once.
+     */
+    incidentKeys: string[];
 }
 
 export interface DispatchAttempts {
@@ -73,11 +79,20 @@ export function normalizeAttempts(events: AttemptEvent[]): DispatchAttempts {
         }
         const outcome = outcomeOf(event);
         if (!outcome) continue;
+        const key = event.clientEventId ?? `event-${event.eventId}`;
         if (!tripStarted) {
             if (attempts.length === 0) reconstructable = false;
+            else if (outcome === AttemptOutcome.INCIDENT) {
+                // An incident of the same trip as the last attempt (the one that caused a `not_delivered`, or a second one): it is that attempt, not a new one.
+                const last = attempts[attempts.length - 1];
+                if (last.outcome !== AttemptOutcome.DELIVERED && !last.incidentKeys.includes(key)) last.incidentKeys.push(key);
+            }
             continue;
         }
-        attempts.push({ attemptId: event.clientEventId ?? `event-${event.eventId}`, order: attempts.length + 1, outcome, occurredAt: event.occurredAt });
+        attempts.push({
+            attemptId: key, order: attempts.length + 1, outcome, occurredAt: event.occurredAt,
+            incidentKeys: outcome === AttemptOutcome.INCIDENT ? [key] : [],
+        });
         tripStarted = false;
     }
     return reconstructable ? { attempts, reconstructable } : { attempts: [], reconstructable };
@@ -98,7 +113,7 @@ export interface CommittedWindow {
 }
 
 /** A dispatch in one of these statuses has had its result: with no attempt rebuilt, it is history we cannot read, not «not yet». */
-const RESULT_STATUSES: ReadonlySet<string> = new Set([AttemptOutcome.DELIVERED, AttemptOutcome.NOT_DELIVERED]);
+export const RESULT_STATUSES: ReadonlySet<string> = new Set([AttemptOutcome.DELIVERED, AttemptOutcome.NOT_DELIVERED]);
 
 /** The first attempt of a dispatch against the window in force (both ends included, as the OTD measures it). `status` is its current status. */
 export function classifyFirstAttempt(history: DispatchAttempts, window: CommittedWindow, status: string): FirstAttemptResult {
