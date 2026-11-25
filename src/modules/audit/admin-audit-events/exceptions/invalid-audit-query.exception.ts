@@ -7,6 +7,16 @@ export class InvalidAuditRangeException extends BadRequestException {
     }
 }
 
+/** The filtered result is larger than one export may hold; the caller must narrow the window or add filters. */
+export class AuditExportLimitExceededException extends BadRequestException {
+    constructor(format: string, maxRows: number) {
+        super({
+            message: `The export has more than ${maxRows} rows, the maximum for ${format.toUpperCase()}. Narrow the 'from'/'to' window or add filters and export again.`,
+            error: 'AUDIT_EXPORT_LIMIT_EXCEEDED',
+        });
+    }
+}
+
 /** A combination of audit filters that makes no sense (e.g. `entityId` without `entityType`). */
 export class InvalidAuditFilterException extends BadRequestException {
     constructor(message: string) {

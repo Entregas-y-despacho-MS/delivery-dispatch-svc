@@ -11,5 +11,7 @@ import { OtdReportService } from './services/otd-report.service.js';
 @Module({
     controllers: [DeliveryPromiseController],
     providers: [OtdRepository, BacklogRepository, AttemptsRepository, FirstAttemptService, OtdReportService, DeliveryBacklogService],
+    // The attempts are read by the quality indicators of ES-300 (ST-300.1) too.
+    exports: [AttemptsRepository],
 })
 export class DeliveryPromiseModule {}
