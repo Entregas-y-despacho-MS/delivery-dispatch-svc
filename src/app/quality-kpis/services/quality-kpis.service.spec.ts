@@ -166,4 +166,18 @@ describe('QualityKpisService.getQualityKpis', () => {
         const authorized = await build().service.getQualityKpis(FILTERS, { ratingsAuthorized: true, now: NOW });
         expect(authorized.sources).toContain('dispatch_ratings');
     });
+    it('a blank «motivo» of the complaint is no filter at all', async () => {
+        const { service } = build({ delivered: [{ dispatchId: 1, rescheduled: false }], cases: [caseRow(1, 1)] });
+        const report = await service.getQualityKpis({ ...FILTERS, reasonCode: '   ' }, { ratingsAuthorized: true, now: NOW });
+        expect(report.filters.reasonCode).toBeNull();
+        expect(report.kpis.complaintRate).toMatchObject({ numerator: 1, denominator: 1 });
+    });
+
+    it('a status other than delivered leaves claims and ratings in «Sin datos» (no delivered dispatch in the cohort)', async () => {
+        const { service, quality } = build({ cohortRows: referenceCohort, sources: referenceSources });
+        const report = await service.getQualityKpis({ ...FILTERS, status: 'incident' }, { ratingsAuthorized: true, now: NOW });
+        expect(quality.listDeliveredCohort).toHaveBeenCalledWith(expect.objectContaining({ status: 'incident' }));
+        expect(report.kpis.complaintRate).toMatchObject({ available: true, value: null, denominator: 0 });
+        expect(report.kpis.ratingAverage).toMatchObject({ available: true, value: null, n: 0 });
+    });
 });

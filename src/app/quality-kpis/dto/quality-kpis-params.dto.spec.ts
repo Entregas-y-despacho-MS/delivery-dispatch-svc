@@ -40,7 +40,7 @@ describe('QualityKpisParamsDto', () => {
         expect((await check({ ...valid, reasonCode: 'X'.repeat(41) })).messages).toContain("The 'reasonCode' parameter must not exceed 40 characters.");
     });
 
-    it('a rescheduled that is not true or false is a 400', async () => {
+    it('a rescheduled that is not true or false makes the transform throw (the 400 itself is in the e2e)', async () => {
         await expect(async () => plainToInstance(QualityKpisParamsDto, { ...valid, rescheduled: 'maybe' })).rejects.toThrow();
     });
 });

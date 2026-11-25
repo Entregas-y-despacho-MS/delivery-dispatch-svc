@@ -19,7 +19,7 @@ const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? val
  * (cases and dispatches) at once; the indicators always cover the whole filtered cohort, never just the page.
  */
 export class QualityKpisParamsDto extends PaginationParamsDto {
-    // No `example` on the query parameters: Swagger UI would send it on "Try it out" (guarded by test/swagger.e2e-spec.ts).
+    // No `example` on the query parameters of this class: Swagger UI would send it on "Try it out" (guarded by test/swagger.e2e-spec.ts). `page` and `limit` keep the ones of `PaginationParamsDto`.
     @ApiProperty({ type: String, format: 'date', description: 'First day of the range, in YYYY-MM-DD (e.g. 2026-11-01), inclusive. Bolivia days (America/La_Paz). Incidents and reschedules are placed by the end of the promise window; claims and ratings by the closing of the delivery' })
     @IsDateString({ strict: true }, { message: DATE_MESSAGE('from') })
     @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: DATE_MESSAGE('from') })

@@ -4,8 +4,8 @@ import type { QualityKpi } from '../domain/kpi.js';
 import type { Page, QualityCaseItem, QualityDispatchItem, TableOrder } from '../domain/quality-tables.js';
 
 /**
- * What `QualityKpisService` answers (ST-300.1). Plain types: the Swagger DTOs and the endpoint come with the next subtask of
- * ES-300, which maps this into them.
+ * What `QualityKpisService` answers (ST-300.1, extended by ST-300.2). Plain types: the Swagger DTOs of the endpoint
+ * (`quality-kpis-response.dto.ts`) mirror them field by field.
  */
 export interface QualityKpisFilters {
     /** First Bolivia day (YYYY-MM-DD), inclusive. */

@@ -13,16 +13,16 @@ export class QualityKpiDto {
     @ApiProperty({ enum: KpiUnit, description: 'Unit of `value`: a percentage, minutes or a rating score' })
     unit!: KpiUnit;
 
-    @ApiProperty({ type: 'number', format: 'double', nullable: true, description: 'Numerator of the rate; null when the indicator has none (median, N/D)' })
+    @ApiProperty({ type: 'number', format: 'double', nullable: true, minimum: 0, description: 'Numerator of the rate; null when the indicator has none (median, N/D)' })
     numerator!: number | null;
 
-    @ApiProperty({ type: 'number', format: 'double', nullable: true, description: 'Denominator of the rate; null when the indicator has none (median, N/D)' })
+    @ApiProperty({ type: 'number', format: 'double', nullable: true, minimum: 0, description: 'Denominator of the rate; null when the indicator has none (median, N/D)' })
     denominator!: number | null;
 
     @ApiProperty(COUNT('Sample size behind `value`'))
     n!: number;
 
-    @ApiProperty({ type: 'number', format: 'double', nullable: true, description: 'The figure. null with `available: true` means «Sin datos» (nothing to measure); null with `available: false` is N/D, with its cause in `reason`. Never a made-up 0' })
+    @ApiProperty({ type: 'number', format: 'double', nullable: true, minimum: 0, description: 'The figure. null with `available: true` means «Sin datos» (nothing to measure); null with `available: false` is N/D, with its cause in `reason`. Never a made-up 0' })
     value!: number | null;
 
     @ApiProperty({ type: Boolean, description: 'false when the value cannot be told (N/D); the counts are still shown' })

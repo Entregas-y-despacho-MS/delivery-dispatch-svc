@@ -17,7 +17,7 @@ function rescheduledIds(rows: PromiseCohortRow[]): Set<number> {
  * ST-300.1 (ES-300, Dashboard 4) — quality indicators of the delivery: incidents per 100 attempts, reschedules, claims, investigation time
  * and rating. It reads the facts, hands them to the pure rules of `domain/` and returns each indicator with its formula, numerator,
  * denominator, `n` and, when it cannot be told, its N/D cause. Read-only: no table, no cache. Who may call it, and whether the caller
- * may read the global rating (`ratingsAuthorized`), is decided by the layer above (the endpoint of the next subtask).
+ * may read the global rating (`ratingsAuthorized`), is decided by the layer above (`GET /reports/quality`, ST-300.2).
  *
  * Two cohorts, each labelled in its `dateBasis`: incidents and reschedules are placed by the end of the promise window (as ST-301.3
  * does); claims and ratings by the closing of the delivery.
