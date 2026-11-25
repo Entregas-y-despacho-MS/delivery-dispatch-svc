@@ -387,4 +387,64 @@ describe('password policy, role matrix, root seed and audit (ST-310.4)', () => {
         });
     });
 
+    // ── expiration ─────────────────────────────────────────────────────────
+    describe('password expiration set through the API', () => {
+        afterAll(async () => { await setPolicy(CLEAN_DEFAULTS); });
+
+        const PASSWORD = 'Expiring1234!';
+        const age = (id: number, hours: number) =>
+            h.db.query(`UPDATE users SET password_changed_at = now() - make_interval(hours => $2) WHERE user_id = $1`, [id, hours]);
+
+        it.each([
+            // [days configured, age of the password in hours, must change]
+            ['1', 23, false], ['1', 25, true],
+            ['30', 30 * 24 - 1, false], ['30', 30 * 24 + 1, true],
+            ['90', 31 * 24, false],
+            ['3650', 3650 * 24 - 1, false], ['3650', 3650 * 24 + 1, true],
+        ] as Array<[string, number, boolean]>)('%s day(s) with a password %i hours old: must change = %s', async (days, hours, expired) => {
+            await setPolicy({ password_expiration_days: days });
+            const user = await insertUser('coordinator', PASSWORD);
+            await age(user.id, hours);
+
+            const session = await login(user.username, PASSWORD);
+
+            expect([session.status, session.body.mustChangePassword]).toEqual([200, expired]);
+            const read = await h.call('get', '/settings', session.body.accessToken).response;
+            expect([read.status, read.body.error]).toEqual(expired ? [403, 'PASSWORD_CHANGE_REQUIRED'] : [200, undefined]);
+        });
+
+        it('shortening it blocks an open session at once, without persisting what it tries; changing the password releases it', async () => {
+            await setPolicy({ password_expiration_days: '90' });
+            const user = await insertUser('coordinator', PASSWORD);
+            await age(user.id, 10 * 24);
+            const session = (await login(user.username, PASSWORD)).body as { accessToken: string; refreshToken: string };
+            expect((await h.call('get', '/settings', session.accessToken).response).status).toBe(200);
+
+            await setPolicy({ password_expiration_days: '5' });
+
+            const before = await snapshot();
+            const blocked = putSetting(session.accessToken, 'max_wait_time_min', '44');
+            const res = await blocked.response;
+            expect([res.status, res.body.error]).toEqual([403, 'PASSWORD_CHANGE_REQUIRED']);
+            expect(await snapshot()).toEqual(before);
+            // The guard records the denial without waiting for it.
+            await vi.waitFor(async () => expect(await h.eventsOf(blocked.correlationId)).toEqual([expect.objectContaining({
+                actor_user_id: user.id, actor_role: 'coordinator', action: 'setting.updated', result: 'denied', status_code: 403,
+            })]));
+            const refreshed = await h.call('post', '/auth/refresh', null, { refreshToken: session.refreshToken }).response;
+            expect([refreshed.status, refreshed.body.mustChangePassword]).toEqual([200, true]);
+
+            // Lengthening it releases the same session: expiration is evaluated on every request.
+            await setPolicy({ password_expiration_days: '90' });
+            expect((await h.call('get', '/settings', session.accessToken).response).status).toBe(200);
+
+            await setPolicy({ password_expiration_days: '5' });
+            await nextSecond();
+            expect((await changePassword(refreshed.body.accessToken, PASSWORD, 'Renewed1234!').response).status).toBe(204);
+            const renewed = await login(user.username, 'Renewed1234!');
+            expect(renewed.body.mustChangePassword).toBe(false);
+            expect((await h.call('get', '/settings', renewed.body.accessToken).response).status).toBe(200);
+        });
+    });
+
 });
