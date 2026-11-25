@@ -75,6 +75,7 @@ reservado). Debe coincidir con `PORTAL_ROUTES` del portal web (`config/portal-ro
 | Lotes de ruta | `POST /dispatches/:id/cotejo-resolved` (ST-241.3) | **No**, solo Coordinador |
 | Reportes | `GET /reports/sla` (ST-54.2) | **No**, solo Coordinador |
 | Reportes | `GET /reports/otd` y `GET /reports/otd/backlog` (ST-301.1) | **No**, solo Coordinador |
+| Reportes | `GET /reports/supplier-pickups` (ST-305.1) | **No**, solo Coordinador |
 | Planificación | `GET /planning/pipeline` (ST-302.1) | **No**, solo Coordinador |
 | Planificación | `GET /planning/cutoffs`, `GET /planning/cutoffs/coverage` y `GET /planning/route-completion` (ST-302.2) | **No**, solo Coordinador |
 | Catálogos | `GET /warehouses`, `GET /incident-reasons`, `GET /reschedule-reasons` | Sí (solo lectura) |

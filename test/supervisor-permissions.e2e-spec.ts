@@ -113,6 +113,8 @@ const COORDINATOR_ONLY: Route[] = [
     // ST-301.1: el OTD por cohorte de promesa y el volumen del backlog son solo del Coordinador.
     { method: 'get', path: '/reports/otd' },
     { method: 'get', path: '/reports/otd/backlog' },
+    // ST-305.1: el cumplimiento y las excepciones de citas a proveedor son solo del Coordinador.
+    { method: 'get', path: '/reports/supplier-pickups' },
     // ST-302.1: el pipeline de planificación por despacho es solo del Coordinador.
     { method: 'get', path: '/planning/pipeline' },
     // ST-302.2: la cobertura al corte y la finalización de paradas sobre datos congelados son solo del Coordinador.
