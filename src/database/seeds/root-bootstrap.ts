@@ -36,7 +36,10 @@ export class RootSeedPasswordError extends Error {
     }
 }
 
-export type RootSeedEnv = Record<string, string | undefined>;
+/** Defaults this seed used to ship (seed.ts fallback and .env.example before ST-310.2). Never accepted again. */
+const RETIRED_ROOT_PASSWORDS: ReadonlySet<string> = new Set(['Root1234!']);
+
+export type RootSeedEnv =Record<string, string | undefined>;
 type Logger = (message: string) => void;
 
 /**
@@ -51,6 +54,13 @@ export function requireRootPassword(env: RootSeedEnv): string {
         throw new RootSeedPasswordError(
             `SEED_ROOT_PASSWORD is required to create the root account${inProduction ? ' in production' : ''}. ` +
             'Set it to a strong secret and run the seed again (there is no default password).',
+        );
+    }
+    // The password this seed used to create is public in the repository's history (and in older copies of
+    // .env.example), so an account created with it would be just as predictable as the old fallback.
+    if (RETIRED_ROOT_PASSWORDS.has(password)) {
+        throw new RootSeedPasswordError(
+            'SEED_ROOT_PASSWORD is a previously published default and cannot be used: choose a secret of your own.',
         );
     }
     // A value copied from a .env written on Windows often ends in a space or CR/LF, which isStrongPassword would

@@ -50,6 +50,14 @@ describe('requireRootPassword', () => {
         expect(requireRootPassword({ SEED_ROOT_PASSWORD: 'Abcdef1!' })).toBe('Abcdef1!');
     });
 
+    it('rechaza la antigua contraseña por defecto aunque cumpla la política (ya es pública)', () => {
+        const retired = 'Root1234!';
+        let message = '';
+        try { requireRootPassword({ NODE_ENV: 'production', SEED_ROOT_PASSWORD: retired }); } catch (e) { message = (e as Error).message; }
+        expect(message).toMatch(/previously published default/);
+        expect(message).not.toContain(retired);
+    });
+
     it('nunca acepta la antigua contraseña fija como valor implícito', () => {
         expect(() => requireRootPassword({ NODE_ENV: 'production' })).toThrow();
     });

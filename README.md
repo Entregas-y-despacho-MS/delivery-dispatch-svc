@@ -14,7 +14,7 @@ Scaffolded with [create-nestkit](https://www.npmjs.com/package/@darkj/create-nes
 
 ## Getting Started
 ```bash
-cp .env.example .env   # fill in your values
+cp .env.example .env   # fill in your values — SEED_ROOT_PASSWORD has no default and is required by `npm run seed`
 npm run migration:run  # apply the initial schema
 npm run seed            # create the 5 roles + a root user (needs SEED_ROOT_PASSWORD) + development users
 npm run start:dev
