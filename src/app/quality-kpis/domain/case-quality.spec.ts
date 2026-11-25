@@ -6,7 +6,7 @@ const NOW = new Date('2026-11-24T12:00:00Z');
 const at = (iso: string) => new Date(iso);
 
 function row(caseId: number, overrides: Partial<ComplaintCaseRow> = {}): ComplaintCaseRow {
-    return { caseId, dispatchId: caseId, openedAt: at('2026-11-20T10:00:00Z'), investigationStartedAt: null, decidedAt: null, ...overrides };
+    return { caseId, dispatchId: caseId, reasonCode: 'DAMAGED', investigationStatus: 'received', openedAt: at('2026-11-20T10:00:00Z'), investigationStartedAt: null, decidedAt: null, ...overrides };
 }
 const decided = (caseId: number, startMin: number, endMin: number) =>
     row(caseId, { investigationStartedAt: new Date(Date.UTC(2026, 10, 21, 10, startMin)), decidedAt: new Date(Date.UTC(2026, 10, 21, 10, endMin)) });

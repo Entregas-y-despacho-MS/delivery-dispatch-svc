@@ -14,7 +14,7 @@ const incident = (minutes: number, id: string) => event('incident', minutes, { c
 const source = (dispatchId: number, events: AttemptEvent[]): DispatchAttemptSource => ({ dispatchId, status: 'delivered', windowStart: null, windowEnd: null, events });
 const cohort = (dispatchId: number, windowChanged: boolean | null = null, cancelled = false): PromiseCohortRow => ({ dispatchId, cancelled, windowChanged });
 const caseRow = (caseId: number, dispatchId: number, overrides: Partial<ComplaintCaseRow> = {}): ComplaintCaseRow =>
-    ({ caseId, dispatchId, openedAt: new Date('2026-11-20T10:00:00Z'), investigationStartedAt: null, decidedAt: null, ...overrides });
+    ({ caseId, dispatchId, reasonCode: 'DAMAGED', investigationStatus: 'received', openedAt: new Date('2026-11-20T10:00:00Z'), investigationStartedAt: null, decidedAt: null, ...overrides });
 
 const NOW = new Date('2026-11-24T12:00:00Z');
 const FILTERS = { from: '2026-11-01', to: '2026-11-30' };
@@ -132,5 +132,52 @@ describe('QualityKpisService.getQualityKpis', () => {
         const report = await service.getQualityKpis(FILTERS, { ratingsAuthorized: true, now: NOW });
         expect(report.kpis.rescheduleRate).toMatchObject({ numerator: 0, denominator: 1 });
         expect(report.details.reschedules.rescheduleEventCount).toBe(0);
+    });
+    it('«motivo» of the complaint narrows the cases, not the delivered dispatches (the denominator)', async () => {
+        const { service } = build({
+            delivered: Array.from({ length: 4 }, (_, i) => ({ dispatchId: 100 + i, rescheduled: false })),
+            cases: [caseRow(1, 100, { reasonCode: 'DAMAGED' }), caseRow(2, 101, { reasonCode: 'MISSING' }), caseRow(3, 102, { reasonCode: 'damaged' })],
+        });
+        const report = await service.getQualityKpis({ ...FILTERS, reasonCode: ' Damaged ' }, { ratingsAuthorized: true, now: NOW });
+        expect(report.kpis.complaintRate).toMatchObject({ numerator: 2, denominator: 4, value: 50 });
+        expect(report.filters.reasonCode).toBe('Damaged');
+        expect(report.tables.cases.data.map((c) => c.caseId)).toEqual([3, 1]);
+    });
+
+    it('tables: cases and dispatches apart, paginated and ordered by id, with the same filters', async () => {
+        const { service } = build({
+            cohortRows: referenceCohort, sources: referenceSources,
+            delivered: [{ dispatchId: 100, rescheduled: false }], cases: [caseRow(1, 100), caseRow(2, 100)],
+        });
+        const first = await service.getQualityKpis(FILTERS, { ratingsAuthorized: true, now: NOW, page: 1, limit: 2, order: 'asc' });
+        expect(first.tables.dispatches.meta).toEqual({ page: 1, limit: 2, pages: 2, total: 3 });
+        expect(first.tables.dispatches.data.map((d) => d.dispatchId)).toEqual([1, 2]);
+        expect(first.tables.dispatches.data[0]).toMatchObject({ attemptCount: 2, attemptsWithIncidentCount: 1, rescheduled: true, reconstructable: true });
+        expect(first.tables.cases.meta.total).toBe(2);
+        const second = await service.getQualityKpis(FILTERS, { ratingsAuthorized: true, now: NOW, page: 2, limit: 2, order: 'desc' });
+        expect(second.tables.dispatches.data.map((d) => d.dispatchId)).toEqual([1]);
+    });
+
+    it('tables are empty (not an error) with nothing in the period, and the sources omit the rating when it is not authorized', async () => {
+        const report = await build().service.getQualityKpis(FILTERS, { ratingsAuthorized: false, now: NOW });
+        expect(report.tables.cases).toEqual({ data: [], meta: { page: 1, limit: 10, pages: 0, total: 0 } });
+        expect(report.tables.dispatches.data).toEqual([]);
+        expect(report.sources).not.toContain('dispatch_ratings');
+        const authorized = await build().service.getQualityKpis(FILTERS, { ratingsAuthorized: true, now: NOW });
+        expect(authorized.sources).toContain('dispatch_ratings');
+    });
+    it('a blank «motivo» of the complaint is no filter at all', async () => {
+        const { service } = build({ delivered: [{ dispatchId: 1, rescheduled: false }], cases: [caseRow(1, 1)] });
+        const report = await service.getQualityKpis({ ...FILTERS, reasonCode: '   ' }, { ratingsAuthorized: true, now: NOW });
+        expect(report.filters.reasonCode).toBeNull();
+        expect(report.kpis.complaintRate).toMatchObject({ numerator: 1, denominator: 1 });
+    });
+
+    it('a status other than delivered leaves claims and ratings in «Sin datos» (no delivered dispatch in the cohort)', async () => {
+        const { service, quality } = build({ cohortRows: referenceCohort, sources: referenceSources });
+        const report = await service.getQualityKpis({ ...FILTERS, status: 'incident' }, { ratingsAuthorized: true, now: NOW });
+        expect(quality.listDeliveredCohort).toHaveBeenCalledWith(expect.objectContaining({ status: 'incident' }));
+        expect(report.kpis.complaintRate).toMatchObject({ available: true, value: null, denominator: 0 });
+        expect(report.kpis.ratingAverage).toMatchObject({ available: true, value: null, n: 0 });
     });
 });

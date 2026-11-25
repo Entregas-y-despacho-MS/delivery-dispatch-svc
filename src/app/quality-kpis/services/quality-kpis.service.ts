@@ -5,6 +5,7 @@ import type { DeliveryPromiseFilters } from '../../delivery-promise/repositories
 import { incidentRateKpi, rescheduleRateKpi, summarizeAttemptQuality, summarizeReschedules, type RescheduleRow } from '../domain/attempt-quality.js';
 import { complaintRateKpi, investigationTimeKpi, ratingKpi, responseRateKpi, summarizeComplaints } from '../domain/case-quality.js';
 import { QualityRepository, type PromiseCohortRow } from '../repositories/quality.repository.js';
+import { paginate, sortById, toCaseItems, type QualityDispatchItem } from '../domain/quality-tables.js';
 import type { QualityKpisFilters, QualityKpisOptions, QualityKpisReport } from '../dto/quality-kpis-report.js';
 
 /** The dispatches that had at least one reschedule that changed their window. */
@@ -16,7 +17,7 @@ function rescheduledIds(rows: PromiseCohortRow[]): Set<number> {
  * ST-300.1 (ES-300, Dashboard 4) — quality indicators of the delivery: incidents per 100 attempts, reschedules, claims, investigation time
  * and rating. It reads the facts, hands them to the pure rules of `domain/` and returns each indicator with its formula, numerator,
  * denominator, `n` and, when it cannot be told, its N/D cause. Read-only: no table, no cache. Who may call it, and whether the caller
- * may read the global rating (`ratingsAuthorized`), is decided by the layer above (the endpoint of the next subtask).
+ * may read the global rating (`ratingsAuthorized`), is decided by the layer above (`GET /reports/quality`, ST-300.2).
  *
  * Two cohorts, each labelled in its `dateBasis`: incidents and reschedules are placed by the end of the promise window (as ST-301.3
  * does); claims and ratings by the closing of the delivery.
@@ -56,20 +57,36 @@ export class QualityKpisService {
             ? undefined
             : await this.quality.listIncidentIdsByReason(filters.incidentReasonId, cohortSources.map((source) => source.dispatchId));
         // The global rating is not even read unless the caller may see it.
-        const [cases, scores] = await Promise.all([
+        const [allCases, scores] = await Promise.all([
             this.quality.listComplaintCases(deliveredIds),
             options.ratingsAuthorized ? this.quality.listRatingScores(deliveredIds) : Promise.resolve(null),
         ]);
+
+        // «Motivo» of the complaint narrows the cases (the numerator); the delivered dispatches stay the denominator.
+        const reasonCode = filters.reasonCode?.trim().toLowerCase();
+        const cases = reasonCode ? allCases.filter((row) => row.reasonCode.toLowerCase() === reasonCode) : allCases;
 
         const attemptQuality = summarizeAttemptQuality(cohortSources, incidentFilter);
         const rescheduleQuality = summarizeReschedules(rescheduleRows);
         const complaintQuality = summarizeComplaints(cases, now);
 
+        const page = options.page ?? 1;
+        const limit = options.limit ?? 10;
+        const order = options.order ?? 'desc';
+        const dispatchItems: QualityDispatchItem[] = cohortSources.map((source) => {
+            const own = summarizeAttemptQuality([source], incidentFilter);
+            return {
+                dispatchId: source.dispatchId, status: source.status, attemptCount: own.attemptCount,
+                attemptsWithIncidentCount: own.attemptsWithIncidentCount, incidentEventCount: own.incidentEventCount,
+                rescheduled: rescheduled.has(source.dispatchId), reconstructable: own.notReconstructableCount === 0,
+            };
+        });
+
         return {
             period: { from: filters.from, to: filters.to, timeZone: OPERATING_TIME_ZONE },
             filters: {
                 zoneId: filters.zoneId ?? null, status: filters.status ?? null,
-                incidentReasonId: filters.incidentReasonId ?? null, rescheduled: filters.rescheduled ?? null,
+                incidentReasonId: filters.incidentReasonId ?? null, reasonCode: filters.reasonCode?.trim() || null, rescheduled: filters.rescheduled ?? null,
             },
             kpis: {
                 incidentRate: incidentRateKpi(attemptQuality, coverage.complete),
@@ -89,6 +106,11 @@ export class QualityKpisService {
                 },
                 attemptCoverage: { from: coverage.from ? coverage.from.toISOString() : null, complete: coverage.complete },
             },
+            tables: {
+                cases: paginate(toCaseItems(cases, now, order), page, limit),
+                dispatches: paginate(sortById(dispatchItems, (item) => item.dispatchId, order), page, limit),
+            },
+            sources: ['dispatches', 'dispatch_events', 'dispatch_reschedules', 'delivery_complaint_cases', ...(options.ratingsAuthorized ? ['dispatch_ratings'] : [])],
         };
     }
 }

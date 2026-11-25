@@ -42,7 +42,7 @@ const DELIVERED_COHORT_SQL = `
      ORDER BY d.dispatch_id`;
 
 const COMPLAINT_CASES_SQL = `
-    SELECT delivery_complaint_case_id, dispatch_id, opened_at, investigation_started_at, decided_at
+    SELECT delivery_complaint_case_id, dispatch_id, reason_code, investigation_status, opened_at, investigation_started_at, decided_at
       FROM delivery_complaint_cases
      WHERE dispatch_id = ANY($1::int[])
      ORDER BY delivery_complaint_case_id`;
@@ -86,11 +86,15 @@ export class QualityRepository {
 
     async listComplaintCases(dispatchIds: number[]): Promise<ComplaintCaseRow[]> {
         if (dispatchIds.length === 0) return [];
-        const rows: { delivery_complaint_case_id: number; dispatch_id: number; opened_at: Date; investigation_started_at: Date | null; decided_at: Date | null }[] =
-            await this.dataSource.query(COMPLAINT_CASES_SQL, [dispatchIds]);
+        const rows: {
+            delivery_complaint_case_id: number; dispatch_id: number; reason_code: string; investigation_status: string;
+            opened_at: Date; investigation_started_at: Date | null; decided_at: Date | null;
+        }[] = await this.dataSource.query(COMPLAINT_CASES_SQL, [dispatchIds]);
         return rows.map((row) => ({
             caseId: row.delivery_complaint_case_id,
             dispatchId: row.dispatch_id,
+            reasonCode: row.reason_code,
+            investigationStatus: row.investigation_status,
             openedAt: new Date(row.opened_at),
             investigationStartedAt: row.investigation_started_at ? new Date(row.investigation_started_at) : null,
             decidedAt: row.decided_at ? new Date(row.decided_at) : null,

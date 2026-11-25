@@ -36,8 +36,8 @@ describe('QualityRepository', () => {
 
     it('maps the cases, the scores and the incident ids', async () => {
         const opened = new Date('2026-11-20T10:00:00Z');
-        const cases = build([{ delivery_complaint_case_id: 5, dispatch_id: 1, opened_at: opened, investigation_started_at: null, decided_at: null }]);
-        expect(await cases.repository.listComplaintCases([1])).toEqual([{ caseId: 5, dispatchId: 1, openedAt: opened, investigationStartedAt: null, decidedAt: null }]);
+        const cases = build([{ delivery_complaint_case_id: 5, dispatch_id: 1, reason_code: 'DAMAGED', investigation_status: 'received', opened_at: opened, investigation_started_at: null, decided_at: null }]);
+        expect(await cases.repository.listComplaintCases([1])).toEqual([{ caseId: 5, dispatchId: 1, reasonCode: 'DAMAGED', investigationStatus: 'received', openedAt: opened, investigationStartedAt: null, decidedAt: null }]);
         expect(await build([{ score: 5 }, { score: '3' }]).repository.listRatingScores([1])).toEqual([5, 3]);
         const incidents = build([{ id: 'a' }, { id: 'b' }]);
         expect([...(await incidents.repository.listIncidentIdsByReason(7, [1, 2]))]).toEqual(['a', 'b']);
