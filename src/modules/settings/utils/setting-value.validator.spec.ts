@@ -59,6 +59,23 @@ describe('validateSettingValue', () => {
         expect(validateSettingValue(key, value)).toContain(key);
     });
 
+    it.each([
+        'password_require_uppercase', 'password_require_lowercase', 'password_require_number', 'password_require_symbol',
+    ])('accepts only "true" or "false" for %s', (key) => {
+        expect(validateSettingValue(key, 'true')).toBeNull();
+        expect(validateSettingValue(key, 'false')).toBeNull();
+        for (const value of ['', 'TRUE', 'False', '1', '0', 'yes', ' true', 'true ']) {
+            expect(validateSettingValue(key, value), `${key} = ${JSON.stringify(value)}`).toContain(key);
+        }
+    });
+
+    it('keeps the minimum password length at 8 characters', () => {
+        expect(validateSettingValue('password_min_length', '8')).toBeNull();
+        expect(validateSettingValue('password_min_length', '7')).toContain('password_min_length');
+        expect(validateSettingValue('password_min_length', '128')).toBeNull();
+        expect(validateSettingValue('password_min_length', '129')).toContain('password_min_length');
+    });
+
     it('rejects settings without an explicit validation rule', () => {
         expect(validateSettingValue('unregistered_setting', 'anything')).toContain('no validation rule');
     });
