@@ -423,6 +423,23 @@ describe('UsersService — roleId inexistente (antes daba 500 por la FK)', () =>
         expect(rawRepo.update).toHaveBeenCalledWith(5, { fullName: 'Ana B' }); // roleId nunca llega al payload
     });
 
+    it('update() aplica la política vigente a la contraseña que resetea el admin y no escribe si no la cumple', async () => {
+        const { service, rawRepo } = buildService({ flags: { password_require_symbol: true } });
+        rawRepo.findOne.mockResolvedValue({ id: 5, username: 'ana', email: null });
+
+        await expect(service.update(UserDto, 5, { password: 'NoSymbols123' } as any)).rejects.toThrow(PasswordTooWeakException);
+        expect(rawRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('update() acepta esa misma contraseña cuando el admin apagó la opción de símbolo', async () => {
+        const { service, rawRepo } = buildService({ flags: { password_require_symbol: false } });
+        rawRepo.findOne.mockResolvedValue({ id: 5, username: 'ana', email: null });
+
+        await service.update(UserDto, 5, { password: 'NoSymbols123' } as any);
+
+        expect(rawRepo.update).toHaveBeenCalledWith(5, expect.objectContaining({ passwordHash: expect.any(String) }));
+    });
+
     it('update() con un body vacío no escribe nada (antes escribía un UPDATE vacío igual)', async () => {
         const { service, rawRepo } = buildService();
         rawRepo.findOne.mockResolvedValue({ id: 5, username: 'ana', email: null });

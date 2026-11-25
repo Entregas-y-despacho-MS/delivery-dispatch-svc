@@ -267,7 +267,9 @@ describe('Security hardening (e2e)', () => {
 
     // ── settings ───────────────────────────────────────────────────────────────
     describe('settings values are validated', () => {
-        const put = (key: string, value: string) => http().put(api(`/settings/${key}`)).set(auth('coordinator')).send({ value });
+        // ST-310.1: the password policy belongs to the admin; every other setting stays with the coordinator.
+        const put = (key: string, value: string) =>
+            http().put(api(`/settings/${key}`)).set(auth(key.startsWith('password_') ? 'admin' : 'coordinator')).send({ value });
 
         it.each([
             ['max_failed_login_attempts', 'abc'], ['max_failed_login_attempts', '0'], ['session_inactivity_minutes', '-5'],
