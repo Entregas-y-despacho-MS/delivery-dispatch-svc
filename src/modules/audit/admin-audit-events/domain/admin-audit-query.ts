@@ -11,6 +11,11 @@ export const AUDIT_RESULTS = ['success', 'denied', 'failed'] as const;
 export const AUDIT_ORDERS = ['asc', 'desc'] as const;
 export type AuditOrder = (typeof AUDIT_ORDERS)[number];
 
+export const AUDIT_EXPORT_FORMATS = ['csv', 'pdf'] as const;
+export type AuditExportFormat = (typeof AUDIT_EXPORT_FORMATS)[number];
+/** Most rows one export may hold, per format (a PDF is rendered by a browser, so it is far heavier than a CSV). */
+export const AUDIT_EXPORT_MAX_ROWS: Record<AuditExportFormat, number> = { csv: 10_000, pdf: 2_000 };
+
 export const AUDIT_ACTIONS: readonly string[] = Object.keys(ADMIN_AUDIT_CATALOG);
 export const AUDIT_ENTITY_TYPES: readonly string[] = [...new Set(Object.values(ADMIN_AUDIT_CATALOG).map((definition) => definition.entityType))];
 

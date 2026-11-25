@@ -32,6 +32,7 @@ export class PuppeteerAdapter extends PdfPort {
             const pdf = await page.pdf({
                 format:          options.format          ?? 'Letter',
                 printBackground: options.printBackground ?? true,
+                landscape:       options.landscape       ?? false,
                 margin:          options.margin,
             });
             return Buffer.from(pdf);

@@ -1,6 +1,8 @@
 export interface PdfOptions {
     format?:          'A4' | 'Letter' | 'Legal';
     printBackground?: boolean;
+    /** Wide tables: the page is turned sideways (default false). */
+    landscape?:       boolean;
     margin?:          { top?: string; bottom?: string; left?: string; right?: string };
 }
 

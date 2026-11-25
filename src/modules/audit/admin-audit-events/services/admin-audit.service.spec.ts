@@ -49,6 +49,19 @@ describe('AdminAuditService.recordOutcome', () => {
         expect((insert.mock.calls[0] as any[])[0]).toMatchObject({ actorUserId: null, actorRole: null, result: 'denied', statusCode: 401 });
     });
 
+    it('copies only the declared query fields to the metadata, scalar and trimmed', async () => {
+        const { service, insert } = build();
+        const query = { format: 'csv', from: '2026-11-20T00:00:00-04:00', other: 'x', many: ['a', 'b'], email: 'a@b.c' };
+        await service.recordOutcome(context(request({ query }), { action: 'user.updated', queryFields: ['format', 'from', 'many', 'email'] }), 200);
+        expect((insert.mock.calls[0] as any[])[0].metadata).toEqual({ format: 'csv', from: '2026-11-20T00:00:00-04:00' });
+    });
+
+    it('still records when the query is missing', async () => {
+        const { service, insert } = build();
+        await service.recordOutcome(context(request({ query: undefined }), { action: 'user.updated', queryFields: ['format'] }), 200);
+        expect((insert.mock.calls[0] as any[])[0].metadata).toEqual({});
+    });
+
     it('does nothing for a handler that is not a sensitive action', async () => {
         const { service, insert } = build();
         await service.recordOutcome(context(request(), null), 200);

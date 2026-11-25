@@ -24,6 +24,13 @@ export interface AuditActionOptions {
      */
     bodyFields?: readonly string[];
     /**
+     * Query string parameters copied to `metadata` (allow-list), for actions whose request is a `GET` with filters
+     * (an export). Same rules as `bodyFields`: only scalar values (a repeated parameter is dropped), cut to a bounded
+     * length, and secrets or personal data are refused. The value is stored as it arrived in the query string: the
+     * interceptor runs before the validation pipe, so a rejected request is recorded with what was asked, not normalized.
+     */
+    queryFields?: readonly string[];
+    /**
      * Fixed values the handler adds to `metadata` (which of the operations of an action ran: `{ step: 'enable' }`).
      * Declared in code, never from the request; the same key rules as `bodyFields` apply.
      */
@@ -43,9 +50,9 @@ export const AuditAction = (action: AuditActionName, options: AuditActionOptions
     if (options.entityIdFrom && options.entityIdFrom !== 'param' && options.entityIdParam !== undefined) {
         throw new Error(`@AuditAction('${action}'): entityIdParam only applies when the entity id comes from the route (entityIdFrom 'param').`);
     }
-    const forbidden = [...(options.bodyFields ?? []), ...Object.keys(options.metadata ?? {})].filter(isForbiddenMetadataKey);
+    const forbidden = [...(options.bodyFields ?? []), ...(options.queryFields ?? []), ...Object.keys(options.metadata ?? {})].filter(isForbiddenMetadataKey);
     if (forbidden.length > 0) {
-        throw new Error(`@AuditAction('${action}'): bodyFields and metadata cannot include secrets or personal data (${forbidden.join(', ')}).`);
+        throw new Error(`@AuditAction('${action}'): bodyFields, queryFields and metadata cannot include secrets or personal data (${forbidden.join(', ')}).`);
     }
     return SetMetadata(AUDIT_ACTION_KEY, { action, ...options } satisfies AuditActionMetadata);
 };

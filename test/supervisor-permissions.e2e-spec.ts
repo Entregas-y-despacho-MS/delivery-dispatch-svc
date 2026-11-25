@@ -153,6 +153,8 @@ const ADMIN_ONLY: Route[] = [
     { method: 'get', path: `/roles/${NO_ID}` },
     // ST-70.1: la búsqueda de auditoría administrativa es solo del Administrador.
     { method: 'get', path: '/audit/admin-events' },
+    // ST-71.1: su exportación a CSV/PDF también.
+    { method: 'get', path: '/audit/admin-events/export' },
 ];
 
 const DRIVER_ONLY: Route[] = [

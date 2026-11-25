@@ -29,4 +29,10 @@ describe('AuditAction', () => {
     it('accepts business fields such as ids, flags and catalog codes', () => {
         expect(() => AuditAction('catalog.changed', { bodyFields: ['zoneCode', 'active', 'roleId', 'reasonCode'] })).not.toThrow();
     });
+
+    it('refuses a query field that is a secret or personal data, and accepts filters', () => {
+        expect(() => AuditAction('user.updated', { queryFields: ['email'] })).toThrow(/cannot include secrets or personal data/);
+        expect(() => AuditAction('user.updated', { queryFields: ['token'] })).toThrow(/cannot include secrets or personal data/);
+        expect(() => AuditAction('user.updated', { queryFields: ['format', 'from', 'to', 'actorId', 'correlationId'] })).not.toThrow();
+    });
 });

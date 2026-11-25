@@ -11,10 +11,10 @@ import { AdminAuditEventEntity } from '../entities/admin-audit-event.entity.js';
 /** Request after `correlationIdMiddleware` and the JWT strategy. */
 export type AuditedRequest = Request & { correlationId?: string; user?: AuthUser };
 
-/** The declared body fields present in the request; anything that is not a plain object body yields nothing. */
-function pickBodyFields(body: unknown, fields: readonly string[]): Record<string, unknown> {
-    if (!body || typeof body !== 'object' || Array.isArray(body)) return {};
-    const source = body as Record<string, unknown>;
+/** The declared fields present in a body or query; anything that is not a plain object yields nothing. */
+function pickFields(container: unknown, fields: readonly string[]): Record<string, unknown> {
+    if (!container || typeof container !== 'object' || Array.isArray(container)) return {};
+    const source = container as Record<string, unknown>;
     return Object.fromEntries(fields.filter((field) => Object.hasOwn(source, field)).map((field) => [field, source[field]]));
 }
 
@@ -57,7 +57,11 @@ export class AdminAuditService {
                 statusCode: status,
                 correlationId: request.correlationId,
                 ip: request.ip,
-                metadata: { ...pickBodyFields(request.body, declared.bodyFields ?? []), ...declared.metadata },
+                metadata: {
+                    ...pickFields(request.query, declared.queryFields ?? []),
+                    ...pickFields(request.body, declared.bodyFields ?? []),
+                    ...declared.metadata,
+                },
             });
         } catch (error) {
             this.logger.error({ event: 'admin_audit_build_failed', status, error: error instanceof Error ? error.name : 'unknown' });
