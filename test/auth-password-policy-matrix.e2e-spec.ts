@@ -613,6 +613,121 @@ describe('password policy, role matrix, root seed and audit (ST-310.4)', () => {
         }, 30_000);
     });
 
+    // ── the seed, run as `npm run seed` runs it ────────────────────────────
+    describe('root bootstrap through the seed script', () => {
+        const BOOT_SECRET = 'Boot-Pw-123!'; // complies with the default policy; shorter than the configured one below
+        const OTHER_SECRET = 'Other-Boot-Pw-456!';
+        const SAME_AS_DEFAULT = 'Rotated-Pw1!'; // rejected by the configured minimum
+        const ROTATED = 'RotatedRootPassword2026'; // no symbol: only the configured policy accepts it
+        const rootName = `${h.prefix}-seedroot`;
+        const rootEmail = `${h.prefix}-seedroot@example.test`;
+
+        const runSeed = (env: Record<string, string>) => {
+            const root = process.cwd();
+            const result = spawnSync(process.execPath, [join(root, 'node_modules/tsx/dist/cli.mjs'), 'src/database/seeds/seed.ts'], {
+                cwd: root, encoding: 'utf8', timeout: 60_000,
+                env: {
+                    ...process.env,
+                    // The developer's .env must not lend a secret to the run "without SEED_ROOT_PASSWORD".
+                    DOTENV_CONFIG_PATH: '/dev/null', DB_TYPE: process.env.DB_TYPE ?? 'postgres',
+                    NODE_ENV: 'production', SEED_DEMO_USERS: 'false', SEED_ROOT_FULL_NAME: 'E2E seeded root',
+                    SEED_ROOT_USERNAME: rootName, SEED_ROOT_EMAIL: rootEmail, SEED_ROOT_PASSWORD: '', ...env,
+                },
+            });
+            return { code: result.status, output: `${result.stdout}\n${result.stderr}` };
+        };
+        const expectNoCredentials = (output: string, ...secrets: string[]) => {
+            for (const secret of secrets) expect(output).not.toContain(secret);
+            expect(output).not.toMatch(/\$2[aby]\$\d\d\$/);
+        };
+
+        beforeAll(async () => { await setPolicy({ password_min_length: '16', password_require_symbol: 'false' }); });
+        afterAll(async () => { await setPolicy(CLEAN_DEFAULTS); });
+
+        it('in production without SEED_ROOT_PASSWORD it fails and creates no account', async () => {
+            const { code, output } = runSeed({});
+            expect(code, output).toBe(1);
+            expect(output).toContain('SEED_ROOT_PASSWORD is required to create the root account in production');
+            expect(await userByName(rootName)).toBeUndefined();
+        }, 60_000);
+
+        it.each(['Root1234!', 'weak-secret-value'])('with the unusable secret %s it fails, creates nothing and does not print it', async (secret) => {
+            const { code, output } = runSeed({ SEED_ROOT_PASSWORD: secret });
+            expect(code, output).toBe(1);
+            expectNoCredentials(output, secret);
+            expect(await userByName(rootName)).toBeUndefined();
+        }, 60_000);
+
+        it('when the database rejects the insert, the failure prints neither the secret nor the hash', async () => {
+            const taken = `${h.prefix}-taken@example.test`;
+            await insertUser('driver', h.password, taken);
+
+            const { code, output } = runSeed({ SEED_ROOT_PASSWORD: BOOT_SECRET, SEED_ROOT_EMAIL: taken });
+
+            expect(code, output).toBe(1);
+            expect(output).toContain('QueryFailedError');
+            expectNoCredentials(output, BOOT_SECRET);
+            expect(await userByName(rootName)).toBeUndefined();
+        }, 60_000);
+
+        it('with a secret it creates the root without printing it, and the root must rotate it under the configured policy', async () => {
+            // The seed checks the policy of a clean install; the configured one applies to the rotation.
+            const { code, output } = runSeed({ SEED_ROOT_PASSWORD: BOOT_SECRET });
+            expect(code, output).toBe(0);
+            expect(output).toContain('Root user created');
+            expectNoCredentials(output, BOOT_SECRET);
+            const created = await userByName(rootName);
+            expect([created.role_id, created.requires_pwd_change]).toEqual([h.roles.root, true]);
+
+            const session = await login(rootName, BOOT_SECRET);
+            expect([session.status, session.body.mustChangePassword]).toEqual([200, true]);
+            const token = session.body.accessToken as string;
+
+            const before = await snapshot();
+            const blocked = putSetting(token, 'password_min_length', '8');
+            const blockedRes = await blocked.response;
+            expect([blockedRes.status, blockedRes.body.error]).toEqual([403, 'PASSWORD_CHANGE_REQUIRED']);
+            expect(await snapshot()).toEqual(before);
+            await vi.waitFor(async () => expect(await h.eventsOf(blocked.correlationId)).toEqual([expect.objectContaining({
+                actor_user_id: created.user_id, actor_role: 'root', action: 'setting.updated', result: 'denied', status_code: 403,
+            })]));
+
+            const short = changePassword(token, BOOT_SECRET, SAME_AS_DEFAULT);
+            const shortRes = await short.response;
+            expect([shortRes.status, shortRes.body.error]).toEqual([400, 'PASSWORD_TOO_SHORT']);
+            expect((await userByName(rootName)).requires_pwd_change).toBe(true);
+
+            await nextSecond();
+            const rotation = changePassword(token, BOOT_SECRET, ROTATED);
+            expect((await rotation.response).status).toBe(204);
+            const rotationEvents = await h.eventsOf(rotation.correlationId);
+            expect(rotationEvents).toEqual([expect.objectContaining({
+                actor_user_id: created.user_id, actor_role: 'root', action: 'auth.password_changed',
+                entity_id: String(created.user_id), result: 'success', status_code: 204,
+            })]);
+            const trail = JSON.stringify([...rotationEvents, ...await h.eventsOf(short.correlationId), ...await h.eventsOf(blocked.correlationId)]);
+            for (const secret of [BOOT_SECRET, SAME_AS_DEFAULT, ROTATED, created.password_hash]) expect(trail).not.toContain(secret);
+
+            const rotated = await login(rootName, ROTATED);
+            expect([rotated.status, rotated.body.mustChangePassword]).toEqual([200, false]);
+            expect((await h.call('get', '/settings', rotated.body.accessToken).response).status).toBe(200);
+        }, 60_000);
+
+        it('run again, with another secret or none, it leaves the rotated account as it is', async () => {
+            const before = await userByName(rootName);
+            for (const env of [{ SEED_ROOT_PASSWORD: OTHER_SECRET }, {} as Record<string, string>]) {
+                const { code, output } = runSeed(env);
+                expect(code, output).toBe(0);
+                expect(output).toContain('Root user already exists');
+                expectNoCredentials(output, OTHER_SECRET, ROTATED, before.password_hash);
+            }
+            const after = await userByName(rootName);
+            expect([after.password_hash, after.requires_pwd_change]).toEqual([before.password_hash, false]);
+            expect((await login(rootName, OTHER_SECRET)).status).toBe(401);
+            expect((await login(rootName, ROTATED)).status).toBe(200);
+        }, 90_000);
+    });
+
     // ── reload ─────────────────────────────────────────────────────────────
     // Keep this block last: passport keeps one global 'jwt' strategy, so booting a second application points the
     // authentication of the first one at it.
