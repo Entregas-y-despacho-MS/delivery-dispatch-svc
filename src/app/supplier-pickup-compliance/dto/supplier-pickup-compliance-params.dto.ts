@@ -25,8 +25,10 @@ export class SupplierPickupComplianceParamsDto {
     @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: DATE_MESSAGE('to') })
     to!: string;
 
-    @ApiPropertyOptional({ type: String, maxLength: 100, description: 'Only pickups of this supplier (the `supplierId` Compras sent). It is read from the most recent dispatch event that carries a supplier, there is no column for it' })
+    @ApiPropertyOptional({ type: String, maxLength: 100, description: 'Only pickups of this supplier (the `supplierId` Compras sent); empty means no filter. It is read from the most recent dispatch event that carries a supplier, there is no column for it' })
     @IsOptional()
+    // A cleared filter arrives as `?supplierId=`: it means no filter, not a supplier called «».
+    @Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? undefined : value))
     @IsString({ message: "The 'supplierId' parameter must be a string." })
     @MaxLength(100, { message: "The 'supplierId' parameter must be at most 100 characters." })
     supplierId?: string;

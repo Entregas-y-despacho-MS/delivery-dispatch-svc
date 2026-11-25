@@ -33,6 +33,15 @@ describe('SupplierPickupComplianceParamsDto', () => {
         expect(await messagesOf({ ...valid, supplierId: 'x'.repeat(101) })).toContain("The 'supplierId' parameter must be at most 100 characters.");
     });
 
+    it('treats an empty or blank supplier id as no filter, so a cleared filter does not hide every pickup', async () => {
+        for (const supplierId of ['', '   ']) {
+            const dto = plainToInstance(SupplierPickupComplianceParamsDto, { ...valid, supplierId });
+            expect(await validate(dto)).toEqual([]);
+            expect(dto.supplierId).toBeUndefined();
+        }
+        expect(plainToInstance(SupplierPickupComplianceParamsDto, { ...valid, supplierId: 'SUP-1' }).supplierId).toBe('SUP-1');
+    });
+
     it('limits the size of the exceptions list', async () => {
         expect(await messagesOf({ ...valid, exceptionLimit: '0' })).toContain("The 'exceptionLimit' parameter must be >= 1.");
         expect(await messagesOf({ ...valid, exceptionLimit: '101' })).toContain("The 'exceptionLimit' parameter must be <= 100.");
