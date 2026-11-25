@@ -230,4 +230,161 @@ describe('password policy, role matrix, root seed and audit (ST-310.4)', () => {
         });
     });
 
+    // ── every path that sets a password ────────────────────────────────────
+    describe('every path that sets a password applies the configured policy', () => {
+        // Longer than the default and without numbers or symbols: each sample tells the two policies apart.
+        const CONFIGURED: PolicyValues = { password_min_length: '14', password_require_number: 'false', password_require_symbol: 'false' };
+        const REJECTED = [
+            { password: 'Short1!aaPwd', error: 'PASSWORD_TOO_SHORT' },        // complies with the default policy, 12 < 14
+            { password: 'onlylowercaseletters', error: 'PASSWORD_TOO_WEAK' }, // long enough, no uppercase
+        ];
+        const ACCEPTED = 'OnlyLettersLongEnough'; // the default policy would reject it
+        const INITIAL = 'Initial1234!Pass';
+
+        const output: string[] = [];
+        const spies: Array<{ mockRestore: () => void }> = [];
+        beforeAll(async () => {
+            await setPolicy(CONFIGURED);
+            // The testing module silences every level but errors: put the real logger back so there is output to inspect.
+            h.app.useLogger(new ConsoleLogger());
+            for (const stream of [process.stdout, process.stderr]) {
+                const write = stream.write.bind(stream);
+                spies.push(vi.spyOn(stream, 'write').mockImplementation(((chunk: string | Uint8Array, ...rest: never[]) => {
+                    output.push(String(chunk));
+                    return write(chunk, ...rest);
+                }) as typeof stream.write));
+            }
+        });
+        afterAll(async () => {
+            spies.forEach((spy) => spy.mockRestore());
+            h.app.useLogger(new ConsoleLogger({ logLevels: ['error', 'fatal'] }));
+            await setPolicy(CLEAN_DEFAULTS);
+        });
+
+        const expectNoSecret = async (correlationId: string, body: unknown, secrets: string[]) => {
+            const stored = JSON.stringify([body, await h.eventsOf(correlationId)]);
+            for (const secret of secrets) expect(stored).not.toContain(secret);
+        };
+
+        it.each(['/users', '/auth/register'])('POST %s', async (path) => {
+            for (const { password, error } of REJECTED) {
+                const attempt = create(password, 'driver', path);
+                const res = await attempt.response;
+                expect([res.status, res.body.error], password).toEqual([400, error]);
+                expect(await userByName(attempt.username)).toBeUndefined();
+                await expectNoSecret(attempt.correlationId, res.body, [password]);
+            }
+            const ok = create(ACCEPTED, 'driver', path);
+            const res = await ok.response;
+            expect(res.status).toBe(201);
+            expect((await login(ok.username, ACCEPTED)).status).toBe(200);
+            await expectNoSecret(ok.correlationId, res.body, [ACCEPTED, (await userByName(ok.username)).password_hash]);
+        });
+
+        it('PUT /users/:id: a rejected password also discards the other fields of the request', async () => {
+            const user = await insertUser('driver', INITIAL);
+            const before = await credentials(user.id);
+            for (const { password, error } of REJECTED) {
+                const attempt = h.call('put', `/users/${user.id}`, h.users.admin.token, { fullName: 'Must not be saved', password });
+                const res = await attempt.response;
+                expect([res.status, res.body.error], password).toEqual([400, error]);
+                expect(await credentials(user.id)).toEqual(before);
+                await expectNoSecret(attempt.correlationId, res.body, [password]);
+            }
+            const ok = h.call('put', `/users/${user.id}`, h.users.admin.token, { password: ACCEPTED });
+            expect((await ok.response).status).toBe(200);
+            expect((await login(user.username, ACCEPTED)).status).toBe(200);
+            await expectNoSecret(ok.correlationId, (await ok.response).body, [ACCEPTED]);
+        });
+
+        it('PATCH /auth/change-password: a rejected change leaves password, date and history as they were', async () => {
+            const user = await insertUser('driver', INITIAL);
+            const token = await h.login(user.username, INITIAL);
+            const before = await credentials(user.id);
+            for (const { password, error } of REJECTED) {
+                const attempt = changePassword(token, INITIAL, password);
+                const res = await attempt.response;
+                expect([res.status, res.body.error], password).toEqual([400, error]);
+                expect(await credentials(user.id)).toEqual(before);
+                await expectNoSecret(attempt.correlationId, res.body, [password, INITIAL]);
+            }
+            await nextSecond();
+            const ok = changePassword(token, INITIAL, ACCEPTED);
+            expect((await ok.response).status).toBe(204);
+            expect((await credentials(user.id)).history).toBe(1);
+            expect((await login(user.username, ACCEPTED)).status).toBe(200);
+            expect((await login(user.username, INITIAL)).status).toBe(401);
+            await expectNoSecret(ok.correlationId, {}, [ACCEPTED, INITIAL]);
+        });
+
+        it('POST /auth/reset-password: a rejected password does not spend the emailed token', async () => {
+            const email = `${h.prefix}-reset@example.test`;
+            const user = await insertUser('coordinator', INITIAL, email);
+            mails.length = 0;
+            expect((await h.call('post', '/auth/forgot-password', null, { email }).response).status).toBe(204);
+            const token = mails.find((mail) => mail.to === email)!.html.match(/[0-9a-f]{64}/)![0];
+            const before = await credentials(user.id);
+            expect(before.password_reset_token).not.toBeNull();
+
+            for (const { password, error } of REJECTED) {
+                const res = await h.call('post', '/auth/reset-password', null, { token, newPassword: password }).response;
+                expect([res.status, res.body.error], password).toEqual([400, error]);
+                expect(await credentials(user.id)).toEqual(before);
+                expect(JSON.stringify(res.body)).not.toContain(password);
+            }
+            expect((await h.call('post', '/auth/reset-password', null, { token, newPassword: ACCEPTED }).response).status).toBe(204);
+            expect((await login(user.username, ACCEPTED)).status).toBe(200);
+            const reused = await h.call('post', '/auth/reset-password', null, { token, newPassword: `${ACCEPTED}Again` }).response;
+            expect([reused.status, reused.body.error]).toEqual([401, 'INVALID_RESET_TOKEN']);
+        });
+
+        it('none of the passwords sent in those requests reached the process output', () => {
+            const canary = `${h.prefix}-canary`;
+            new Logger('e2e').warn(canary);
+            const written = output.join('');
+            expect(written).toContain(canary); // the capture sees what the service logs
+            for (const secret of [INITIAL, ACCEPTED, ...REJECTED.map(({ password }) => password)]) expect(written).not.toContain(secret);
+        });
+    });
+
+    // ── a new policy only affects new passwords ────────────────────────────
+    describe('a new policy only affects passwords set from then on', () => {
+        afterAll(async () => { await setPolicy(CLEAN_DEFAULTS); });
+
+        it('an existing password that no longer complies keeps working, and nobody is rewritten or forced to change', async () => {
+            await setPolicy(Object.fromEntries(TOGGLES.map((key) => [key, 'false'])));
+            // The owner picks a password that only the relaxed policy allows, through the real change.
+            const weak = 'abcdefgh';
+            const owner = create('Initial1234!', 'coordinator');
+            const { id } = (await owner.response).body as { id: number };
+            const firstSession = await h.login(owner.username, 'Initial1234!');
+            await nextSecond();
+            expect((await changePassword(firstSession, 'Initial1234!', weak).response).status).toBe(204);
+            const sessionBefore = (await login(owner.username, weak)).body as { accessToken: string; refreshToken: string };
+            const before = await credentials(id);
+
+            await setPolicy({ ...CLEAN_DEFAULTS, password_min_length: '20' });
+
+            expect(await credentials(id)).toEqual(before);
+            const again = await login(owner.username, weak);
+            expect(again.status).toBe(200);
+            expect(again.body.mustChangePassword).toBe(false);
+            expect((await h.call('get', '/settings', again.body.accessToken).response).status).toBe(200);
+            const refreshed = await h.call('post', '/auth/refresh', null, { refreshToken: again.body.refreshToken }).response;
+            expect([refreshed.status, refreshed.body.mustChangePassword]).toEqual([200, false]);
+            expect((await h.call('get', '/settings', sessionBefore.accessToken).response).status).toBe(200);
+
+            // An admin edit that does not touch the password is not held to the policy.
+            expect((await h.call('put', `/users/${id}`, h.users.admin.token, { fullName: 'Renamed' }).response).status).toBe(200);
+            expect((await credentials(id)).password_hash).toBe(before.password_hash);
+
+            // The old password is not revalidated when it is presented as the current one; the new one is.
+            const token = refreshed.body.accessToken as string;
+            const stillShort = await changePassword(token, weak, 'Abcdef1!Abcdef1!').response;
+            expect([stillShort.status, stillShort.body.error]).toEqual([400, 'PASSWORD_TOO_SHORT']);
+            await nextSecond();
+            expect((await changePassword(token, weak, 'Abcdefghij1!Abcdefghij').response).status).toBe(204);
+        });
+    });
+
 });
