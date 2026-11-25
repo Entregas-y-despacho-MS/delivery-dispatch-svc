@@ -447,4 +447,194 @@ describe('password policy, role matrix, root seed and audit (ST-310.4)', () => {
         });
     });
 
+    // ── role x action ──────────────────────────────────────────────────────
+    describe('role x action matrix', () => {
+        const expectedFor = (row: keyof typeof EXPECTED, actor: Actor): number => EXPECTED[row][ACTORS.indexOf(actor)]!;
+
+        it.each(ACTORS)('%s reads only what its role allows', async (actor) => {
+            for (const [row, path] of [['readSettings', '/settings'], ['readThresholds', '/settings/alert-thresholds']] as const) {
+                const res = await h.call('get', path, tokenOf(actor)).response;
+                expect(res.status, path).toBe(expectedFor(row, actor));
+                if (res.status !== 200) expect(JSON.stringify(res.body), path).not.toMatch(/password_min_length|slaAlertMinOnTimePct/);
+            }
+        });
+
+        /** An allowed write changes only its keys and the version; a denied one changes nothing and says who tried. */
+        const expectOutcome = async (
+            actor: Actor, status: number, expected: number, correlationId: string, before: Record<string, string>,
+            changes: Record<string, string>, entityId: string | null, successMetadata: Record<string, unknown>, startedAt: number,
+        ) => {
+            expect(status).toBe(expected);
+            const after = await snapshot();
+            const events: AuditRow[] = await h.eventsOf(correlationId);
+            if (expected === 200) {
+                const nextVersion = Number(before.settings_version) + 1;
+                expect(after).toEqual({ ...before, ...changes, settings_version: String(nextVersion) });
+                expect(events).toEqual([expect.objectContaining({
+                    actor_user_id: actorId(actor as Exclude<Actor, 'anonymous'>), actor_role: actor, action: 'setting.updated',
+                    entity_type: 'setting', entity_id: entityId, result: 'success', status_code: 200, correlation_id: correlationId,
+                    metadata: { ...successMetadata, settingsVersion: nextVersion },
+                })]);
+                const occurredAt = new Date((events[0] as AuditRow & { occurred_at: Date }).occurred_at).getTime();
+                expect(occurredAt).toBeGreaterThanOrEqual(startedAt - 1_000);
+                expect(occurredAt).toBeLessThanOrEqual(Date.now() + 1_000);
+                return;
+            }
+            expect(after).toEqual(before);
+            if (actor === 'anonymous') {
+                expect(events.filter((event) => event.result === 'success')).toEqual([]);
+                return;
+            }
+            await vi.waitFor(async () => expect(await h.eventsOf(correlationId)).toEqual([expect.objectContaining({
+                actor_user_id: actorId(actor), actor_role: actor, action: 'setting.updated', entity_id: entityId,
+                result: 'denied', status_code: 403,
+            })]));
+            const [denial] = await h.eventsOf(correlationId);
+            expect(Object.keys(denial!.metadata).filter((key) => key === 'settingsVersion' || key.startsWith('previous'))).toEqual([]);
+        };
+
+        const WRITES: Array<[keyof typeof EXPECTED, string, string]> = [
+            ['writePasswordPolicy', 'password_min_length', '16'],
+            ['writePasswordPolicy', 'password_expiration_days', '45'],
+            ...TOGGLES.map((key) => ['writePasswordPolicy', key, 'false'] as [keyof typeof EXPECTED, string, string]),
+            ['writeOperationalSetting', 'delivery_window_start', '07:45'],
+            ['writeOperationalSetting', 'delivery_window_end', '19:15'],
+            ['writeOperationalSetting', 'max_wait_time_min', '27'],
+        ];
+
+        describe.each(WRITES)('%s: PUT /settings/%s', (row, key, value) => {
+            it.each(ACTORS)('by %s', async (actor) => {
+                const before = await snapshot();
+                expect(before[key]).not.toBe(value);
+                const startedAt = Date.now();
+                const { correlationId, response } = putSetting(tokenOf(actor), key, value);
+                const res = await response;
+                try {
+                    await expectOutcome(actor, res.status, expectedFor(row, actor), correlationId, before, { [key]: value }, key,
+                        { value, previousValue: before[key] }, startedAt);
+                } finally {
+                    if (res.status === 200) {
+                        expect((await putSetting(rootActor.token, key, before[key]).response).status).toBe(200);
+                    }
+                }
+            });
+        });
+
+        it.each(ACTORS)('PUT /settings/alert-thresholds by %s', async (actor) => {
+            const before = await snapshot();
+            const keys = ['sla_alert_min_on_time_pct', 'gps_stale_alert_minutes', 'driver_incident_alert_per_day'] as const;
+            const next = {
+                slaAlertMinOnTimePct: Number(before[keys[0]]) - 1,
+                gpsStaleAlertMinutes: Number(before[keys[1]]) + 1,
+                driverIncidentAlertPerDay: Number(before[keys[2]]) + 1,
+            };
+            const startedAt = Date.now();
+            const { correlationId, response } = h.call('put', '/settings/alert-thresholds', tokenOf(actor), next);
+            const res = await response;
+            await expectOutcome(actor, res.status, expectedFor('writeThresholds', actor), correlationId, before,
+                Object.fromEntries(keys.map((key, index) => [key, String(Object.values(next)[index])])), null,
+                {
+                    ...next, setting: 'alert-thresholds',
+                    previousSlaAlertMinOnTimePct: Number(before[keys[0]]),
+                    previousGpsStaleAlertMinutes: Number(before[keys[1]]),
+                    previousDriverIncidentAlertPerDay: Number(before[keys[2]]),
+                }, startedAt);
+        });
+    });
+
+    // ── concurrency ────────────────────────────────────────────────────────
+    describe('concurrent changes', () => {
+        beforeAll(async () => {
+            // Keeps each transaction open long enough for the others to overlap: without the row lock they would all
+            // read the same version and the same previous value.
+            await h.db.query(`CREATE FUNCTION ${slowTrigger}() RETURNS trigger AS $$ BEGIN PERFORM pg_sleep(0.04); RETURN NEW; END $$ LANGUAGE plpgsql`);
+            await h.db.query(`CREATE TRIGGER ${slowTrigger} BEFORE UPDATE ON settings FOR EACH ROW WHEN (OLD.setting_key <> 'settings_version') EXECUTE FUNCTION ${slowTrigger}()`);
+        });
+        afterAll(async () => {
+            await h.db.query(`DROP TRIGGER IF EXISTS ${slowTrigger} ON settings`);
+            await h.db.query(`DROP FUNCTION IF EXISTS ${slowTrigger}()`);
+            await setPolicy(CLEAN_DEFAULTS);
+        });
+
+        it('simultaneous changes of the same key get consecutive versions and a chain of previous values', async () => {
+            const before = await snapshot();
+            const values = Array.from({ length: 8 }, (_, index) => String(20 + index));
+            const calls = values.map((value) => ({ value, ...putSetting(h.users.admin.token, 'password_min_length', value) }));
+            const responses = await Promise.all(calls.map(async (call) => await call.response));
+            expect(responses.map((res) => [res.status, res.body.value])).toEqual(values.map((value) => [200, value]));
+
+            const changes = (await Promise.all(calls.map(async (call) => {
+                const events = await h.eventsOf(call.correlationId);
+                expect(events).toHaveLength(1);
+                return events[0]!.metadata as { value: string; previousValue: string; settingsVersion: number };
+            }))).sort((a, b) => a.settingsVersion - b.settingsVersion);
+
+            const first = Number(before.settings_version) + 1;
+            expect(changes.map((change) => change.settingsVersion)).toEqual(values.map((_, index) => first + index));
+            expect(changes.map((change) => change.previousValue))
+                .toEqual([before.password_min_length, ...changes.slice(0, -1).map((change) => change.value)]);
+
+            const winner = changes.at(-1)!.value;
+            expect(await snapshot()).toEqual({ ...before, password_min_length: winner, settings_version: String(first + values.length - 1) });
+            const listed = (await h.call('get', '/settings', h.users.admin.token).response).body as Array<{ key: string; value: string }>;
+            expect(listed.find((setting) => setting.key === 'password_min_length')!.value).toBe(winner);
+        }, 30_000);
+
+        it('the three owners changing their own settings at once lose nothing', async () => {
+            await setPolicy(CLEAN_DEFAULTS);
+            const before = await snapshot();
+            const thresholds = {
+                slaAlertMinOnTimePct: Number(before.sla_alert_min_on_time_pct) - 2,
+                gpsStaleAlertMinutes: Number(before.gps_stale_alert_minutes) + 2,
+                driverIncidentAlertPerDay: Number(before.driver_incident_alert_per_day) + 2,
+            };
+            const calls = [
+                putSetting(h.users.admin.token, 'password_require_symbol', 'false'),
+                putSetting(h.users.admin.token, 'password_expiration_days', '60'),
+                putSetting(h.users.coordinator.token, 'max_wait_time_min', '33'),
+                putSetting(h.users.coordinator.token, 'delivery_window_end', '19:45'),
+                h.call('put', '/settings/alert-thresholds', h.users.supervisor.token, thresholds),
+            ];
+            const statuses = await Promise.all(calls.map(async (call) => (await call.response).status));
+            expect(statuses).toEqual([200, 200, 200, 200, 200]);
+
+            const first = Number(before.settings_version) + 1;
+            expect(await snapshot()).toEqual({
+                ...before, password_require_symbol: 'false', password_expiration_days: '60', max_wait_time_min: '33', delivery_window_end: '19:45',
+                sla_alert_min_on_time_pct: String(thresholds.slaAlertMinOnTimePct), gps_stale_alert_minutes: String(thresholds.gpsStaleAlertMinutes),
+                driver_incident_alert_per_day: String(thresholds.driverIncidentAlertPerDay), settings_version: String(first + 4),
+            });
+            const versions = await Promise.all(calls.map(async (call) => (await h.eventsOf(call.correlationId))[0]!.metadata.settingsVersion as number));
+            expect([...versions].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4].map((offset) => first + offset));
+
+            for (const key of ['max_wait_time_min', 'delivery_window_end', 'sla_alert_min_on_time_pct', 'gps_stale_alert_minutes', 'driver_incident_alert_per_day']) {
+                await h.db.query('UPDATE settings SET setting_value = $2 WHERE setting_key = $1', [key, before[key]]);
+            }
+        }, 30_000);
+    });
+
+    // ── reload ─────────────────────────────────────────────────────────────
+    // Keep this block last: passport keeps one global 'jwt' strategy, so booting a second application points the
+    // authentication of the first one at it.
+    describe('state after a restart', () => {
+        it('a second instance of the service started afterwards reads and enforces what was saved', async () => {
+            await setPolicy({ password_min_length: '18', password_require_symbol: 'false' });
+            const restarted = new AuditE2eHarness('pwrestart');
+            try {
+                await restarted.start([]);
+                const stored = await snapshot();
+                const listed = (await restarted.call('get', '/settings', h.users.admin.token).response).body as Array<{ key: string; value: string }>;
+                expect(Object.fromEntries(listed.map(({ key, value }) => [key, value])))
+                    .toEqual(Object.fromEntries(Object.entries(stored).filter(([key]) => key !== 'settings_version')));
+
+                const username = newUsername();
+                const short = await restarted.call('post', '/users', h.users.admin.token, newUserBody(username, 'Abcdefghij1!')).response;
+                expect([short.status, short.body.error]).toEqual([400, 'PASSWORD_TOO_SHORT']);
+                const ok = await restarted.call('post', '/users', h.users.admin.token, newUserBody(username, 'AbcdefghijAbcdef12')).response;
+                expect(ok.status).toBe(201);
+            } finally {
+                await restarted.close();
+            }
+        }, 60_000);
+    });
 });
