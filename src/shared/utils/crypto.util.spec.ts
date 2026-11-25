@@ -28,7 +28,7 @@ describe('hashToken / tokenMatchesHash', () => {
         const other  = issue('b');
         const bcrypt = (await import('bcrypt')).default;
 
-        expect(await bcrypt.compare(other, await hashPassword(stored))).toBe(true);
+        expect(await bcrypt.compare(other, await bcrypt.hash(stored, 4))).toBe(true);
     });
 
     it('a tampered token does not match', () => {

@@ -6,7 +6,7 @@ import { SettingsService } from '../../../modules/settings/services/settings.ser
 import { CacheService } from '../../../plugins/cache/cache.port.js';
 import { CacheUnavailableException } from '../../../plugins/cache/exceptions/index.js';
 import { MailerPort } from '../../../plugins/mailer/mailer.port.js';
-import { comparePassword, hashPassword, hashToken } from '../../../shared/utils/crypto.util.js';
+import { comparePassword, hashShortCode, hashToken } from '../../../shared/utils/crypto.util.js';
 import {
     ACCESS_CODE_COOLDOWN_SECONDS, ACCESS_CODE_SEND_WINDOW_SECONDS, ACCESS_EVENT_CODE_SENT, ACCESS_EVENT_LOCKED, ACCESS_EVENT_VERIFIED,
     ACCESS_SESSION_FORMAT, ACCESS_VERIFY_WINDOW_SECONDS, MAX_ACCESS_CODE_SENDS, MAX_ACCESS_VERIFY_ATTEMPTS, MAX_ACCESS_VERIFY_PER_WINDOW,
@@ -79,7 +79,7 @@ export class TrackingAccessService {
         // The same work for a real and for an unknown code: a code, its hash and a stored record. For an unknown one nobody
         // receives the code, so the record is a decoy that can never be matched but is spent exactly like a real one.
         const code = generateVerificationCode();
-        const record: StoredAccessCode = { hash: await hashPassword(code), dispatchId: target?.dispatch_id ?? null };
+        const record: StoredAccessCode = { hash: await hashShortCode(code), dispatchId: target?.dispatch_id ?? null };
         await this.cached(async () => {
             await this.cache.setWithTtl(accessKey('code', fingerprint), JSON.stringify(record), ttlSeconds);
             await this.cache.delete(accessKey('attempts', fingerprint));
@@ -240,7 +240,7 @@ export class TrackingAccessService {
 /** A bcrypt hash of a random value nobody knows, computed once: what a check against "nothing stored" compares with. */
 let decoyHashPromise: Promise<string> | undefined;
 function decoyHash(): Promise<string> {
-    decoyHashPromise ??= hashPassword(randomBytes(16).toString('hex'));
+    decoyHashPromise ??= hashShortCode(randomBytes(16).toString('hex'));
     return decoyHashPromise;
 }
 

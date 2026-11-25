@@ -28,7 +28,7 @@ import { isPasswordChangeRequired } from '../utils/password-change.util.js';
 
 // A valid bcrypt hash of a throwaway string. Compared against when the username does not exist or is
 // inactive, so those answers take as long as a wrong password (no timing tell to enumerate accounts).
-const DUMMY_PASSWORD_HASH = '$2b$10$QTKT.i..aWZuuWaSNXDU8esuSOXp.tFw2Ul.X.CChZqockTp3QClG';
+const DUMMY_PASSWORD_HASH = 'bcrypt-sha384:$2b$10$QTKT.i..aWZuuWaSNXDU8esuSOXp.tFw2Ul.X.CChZqockTp3QClG';
 
 @Injectable()
 export class AuthService {

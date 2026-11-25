@@ -1,5 +1,5 @@
 import { randomInt } from 'node:crypto';
-import { comparePassword, hashPassword } from '../../../shared/utils/crypto.util.js';
+import { comparePassword, hashShortCode } from '../../../shared/utils/crypto.util.js';
 
 export const OTP_CODE_LENGTH_KEY = 'otp_code_length';
 export const OTP_EXPIRY_MINUTES_KEY = 'otp_expiry_minutes';
@@ -15,7 +15,7 @@ export function otpOptions(length = 6, expiryMinutes = 60): { length: number; tt
 export async function createOtp(length = 6): Promise<{ code: string; hash: string }> {
     const options = otpOptions(length);
     const code = Array.from({ length: options.length }, () => String(randomInt(0, 10))).join('');
-    return { code, hash: await hashPassword(code) };
+    return { code, hash: await hashShortCode(code) };
 }
 
 export async function matchesOtp(code: string, hash: string): Promise<boolean> {

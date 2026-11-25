@@ -2,7 +2,7 @@
 // Todo mockeado (repos de TypeORM, SettingsService) — sin DB, sin red.
 import { describe, expect, it, vi } from 'vitest';
 import { UsersService } from './users.service.js';
-import { PasswordTooShortException, PasswordTooWeakException, PasswordRecentlyUsedException, ConflictingUserFiltersException, InvalidRoleException, UserAlreadyExistsException, UserNotFoundException } from '../exceptions/index.js';
+import { PasswordTooShortException, PasswordTooWeakException, PasswordInvalidCharactersException, PasswordRecentlyUsedException, ConflictingUserFiltersException, InvalidRoleException, UserAlreadyExistsException, UserNotFoundException } from '../exceptions/index.js';
 import { RootAccountProtectedException, CannotModifyOwnAccountException } from '../../../../app/auth/exceptions/index.js';
 import { QueryFailedError } from 'typeorm';
 import { CreateUserDto } from '../dto/create-user.dto.js';
@@ -130,6 +130,15 @@ describe('UsersService — password policy (RF-A25)', () => {
             const dto = Object.assign(new CreateUserDto(), { fullName: 'Ana', username: 'ana', password: 'sinmayuscula1!', roleId: 2 });
 
             await expect(service.create(UserDto, dto)).rejects.toThrow(PasswordTooWeakException);
+        });
+    });
+
+    describe('caracteres que no se pueden distinguir una vez hasheados', () => {
+        it.each(['Abc1!xyz\0Abc1!xyz', 'Abc1!xyz\uD800'])('rechaza %j sin guardar nada', async (password) => {
+            const { service, rawRepo } = buildService();
+
+            await expect(service.updatePassword(1, password)).rejects.toThrow(PasswordInvalidCharactersException);
+            expect(rawRepo.update).not.toHaveBeenCalled();
         });
     });
 

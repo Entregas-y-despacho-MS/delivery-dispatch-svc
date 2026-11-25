@@ -2,7 +2,7 @@ import type { Repository } from 'typeorm';
 
 import { User } from '../../modules/auth/users/entities/user.entity.js';
 import { Role } from '../../modules/auth/roles/entities/role.entity.js';
-import { hashPassword } from '../../shared/utils/crypto.util.js';
+import { hashPassword, isHashableText } from '../../shared/utils/crypto.util.js';
 import { EnvironmentEnum } from '../../shared/enums/environment.enum.js';
 import {
     DEFAULT_PASSWORD_POLICY, PASSWORD_MIN_LENGTH_FLOOR, missingPasswordRequirements,
@@ -70,6 +70,9 @@ export function requireRootPassword(env: RootSeedEnv): string {
         throw new RootSeedPasswordError(
             'SEED_ROOT_PASSWORD must not start or end with whitespace (check for a trailing space or line break).',
         );
+    }
+    if (!isHashableText(password)) {
+        throw new RootSeedPasswordError('SEED_ROOT_PASSWORD contains characters that are not allowed.');
     }
     // The seed runs before any setting exists, so it checks the policy of a clean install (the floor of 8 and the four
     // classes required, ST-310.1); the configured policy applies when the root changes its password at first login.
