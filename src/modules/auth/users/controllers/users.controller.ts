@@ -27,6 +27,7 @@ import { AuditAction } from '../../../audit/admin-audit-events/decorators/audit-
  *   USER_NOT_FOUND        404 — No user with the given ID exists or it was soft-deleted.
  *   USER_ALREADY_EXISTS   409 — A user with the given username or email already exists.
  *   PASSWORD_TOO_SHORT    400 — Password is shorter than settings.password_min_length.
+ *   PASSWORD_TOO_WEAK     400 — Password lacks a character class the policy requires (settings.password_require_*).
  *   INVALID_ROLE          400 — The given roleId does not exist (PATCH /users/:id/role).
  *   CANNOT_MODIFY_OWN_ACCOUNT 403 — Tried to delete/deactivate/change the role of one's own account.
  *   ROOT_ACCOUNT_PROTECTED 403 — An admin tried to create/edit/delete a root account or give the root role.
@@ -82,9 +83,9 @@ export class UsersController {
     @HttpCode(HttpStatus.CREATED)
     @ApiOperation({
         summary:     'Create a user',
-        description: 'Creates an internal user account. `fullName`, `username`, `password` and `roleId` are required; `email` is optional. `username` (and `email`, if given) must not belong to another user (409 USER_ALREADY_EXISTS). The password must be at least 8 characters with an uppercase letter, a lowercase letter, a number and a symbol, and at least the length configured in settings (`password_min_length`, 400 PASSWORD_TOO_SHORT). The account is created active, and the user is asked to change the password at first login. Requires admin role or root.',
+        description: 'Creates an internal user account. `fullName`, `username`, `password` and `roleId` are required; `email` is optional. `username` (and `email`, if given) must not belong to another user (409 USER_ALREADY_EXISTS). The password must meet the policy configured in settings: at least `password_min_length` characters, never below 8 (400 PASSWORD_TOO_SHORT), and each class required by `password_require_uppercase`, `password_require_lowercase`, `password_require_number` and `password_require_symbol` (400 PASSWORD_TOO_WEAK). The account is created active, and the user is asked to change the password at first login. Requires admin role or root.',
     })
-    @ApiBadRequests({ validation: true, example: ['Full name is required.', 'Role ID must be an integer.'], errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }, { code: 'INVALID_ROLE', message: 'The given role does not exist.' }] })
+    @ApiBadRequests({ validation: true, example: ['Full name is required.', 'Role ID must be an integer.'], errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }, { code: 'PASSWORD_TOO_WEAK', message: 'Password must include at least 1 uppercase letter, 1 number.' }, { code: 'INVALID_ROLE', message: 'The given role does not exist.' }] })
     @ApiCreatedResponse({ type: UserDto })
     @ApiConflict({ code: 'USER_ALREADY_EXISTS', message: 'A user with this username or email already exists.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
@@ -98,10 +99,10 @@ export class UsersController {
     @AdminOnly()
     @ApiOperation({
         summary:     'Update a user',
-        description: 'Partially updates a user: only the fields sent are changed (an empty body is a no-op). `email` can be cleared by sending `null`; every other field rejects `null`. `active: false` deactivates the account (the user can no longer log in) and `true` reactivates it. A new `password` resets the user\'s password (admin action: the password history is not checked, and the user\'s own sessions are not closed). A changed `username` or `email` must not belong to another user (409). To change the role use `PATCH /users/:id/role` instead — it is a separate endpoint because it also revokes the session (RF-A27). Root accounts can only be edited by root (403 ROOT_ACCOUNT_PROTECTED). You cannot deactivate your own account (403 CANNOT_MODIFY_OWN_ACCOUNT). A deactivated or deleted user loses access on their very next request, and a password change closes every access token issued before it. Requires admin role or root.',
+        description: 'Partially updates a user: only the fields sent are changed (an empty body is a no-op). `email` can be cleared by sending `null`; every other field rejects `null`. `active: false` deactivates the account (the user can no longer log in) and `true` reactivates it. A new `password` resets the user\'s password (admin action: it must meet the configured password policy, 400 PASSWORD_TOO_SHORT or PASSWORD_TOO_WEAK; the password history is not checked, and the user\'s own sessions are not closed). A changed `username` or `email` must not belong to another user (409). To change the role use `PATCH /users/:id/role` instead — it is a separate endpoint because it also revokes the session (RF-A27). Root accounts can only be edited by root (403 ROOT_ACCOUNT_PROTECTED). You cannot deactivate your own account (403 CANNOT_MODIFY_OWN_ACCOUNT). A deactivated or deleted user loses access on their very next request, and a password change closes every access token issued before it. Requires admin role or root.',
     })
     @ApiIdParam('User')
-    @ApiBadRequests({ validation: true, example: ['Email must be a valid email address.'], id: true, errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }] })
+    @ApiBadRequests({ validation: true, example: ['Email must be a valid email address.'], id: true, errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }, { code: 'PASSWORD_TOO_WEAK', message: 'Password must include at least 1 uppercase letter, 1 number.' }] })
     @ApiOkResponse({ type: UserDto })
     @ApiNotFound({ code: 'USER_NOT_FOUND', message: 'User not found.' })
     @ApiConflict({ code: 'USER_ALREADY_EXISTS', message: 'A user with this username or email already exists.' })

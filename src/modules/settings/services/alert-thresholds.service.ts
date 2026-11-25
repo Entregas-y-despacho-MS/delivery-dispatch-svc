@@ -19,8 +19,14 @@ export class AlertThresholdsService {
 
     /** Validates and saves the three values together: one transaction, one version bump, cache replaced. */
     async update(dto: UpdateAlertThresholdsDto): Promise<AlertThresholdsDto> {
+        return (await this.updateWithChange(dto)).thresholds;
+    }
+
+    /** Same as `update`, plus the settings version it produced and the previous value of each threshold (for the audit event). */
+    async updateWithChange(dto: UpdateAlertThresholdsDto): Promise<{ thresholds: AlertThresholdsDto; version: number; previous: Record<string, string> }> {
         const entries = Object.fromEntries(FIELDS.map((field) => [ALERT_THRESHOLD_KEYS[field], String(dto[field])]));
-        return this.toDto(await this.settings.updateMany(SettingDto, entries));
+        const { settings, version, previous } = await this.settings.applyUpdates(SettingDto, entries);
+        return { thresholds: this.toDto(settings), version, previous };
     }
 
     private toDto(settings: SettingDto[]): AlertThresholdsDto {

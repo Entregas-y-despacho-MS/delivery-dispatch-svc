@@ -89,7 +89,7 @@ Cada fila es un handler decorado con `@AuditAction`. El catálogo (`domain/admin
 | `dispatch.rescheduled` | dispatch | PATCH /dispatches/:id/priority | `DispatchesController.changePriority` | `admin-audit-dispatch-decisions` |
 | `audit.exported` | audit | GET /audit/admin-events/export | `AdminAuditEventsController.exportEvents` | `admin-audit-export` |
 
-Qué guarda `metadata` según la acción (valores fijos del código y campos declarados del body; las claves de secretos y datos personales se descartan siempre). Salvedad: `value` de `setting.updated` es el valor que se escribió, texto de hasta 200 caracteres; hoy las claves de `settings` son reglas de negocio, así que una clave futura que guarde un secreto no debe auditarse con `value`:
+Qué guarda `metadata` según la acción (valores fijos del código, campos declarados del body y, solo donde se indica, lo que el handler anota con `annotateAudit` una vez que actuó, p. ej. la versión de settings; todo pasa por el mismo filtro; las claves de secretos y datos personales se descartan siempre). Salvedad: `value` de `setting.updated` es el valor que se escribió, texto de hasta 200 caracteres; hoy las claves de `settings` son reglas de negocio, así que una clave futura que guarde un secreto no debe auditarse con `value`:
 
 | Acción | `metadata` |
 |---|---|
@@ -97,7 +97,7 @@ Qué guarda `metadata` según la acción (valores fijos del código y campos dec
 | `user.updated` | `active`. No distingue el reseteo de contraseña por un admin de una edición de datos: `metadata` fija no puede depender del cuerpo |
 | `user.role_changed` | `roleId` |
 | `auth.two_factor_changed` | `step`: `enable`, `confirm` o `disable` |
-| `setting.updated` | `value` (por clave) o los tres umbrales y `setting: alert-thresholds` |
+| `setting.updated` | `value` (por clave) y, si el cambio se guardó, `settingsVersion` (versión que produjo) y `previousValue` (valor reemplazado); o los tres umbrales, `settingsVersion`, `previous<Umbral>` y `setting: alert-thresholds`. Una solicitud denegada o rechazada no los lleva: no hubo cambio ni versión. Los valores son reglas de negocio, nunca secretos (ST-310.1) |
 | `catalog.changed` | `catalog` y `operation` (`create`, `update`, `delete`) |
 | `vehicle.changed` | `operation` (`create`, `status`, `update`, `delete`) y `status` en el cambio de estado |
 | `planning.run` | `task`: `generate` o `cutoff` |

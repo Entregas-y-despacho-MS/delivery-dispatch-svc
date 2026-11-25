@@ -1,8 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsEmail, IsInt, IsNotEmpty, IsOptional, IsPositive, IsString, IsStrongPassword, Max, MaxLength } from 'class-validator';
+import { IsEmail, IsInt, IsNotEmpty, IsOptional, IsPositive, IsString, Max, MaxLength, MinLength } from 'class-validator';
 import { INT4_MAX } from '../../../../shared/constants/int4.js';
-import { STRONG_PASSWORD_OPTIONS, STRONG_PASSWORD_MESSAGE } from '../../../../shared/validators/password.validator.js';
+import { PASSWORD_MIN_LENGTH_FLOOR, PASSWORD_TOO_SHORT_FLOOR_MESSAGE } from '../../../../shared/validators/password.validator.js';
 
 // Emails are stored and looked up in lowercase: "Ana@x.com" and "ana@x.com" are the same address.
 export const normalizeEmail = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toLowerCase() : value);
@@ -27,10 +27,10 @@ export class CreateUserDto {
     @MaxLength(150)
     email?: string;
 
-    @ApiProperty({ example: 'Passw0rd!', minLength: 8, maxLength: 255, description: 'Must be at least 8 characters with an uppercase letter, a lowercase letter, a number and a symbol, and meet the minimum length set in settings (password_min_length). It is stored hashed and never returned' })
+    @ApiProperty({ example: 'Passw0rd!', minLength: 8, maxLength: 255, description: 'Must meet the password policy set by the administrator: at least the minimum length in settings (password_min_length, never below 8) and the required character classes (password_require_uppercase, password_require_lowercase, password_require_number, password_require_symbol; all required by default). It is stored hashed and never returned' })
     @IsString()
     @IsNotEmpty({ message: 'Password is required.' })
-    @IsStrongPassword(STRONG_PASSWORD_OPTIONS, { message: STRONG_PASSWORD_MESSAGE })
+    @MinLength(PASSWORD_MIN_LENGTH_FLOOR, { message: PASSWORD_TOO_SHORT_FLOOR_MESSAGE })
     @MaxLength(255)
     password: string;
 

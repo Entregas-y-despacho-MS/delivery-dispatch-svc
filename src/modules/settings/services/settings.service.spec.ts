@@ -31,6 +31,10 @@ function build() {
         ['sla_alert_threshold_pct', { key: 'sla_alert_threshold_pct', value: '90', description: null, updatedAt: new Date() }],
         ['password_min_length', { key: 'password_min_length', value: '8', description: null, updatedAt: new Date() }],
         ['password_expiration_days', { key: 'password_expiration_days', value: '90', description: null, updatedAt: new Date() }],
+        ['password_require_uppercase', { key: 'password_require_uppercase', value: 'true', description: null, updatedAt: new Date() }],
+        ['password_require_lowercase', { key: 'password_require_lowercase', value: 'true', description: null, updatedAt: new Date() }],
+        ['password_require_number', { key: 'password_require_number', value: 'true', description: null, updatedAt: new Date() }],
+        ['password_require_symbol', { key: 'password_require_symbol', value: 'true', description: null, updatedAt: new Date() }],
         ['otp_code_length', { key: 'otp_code_length', value: '6', description: null, updatedAt: new Date() }],
         ['otp_expiry_minutes', { key: 'otp_expiry_minutes', value: '60', description: null, updatedAt: new Date() }],
         ['max_failed_login_attempts', { key: 'max_failed_login_attempts', value: '5', description: null, updatedAt: new Date() }],
@@ -93,6 +97,58 @@ describe('SettingsService', () => {
         expect(repository.update).toHaveBeenCalledWith(SETTINGS_VERSION_KEY, { value: '1' });
         await expect(service.getNumber('session_inactivity_minutes', 30)).resolves.toBe(45);
         await expect(service.getVersion()).resolves.toBe(1);
+    });
+
+    describe('applyUpdates (audit data of a change)', () => {
+        it('returns the new values, the version the change produced and the values it replaced', async () => {
+            const { service } = build();
+
+            const change = await service.applyUpdates(SettingDto, { password_require_symbol: 'false', password_min_length: '12' });
+
+            expect(change.settings.map(({ key, value }) => [key, value])).toEqual([['password_require_symbol', 'false'], ['password_min_length', '12']]);
+            expect(change.version).toBe(1);
+            expect(change.previous).toEqual({ password_require_symbol: 'true', password_min_length: '8' });
+            expect((await service.applyUpdates(SettingDto, { password_require_symbol: 'true' })).previous).toEqual({ password_require_symbol: 'false' });
+        });
+
+        it('returns nothing to audit, and writes nothing, when the value is rejected', async () => {
+            const { service, repository } = build();
+
+            await expect(service.applyUpdates(SettingDto, { password_require_symbol: 'maybe' })).rejects.toThrow(InvalidSettingValueException);
+
+            expect(repository.update).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('password complexity options (ST-310.1)', () => {
+        it('saves "false", bumps the version once and the next read sees it', async () => {
+            const { service, repository } = build();
+
+            const updated = await service.update(SettingDto, 'password_require_symbol', 'false');
+
+            expect(updated.value).toBe('false');
+            expect(repository.update).toHaveBeenCalledWith('password_require_symbol', { value: 'false' });
+            expect(repository.update).toHaveBeenCalledWith(SETTINGS_VERSION_KEY, { value: '1' });
+            await expect(service.getBoolean('password_require_symbol', true)).resolves.toBe(false);
+            await expect(service.getBoolean('password_require_number', false)).resolves.toBe(true);
+        });
+
+        it.each(['yes', 'TRUE', '1', ''])('rejects %j before writing anything', async (value) => {
+            const { service, repository } = build();
+
+            await expect(service.update(SettingDto, 'password_require_uppercase', value)).rejects.toThrow(InvalidSettingValueException);
+
+            expect(repository.update).not.toHaveBeenCalled();
+        });
+
+        it('uses the fallback when the key is missing or holds something that is not true/false', async () => {
+            const { service, settings } = build();
+            settings.delete('password_require_number');
+            settings.set('password_require_symbol', { key: 'password_require_symbol', value: 'maybe', description: null, updatedAt: new Date() });
+
+            await expect(service.getBoolean('password_require_number', true)).resolves.toBe(true);
+            await expect(service.getBoolean('password_require_symbol', true)).resolves.toBe(true);
+        });
     });
 
     it('returns PostgreSQL values when the cache is unavailable', async () => {

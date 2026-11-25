@@ -2,6 +2,7 @@ import { ALERT_THRESHOLD_KEYS, ALERT_THRESHOLD_LIMITS } from '../settings.consta
 
 type Rule =
     | { kind: 'int'; min: number; max: number; unit: string }
+    | { kind: 'bool' }
     | { kind: 'time' }
     | { kind: 'time-list' }
     | { kind: 'day-list' }
@@ -16,6 +17,10 @@ const RULES: Record<string, Rule> = {
     sla_alert_threshold_pct:       { kind: 'int', min: 1, max: 100, unit: 'percent' },
     password_min_length:           { kind: 'int', min: 8, max: 128, unit: 'characters' },
     password_expiration_days:      { kind: 'int', min: 1, max: 3650, unit: 'days' },
+    password_require_uppercase:    { kind: 'bool' },
+    password_require_lowercase:    { kind: 'bool' },
+    password_require_number:       { kind: 'bool' },
+    password_require_symbol:       { kind: 'bool' },
     otp_code_length:               { kind: 'int', min: 4, max: 10, unit: 'digits' },
     otp_expiry_minutes:            { kind: 'int', min: 1, max: 1440, unit: 'minutes' },
     max_failed_login_attempts:     { kind: 'int', min: 1, max: 100, unit: 'attempts' },
@@ -85,6 +90,9 @@ export function validateSettingValue(key: string, value: string): string | null 
     const rule = RULES[key];
     if (!rule) return `${key} has no validation rule.`;
 
+    if (rule.kind === 'bool') {
+        return value === 'true' || value === 'false' ? null : `${key} must be "true" or "false".`;
+    }
     if (rule.kind === 'time') {
         return parseTime(value) !== null ? null : `${key} must be a time of day as HH:mm, from 00:00 to 23:59 (e.g. "08:00").`;
     }

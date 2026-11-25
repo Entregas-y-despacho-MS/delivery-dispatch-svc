@@ -2,7 +2,7 @@
 // Todo mockeado (repos de TypeORM, SettingsService) — sin DB, sin red.
 import { describe, expect, it, vi } from 'vitest';
 import { UsersService } from './users.service.js';
-import { PasswordTooShortException, PasswordRecentlyUsedException, ConflictingUserFiltersException, InvalidRoleException, UserAlreadyExistsException, UserNotFoundException } from '../exceptions/index.js';
+import { PasswordTooShortException, PasswordTooWeakException, PasswordRecentlyUsedException, ConflictingUserFiltersException, InvalidRoleException, UserAlreadyExistsException, UserNotFoundException } from '../exceptions/index.js';
 import { RootAccountProtectedException, CannotModifyOwnAccountException } from '../../../../app/auth/exceptions/index.js';
 import { QueryFailedError } from 'typeorm';
 import { CreateUserDto } from '../dto/create-user.dto.js';
@@ -12,7 +12,7 @@ import { UserDto } from '../dto/user.dto.js';
 import { plainToInstance } from 'class-transformer';
 import { hashPassword } from '../../../../shared/utils/crypto.util.js';
 
-function buildService(overrides: { minLength?: number } = {}) {
+function buildService(overrides: { minLength?: number; flags?: Record<string, boolean> } = {}) {
     const rawRepo = {
         findOneByOrFail: vi.fn(),
         update:          vi.fn(),
@@ -28,7 +28,8 @@ function buildService(overrides: { minLength?: number } = {}) {
         existsBy: vi.fn().mockResolvedValue(true),
     };
     const settings = {
-        getNumber: vi.fn().mockReturnValue(overrides.minLength ?? 8),
+        getNumber:  vi.fn().mockReturnValue(overrides.minLength ?? 8),
+        getBoolean: vi.fn((key: string, fallback: boolean) => Promise.resolve(overrides.flags?.[key] ?? fallback)),
     };
 
     const service = new UsersService(rawRepo as any, historyRepo as any, roleRepo as any, settings as any);
@@ -52,6 +53,83 @@ describe('UsersService — password policy (RF-A25)', () => {
 
             expect(rawRepo.update).toHaveBeenCalled();
             expect(historyRepo.save).toHaveBeenCalled();
+        });
+    });
+
+    describe('ST-310.1 — complejidad configurable (settings.password_require_*)', () => {
+        const current = 'CurrentPassw0rd!';
+        // [option, password lacking only that class, a password that has it, setting key]
+        const cases: Array<[string, string, string, string]> = [
+            ['uppercase', 'lowercase1!', 'Lowercase1!', 'password_require_uppercase'],
+            ['lowercase', 'UPPERCASE1!', 'UPPERCASe1!', 'password_require_lowercase'],
+            ['number',    'NoNumber!!',  'NoNumber1!',  'password_require_number'],
+            ['symbol',    'NoSymbol12',  'NoSymbol1!',  'password_require_symbol'],
+        ];
+
+        it.each(cases)('con %s exigido rechaza una contraseña que no lo cumple (PASSWORD_TOO_WEAK) y no escribe', async (_name, weak, _ok, key) => {
+            const { service, rawRepo, historyRepo } = buildService({ flags: { [key]: true } });
+            rawRepo.findOneByOrFail.mockResolvedValue({ id: 1, passwordHash: await hashPassword(current) });
+
+            await expect(service.updatePassword(1, weak)).rejects.toThrow(PasswordTooWeakException);
+            expect(rawRepo.update).not.toHaveBeenCalled();
+            expect(historyRepo.save).not.toHaveBeenCalled();
+        });
+
+        it.each(cases)('con %s desactivado acepta esa misma contraseña', async (_name, weak, _ok, key) => {
+            const { service, rawRepo } = buildService({ flags: { [key]: false } });
+            rawRepo.findOneByOrFail.mockResolvedValue({ id: 1, passwordHash: await hashPassword(current) });
+
+            await service.updatePassword(1, weak);
+
+            expect(rawRepo.update).toHaveBeenCalled();
+        });
+
+        it.each(cases)('con %s exigido acepta una contraseña que lo cumple', async (_name, _weak, ok, key) => {
+            const { service, rawRepo } = buildService({ flags: { [key]: true } });
+            rawRepo.findOneByOrFail.mockResolvedValue({ id: 1, passwordHash: await hashPassword(current) });
+
+            await service.updatePassword(1, ok);
+
+            expect(rawRepo.update).toHaveBeenCalled();
+        });
+
+        it('lista en el mensaje todo lo que falta', async () => {
+            const { service, rawRepo } = buildService();
+            rawRepo.findOneByOrFail.mockResolvedValue({ id: 1, passwordHash: await hashPassword(current) });
+
+            await expect(service.updatePassword(1, 'abcdefghij')).rejects.toThrow('1 uppercase letter, 1 number, 1 special character');
+        });
+
+        it('con todo desactivado solo exige el largo mínimo', async () => {
+            const flags = { password_require_uppercase: false, password_require_lowercase: false, password_require_number: false, password_require_symbol: false };
+            const { service, rawRepo } = buildService({ flags });
+            rawRepo.findOneByOrFail.mockResolvedValue({ id: 1, passwordHash: await hashPassword(current) });
+
+            await service.updatePassword(1, 'abcdefgh');
+            await expect(service.updatePassword(1, 'abcdefg')).rejects.toThrow(PasswordTooShortException);
+        });
+
+        it('nunca baja de 8 caracteres aunque el setting diga menos', async () => {
+            const flags = { password_require_uppercase: false, password_require_number: false, password_require_symbol: false };
+            const { service, rawRepo } = buildService({ minLength: 3, flags });
+            rawRepo.findOneByOrFail.mockResolvedValue({ id: 1, passwordHash: await hashPassword(current) });
+
+            await expect(service.updatePassword(1, 'abcdefg')).rejects.toThrow(PasswordTooShortException);
+        });
+
+        it('revisa el largo antes que la complejidad', async () => {
+            const { service, rawRepo } = buildService({ minLength: 12 });
+            rawRepo.findOneByOrFail.mockResolvedValue({ id: 1, passwordHash: await hashPassword(current) });
+
+            await expect(service.updatePassword(1, 'abc')).rejects.toThrow(PasswordTooShortException);
+        });
+
+        it('aplica la política también al alta', async () => {
+            const { service, rawRepo } = buildService();
+            rawRepo.findOne.mockResolvedValue(null);
+            const dto = Object.assign(new CreateUserDto(), { fullName: 'Ana', username: 'ana', password: 'sinmayuscula1!', roleId: 2 });
+
+            await expect(service.create(UserDto, dto)).rejects.toThrow(PasswordTooWeakException);
         });
     });
 
@@ -343,6 +421,23 @@ describe('UsersService — roleId inexistente (antes daba 500 por la FK)', () =>
 
         expect(roleRepo.existsBy).not.toHaveBeenCalled();
         expect(rawRepo.update).toHaveBeenCalledWith(5, { fullName: 'Ana B' }); // roleId nunca llega al payload
+    });
+
+    it('update() aplica la política vigente a la contraseña que resetea el admin y no escribe si no la cumple', async () => {
+        const { service, rawRepo } = buildService({ flags: { password_require_symbol: true } });
+        rawRepo.findOne.mockResolvedValue({ id: 5, username: 'ana', email: null });
+
+        await expect(service.update(UserDto, 5, { password: 'NoSymbols123' } as any)).rejects.toThrow(PasswordTooWeakException);
+        expect(rawRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('update() acepta esa misma contraseña cuando el admin apagó la opción de símbolo', async () => {
+        const { service, rawRepo } = buildService({ flags: { password_require_symbol: false } });
+        rawRepo.findOne.mockResolvedValue({ id: 5, username: 'ana', email: null });
+
+        await service.update(UserDto, 5, { password: 'NoSymbols123' } as any);
+
+        expect(rawRepo.update).toHaveBeenCalledWith(5, expect.objectContaining({ passwordHash: expect.any(String) }));
     });
 
     it('update() con un body vacío no escribe nada (antes escribía un UPDATE vacío igual)', async () => {

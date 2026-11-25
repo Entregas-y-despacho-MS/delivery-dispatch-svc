@@ -28,7 +28,9 @@ describe('audit of settings and catalogs (ST-68.2)', () => {
             expect((await response).status).toBe(200);
             expect(await h.eventsOf(correlationId)).toEqual([expect.objectContaining({
                 actor_user_id: h.users.coordinator.id, actor_role: 'coordinator', action: 'setting.updated', entity_type: 'setting',
-                entity_id: settingKey, result: 'success', status_code: 200, metadata: { value: setting_value },
+                entity_id: settingKey, result: 'success', status_code: 200,
+                // ST-310.1 / ES-68: the version the change produced and the value it replaced (the same one here).
+                metadata: { value: setting_value, previousValue: setting_value, settingsVersion: expect.any(Number) },
             })]);
         });
 
@@ -56,7 +58,13 @@ describe('audit of settings and catalogs (ST-68.2)', () => {
             expect((await allowed.response).status).toBe(200);
             expect(await h.eventsOf(allowed.correlationId)).toEqual([expect.objectContaining({
                 actor_user_id: h.users.supervisor.id, action: 'setting.updated', entity_type: 'setting', entity_id: null,
-                result: 'success', status_code: 200, metadata: { ...current, setting: 'alert-thresholds' },
+                result: 'success', status_code: 200,
+                metadata: {
+                    ...current, setting: 'alert-thresholds', settingsVersion: expect.any(Number),
+                    previousSlaAlertMinOnTimePct: current.slaAlertMinOnTimePct,
+                    previousGpsStaleAlertMinutes: current.gpsStaleAlertMinutes,
+                    previousDriverIncidentAlertPerDay: current.driverIncidentAlertPerDay,
+                },
             })]);
 
             const denied = h.call('put', '/settings/alert-thresholds', h.users.coordinator.token, current);
