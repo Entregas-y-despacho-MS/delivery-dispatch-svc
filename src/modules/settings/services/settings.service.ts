@@ -61,6 +61,15 @@ export class SettingsService implements OnModuleInit, OnModuleDestroy {
         return parsed;
     }
 
+    /** Reads a setting stored as the text "true" or "false"; anything else (missing, blank, malformed) uses the fallback. */
+    async getBoolean(key: string, fallback: boolean): Promise<boolean> {
+        const value = await this.readSetting(key);
+        if (value === 'true') return true;
+        if (value === 'false') return false;
+        this.logger.warn(`Setting "${key}" is missing or not "true"/"false", using fallback ${fallback}.`);
+        return fallback;
+    }
+
     async getVersion(): Promise<number> {
         const snapshot = await this.readSnapshot();
         if (snapshot) return snapshot.version;

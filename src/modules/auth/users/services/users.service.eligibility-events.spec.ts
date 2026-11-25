@@ -14,7 +14,7 @@ function build(over: { active?: boolean; roleId?: number; emitThrows?: boolean }
     };
     const roleRepo = { existsBy: vi.fn().mockResolvedValue(true) };
     const events = { emit: vi.fn(() => { if (over.emitThrows) throw new Error('listener failed'); return true; }) };
-    const service = new UsersService(rawRepo as any, { find: vi.fn() } as any, roleRepo as any, { getNumber: vi.fn() } as any, events as any);
+    const service = new UsersService(rawRepo as any, { find: vi.fn() } as any, roleRepo as any, { getNumber: vi.fn(), getBoolean: vi.fn() } as any, events as any);
     return { service, rawRepo, events };
 }
 

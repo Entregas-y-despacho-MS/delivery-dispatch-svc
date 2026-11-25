@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, IsStrongPassword, MaxLength } from 'class-validator';
-import { STRONG_PASSWORD_OPTIONS, STRONG_PASSWORD_MESSAGE } from '../../../shared/validators/password.validator.js';
+import { IsNotEmpty, IsString, MaxLength, MinLength } from 'class-validator';
+import { PASSWORD_MIN_LENGTH_FLOOR, PASSWORD_TOO_SHORT_FLOOR_MESSAGE } from '../../../shared/validators/password.validator.js';
 
 export class ChangePasswordDto {
     @ApiProperty({ example: 'OldPassw0rd!', description: 'The password you use now, to confirm it is really you' })
@@ -8,10 +8,10 @@ export class ChangePasswordDto {
     @IsNotEmpty({ message: 'Current password is required.' })
     currentPassword: string;
 
-    @ApiProperty({ example: 'NewPassw0rd!', minLength: 8, maxLength: 255, description: 'Must be at least 8 characters with an uppercase letter, a lowercase letter, a number and a symbol, and meet the minimum length set in settings. It must also differ from the current password and the last 3 used' })
+    @ApiProperty({ example: 'NewPassw0rd!', minLength: 8, maxLength: 255, description: 'Must meet the password policy set by the administrator: at least the minimum length in settings (password_min_length, never below 8) and the required character classes (password_require_*; all required by default). It must also differ from the current password and the last 3 used' })
     @IsString()
     @IsNotEmpty({ message: 'New password is required.' })
-    @IsStrongPassword(STRONG_PASSWORD_OPTIONS, { message: STRONG_PASSWORD_MESSAGE })
+    @MinLength(PASSWORD_MIN_LENGTH_FLOOR, { message: PASSWORD_TOO_SHORT_FLOOR_MESSAGE })
     @MaxLength(255)
     newPassword: string;
 }

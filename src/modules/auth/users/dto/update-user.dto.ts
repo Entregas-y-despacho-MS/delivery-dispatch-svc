@@ -1,9 +1,9 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsEmail, IsOptional, IsString, IsStrongPassword, MaxLength } from 'class-validator';
+import { IsBoolean, IsEmail, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { normalizeEmail } from './create-user.dto.js';
 import { OptionalNotNull } from '../../../../shared/validators/optional-not-null.validator.js';
-import { STRONG_PASSWORD_OPTIONS, STRONG_PASSWORD_MESSAGE } from '../../../../shared/validators/password.validator.js';
+import { PASSWORD_MIN_LENGTH_FLOOR, PASSWORD_TOO_SHORT_FLOOR_MESSAGE } from '../../../../shared/validators/password.validator.js';
 
 export class UpdateUserDto {
     @ApiPropertyOptional({ example: 'Ana Torrez', maxLength: 150, description: 'New full name. null is rejected' })
@@ -27,10 +27,10 @@ export class UpdateUserDto {
     @MaxLength(150)
     email?: string;
 
-    @ApiPropertyOptional({ example: 'NewPassw0rd!', minLength: 8, maxLength: 255, description: 'Resets the password (admin action). Must be at least 8 characters with an uppercase letter, a lowercase letter, a number and a symbol, and meet the minimum length set in settings (password_min_length). null is rejected' })
+    @ApiPropertyOptional({ example: 'NewPassw0rd!', minLength: 8, maxLength: 255, description: 'Resets the password (admin action). Must meet the password policy set by the administrator: at least the minimum length in settings (password_min_length, never below 8) and the required character classes (password_require_uppercase, password_require_lowercase, password_require_number, password_require_symbol; all required by default). null is rejected' })
     @OptionalNotNull()
     @IsString()
-    @IsStrongPassword(STRONG_PASSWORD_OPTIONS, { message: STRONG_PASSWORD_MESSAGE })
+    @MinLength(PASSWORD_MIN_LENGTH_FLOOR, { message: PASSWORD_TOO_SHORT_FLOOR_MESSAGE })
     @MaxLength(255)
     password?: string;
 

@@ -12,7 +12,7 @@ import { CreateUserDto } from '../dto/create-user.dto.js';
 import { UpdateUserDto } from '../dto/update-user.dto.js';
 import { FindAllUsersParamsDto, UserSortBy } from '../dto/find-all-users-params.dto.js';
 import {
-    UserNotFoundException, UserAlreadyExistsException, PasswordTooShortException,
+    UserNotFoundException, UserAlreadyExistsException, PasswordTooShortException, PasswordTooWeakException,
     PasswordRecentlyUsedException, ConflictingUserFiltersException, InvalidRoleException,
 } from '../exceptions/index.js';
 import { DtoRepository, isUniqueViolation } from '../../../../shared/orm/index.js';
@@ -23,6 +23,7 @@ import { PaginationResponseDto } from '../../../../shared/dto/index.js';
 import { FindOptions, MutationOptions } from '../../../../shared/dto/options.dto.js';
 import { hashPassword, comparePassword } from '../../../../shared/utils/crypto.util.js';
 import { escapeLike } from '../../../../shared/utils/like.util.js';
+import { PASSWORD_MIN_LENGTH_FLOOR, missingPasswordRequirements, type PasswordPolicy } from '../../../../shared/validators/password.validator.js';
 import { RoleEnum, UserStatusEnum } from '../../../../shared/enums/index.js';
 import { SettingsService } from '../../../settings/services/settings.service.js';
 
@@ -396,10 +397,28 @@ export class UsersService {
         if (!(await repo.existsBy({ id: roleId }))) throw new InvalidRoleException();
     }
 
-    /** Backed by settings.password_min_length — every code path that sets a password goes through here. */
+    /**
+     * The effective password policy (ST-310.1): minimum length and the four character-class options, read from
+     * settings on every call so a change applies to the next password without a restart. An option that cannot be
+     * read stays required, and the length never drops below the floor of 8.
+     */
+    private async loadPasswordPolicy(): Promise<PasswordPolicy> {
+        const configuredLength = await this.settings.getNumber('password_min_length', PASSWORD_MIN_LENGTH_FLOOR);
+        return {
+            minLength:        Math.max(PASSWORD_MIN_LENGTH_FLOOR, configuredLength),
+            requireUppercase: await this.settings.getBoolean('password_require_uppercase', true),
+            requireLowercase: await this.settings.getBoolean('password_require_lowercase', true),
+            requireNumber:    await this.settings.getBoolean('password_require_number', true),
+            requireSymbol:    await this.settings.getBoolean('password_require_symbol', true),
+        };
+    }
+
+    /** Every code path that sets a password goes through here: create, admin update, change and reset. */
     private async validatePasswordPolicy(plainPassword: string): Promise<void> {
-        const minLength = await this.settings.getNumber('password_min_length', 6);
-        if (plainPassword.length < minLength) throw new PasswordTooShortException(minLength);
+        const policy = await this.loadPasswordPolicy();
+        if (plainPassword.length < policy.minLength) throw new PasswordTooShortException(policy.minLength);
+        const missing = missingPasswordRequirements(plainPassword, policy);
+        if (missing.length > 0) throw new PasswordTooWeakException(missing);
     }
 
     /** RF-A25, Escenario 3 — rejects the current password and the last PASSWORD_HISTORY_SIZE ones. */
