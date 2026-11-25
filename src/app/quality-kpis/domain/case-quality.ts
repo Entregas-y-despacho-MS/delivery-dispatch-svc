@@ -8,6 +8,10 @@ const MS_PER_MINUTE = 60_000;
 export interface ComplaintCaseRow {
     caseId: number;
     dispatchId: number;
+    /** Reason code of the CRM case, as it arrived. */
+    reasonCode: string;
+    /** received | assigned | in_investigation | decided. */
+    investigationStatus: string;
     openedAt: Date;
     investigationStartedAt: Date | null;
     decidedAt: Date | null;

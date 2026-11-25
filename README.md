@@ -14,9 +14,9 @@ Scaffolded with [create-nestkit](https://www.npmjs.com/package/@darkj/create-nes
 
 ## Getting Started
 ```bash
-cp .env.example .env   # fill in your values
+cp .env.example .env   # fill in your values — SEED_ROOT_PASSWORD has no default and is required by `npm run seed`
 npm run migration:run  # apply the initial schema
-npm run seed            # create the 5 roles + a root user + a development Supervisor user
+npm run seed            # create the 5 roles + a root user (needs SEED_ROOT_PASSWORD) + development users
 npm run start:dev
 ```
 
@@ -32,8 +32,14 @@ Health check: `http://localhost:3000/api/health`
 | `root` | `ROOT` | `SEED_ROOT_USERNAME`, `SEED_ROOT_FULL_NAME`, `SEED_ROOT_EMAIL`, `SEED_ROOT_PASSWORD` |
 | `supervisor` | `SUPERVISOR` | `SEED_SUPERVISOR_USERNAME`, `SEED_SUPERVISOR_FULL_NAME`, `SEED_SUPERVISOR_EMAIL`, `SEED_SUPERVISOR_PASSWORD` |
 
-Los valores por defecto están en `src/database/seeds/seed.ts`. Son solo para desarrollo: en cualquier otro
-entorno define las contraseñas por variable de entorno. Los usuarios del resto de los roles (administrador,
+**Root (ST-310.2):** no tiene contraseña por defecto, en ningún entorno. `SEED_ROOT_PASSWORD` es obligatoria
+para crearlo (8+ caracteres con mayúscula, minúscula, número y símbolo); si falta o es débil, el seed termina
+con error antes de escribir nada. La cuenta nace obligada a cambiar la contraseña en el primer acceso, el valor
+nunca se imprime, y si el root ya existe el seed lo salta sin leer la variable ni modificarlo (una contraseña
+rotada no se resetea). La lógica está en `src/database/seeds/root-bootstrap.ts`.
+
+Los valores por defecto del resto de usuarios están en `src/database/seeds/seed.ts`. Son solo para desarrollo: en
+cualquier otro entorno define las contraseñas por variable de entorno. Los usuarios del resto de los roles (administrador,
 coordinador, repartidor) se crean con `POST /api/users`.
 
 ## Roles y matriz de permisos (ST-59.1, RF-A12)
@@ -69,6 +75,7 @@ reservado). Debe coincidir con `PORTAL_ROUTES` del portal web (`config/portal-ro
 | Lotes de ruta | `POST /dispatches/:id/cotejo-resolved` (ST-241.3) | **No**, solo Coordinador |
 | Reportes | `GET /reports/sla` (ST-54.2) | **No**, solo Coordinador |
 | Reportes | `GET /reports/otd` y `GET /reports/otd/backlog` (ST-301.1) | **No**, solo Coordinador |
+| Reportes | `GET /reports/supplier-pickups` (ST-305.1) | **No**, solo Coordinador |
 | Planificación | `GET /planning/pipeline` (ST-302.1) | **No**, solo Coordinador |
 | Planificación | `GET /planning/cutoffs`, `GET /planning/cutoffs/coverage` y `GET /planning/route-completion` (ST-302.2) | **No**, solo Coordinador |
 | Catálogos | `GET /warehouses`, `GET /incident-reasons`, `GET /reschedule-reasons` | Sí (solo lectura) |
