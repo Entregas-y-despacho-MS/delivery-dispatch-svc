@@ -1,11 +1,12 @@
-import { isStrongPassword } from 'class-validator';
 import type { Repository } from 'typeorm';
 
 import { User } from '../../modules/auth/users/entities/user.entity.js';
 import { Role } from '../../modules/auth/roles/entities/role.entity.js';
 import { hashPassword } from '../../shared/utils/crypto.util.js';
 import { EnvironmentEnum } from '../../shared/enums/environment.enum.js';
-import { STRONG_PASSWORD_OPTIONS } from '../../shared/validators/password.validator.js';
+import {
+    DEFAULT_PASSWORD_POLICY, PASSWORD_MIN_LENGTH_FLOOR, missingPasswordRequirements,
+} from '../../shared/validators/password.validator.js';
 
 /**
  * Root bootstrap (ST-310.2, RF-A25, ES-310 Escenario 4).
@@ -63,14 +64,16 @@ export function requireRootPassword(env: RootSeedEnv): string {
             'SEED_ROOT_PASSWORD is a previously published default and cannot be used: choose a secret of your own.',
         );
     }
-    // A value copied from a .env written on Windows often ends in a space or CR/LF, which isStrongPassword would
+    // A value copied from a .env written on Windows often ends in a space or CR/LF, which the password validator would
     // count as a "symbol"; the account would then need that invisible character to log in. Reject it, never trim.
     if (password !== password.trim()) {
         throw new RootSeedPasswordError(
             'SEED_ROOT_PASSWORD must not start or end with whitespace (check for a trailing space or line break).',
         );
     }
-    if (!isStrongPassword(password, STRONG_PASSWORD_OPTIONS)) {
+    // The seed runs before any setting exists, so it checks the policy of a clean install (the floor of 8 and the four
+    // classes required, ST-310.1); the configured policy applies when the root changes its password at first login.
+    if (password.length < PASSWORD_MIN_LENGTH_FLOOR || missingPasswordRequirements(password, DEFAULT_PASSWORD_POLICY).length > 0) {
         throw new RootSeedPasswordError(
             'SEED_ROOT_PASSWORD does not meet the password policy: at least 8 characters with an uppercase letter, ' +
             'a lowercase letter, a number and a special character.',

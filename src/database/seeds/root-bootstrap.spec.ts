@@ -45,6 +45,7 @@ describe('requireRootPassword', () => {
         ['sin número', 'Abcdefg!'],
         ['sin símbolo', 'Abcdefg1'],
         ['menos de 8 caracteres', 'Abc1!'],
+        ['7 caracteres con las cuatro clases', 'Abcd1!x'],
     ])('exige cada requisito de la política: %s', (_label, value) => {
         expect(() => requireRootPassword({ SEED_ROOT_PASSWORD: value })).toThrow(/password policy/);
         expect(requireRootPassword({ SEED_ROOT_PASSWORD: 'Abcdef1!' })).toBe('Abcdef1!');
