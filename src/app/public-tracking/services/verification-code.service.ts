@@ -6,7 +6,7 @@ import { SettingsService } from '../../../modules/settings/services/settings.ser
 import { MailerPort } from '../../../plugins/mailer/mailer.port.js';
 import { CacheService } from '../../../plugins/cache/cache.port.js';
 import { CacheUnavailableException } from '../../../plugins/cache/exceptions/index.js';
-import { comparePassword, hashPassword, hashToken, tokenMatchesHash } from '../../../shared/utils/crypto.util.js';
+import { comparePassword, hashShortCode, hashToken, tokenMatchesHash } from '../../../shared/utils/crypto.util.js';
 import {
     CODE_SEND_WINDOW_SECONDS, MAX_CODE_SENDS, MAX_VERIFY_ATTEMPTS, generateVerificationCode, maskEmail,
 } from '../domain/verification-code.js';
@@ -60,7 +60,7 @@ export class VerificationCodeService {
 
         const code = generateVerificationCode();
         await this.cached(async () => {
-            await this.cache.setWithTtl(key('code', dispatchId), JSON.stringify({ hash: await hashPassword(code) }), ttlSeconds);
+            await this.cache.setWithTtl(key('code', dispatchId), JSON.stringify({ hash: await hashShortCode(code) }), ttlSeconds);
             // A new code starts with all its attempts.
             await this.cache.delete(key('attempts', dispatchId));
         });

@@ -63,6 +63,10 @@ describe('requireRootPassword', () => {
         expect(() => requireRootPassword({ NODE_ENV: 'production' })).toThrow();
     });
 
+    it.each(['Abc1!xyz\0', 'Abc1!xyz\uD800z'])('rechaza %j sin revelar el valor', (password) => {
+        expect(() => requireRootPassword({ SEED_ROOT_PASSWORD: password })).toThrow('SEED_ROOT_PASSWORD contains characters that are not allowed.');
+    });
+
     it('devuelve el secreto cuando está presente y es válido', () => {
         expect(requireRootPassword({ NODE_ENV: 'production', SEED_ROOT_PASSWORD: SECRET })).toBe(SECRET);
     });

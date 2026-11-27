@@ -32,6 +32,7 @@ import { AuditAction } from '../../../modules/audit/admin-audit-events/decorator
  *   SESSION_EXPIRED          401 — Refresh attempted after too long without activity (RF-A24, does not apply to the driver mobile app).
  *   PASSWORD_TOO_SHORT       400 — New password is shorter than settings.password_min_length.
  *   PASSWORD_TOO_WEAK        400 — New password lacks a character class the policy requires (settings.password_require_*).
+ *   PASSWORD_INVALID_CHARACTERS 400 — The password has a lone UTF-16 surrogate or U+FFFD (invalid UTF-8).
  *   PASSWORD_RECENTLY_USED   400 — New password matches the current one or one of the last 3 (RF-A25).
  *   USER_ALREADY_EXISTS      409 — A user with the given username or email already exists.
  *   INSUFFICIENT_PERMISSIONS 403 — Authenticated but role does not meet the endpoint requirement.
@@ -71,7 +72,7 @@ export class AuthController {
         summary:     'Register a new internal user',
         description: 'Creates an internal account. Same body and rules as POST /users (admin-only, not a public sign-up; giving the root role needs a root caller, 403 ROOT_ACCOUNT_PROTECTED). Returns the created user, not tokens: the caller is the admin, not the new user. Requires admin role or root.',
     })
-    @ApiBadRequests({ validation: true, example: ['Full name is required.', 'Role ID must be an integer.'], errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }, { code: 'PASSWORD_TOO_WEAK', message: 'Password must include at least 1 uppercase letter, 1 number.' }, { code: 'INVALID_ROLE', message: 'The given role does not exist.' }] })
+    @ApiBadRequests({ validation: true, example: ['Full name is required.', 'Role ID must be an integer.'], errors: [{ code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 8 characters.' }, { code: 'PASSWORD_TOO_WEAK', message: 'Password must include at least 1 uppercase letter, 1 number.' }, { code: 'PASSWORD_INVALID_CHARACTERS', message: 'Password contains characters that are not allowed.' }, { code: 'INVALID_ROLE', message: 'The given role does not exist.' }] })
     @ApiCreatedResponse({ type: UserDto })
     @ApiConflict({ code: 'USER_ALREADY_EXISTS', message: 'A user with this username or email already exists.' })
     @ApiUnauthorized({ code: 'INVALID_TOKEN', message: 'Invalid or expired token.' })
@@ -121,9 +122,9 @@ export class AuthController {
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({
         summary:     'Change own password',
-        description: 'Changes the password of the logged-in user. Requires the current password (401 INVALID_CREDENTIALS if wrong). The new password must meet the password policy set by the administrator: the configured minimum length, never below 8 (400 PASSWORD_TOO_SHORT), and each required character class (uppercase, lowercase, number, symbol; 400 PASSWORD_TOO_WEAK), and differ from the current one and the last 3 used (400 PASSWORD_RECENTLY_USED). On success the session is revoked and every access token issued before the change stops working: the client must log in again with the new password. Allowed even while the account must change its password. Limited to a few attempts per minute (429). Requires any authenticated user.',
+        description: 'Changes the password of the logged-in user. Requires the current password (401 INVALID_CREDENTIALS if wrong). The new password must meet the password policy set by the administrator: the configured minimum length, never below 8 (400 PASSWORD_TOO_SHORT), and each required character class (uppercase, lowercase, number, symbol; 400 PASSWORD_TOO_WEAK). It must not contain a NUL byte, a lone UTF-16 surrogate or the replacement character U+FFFD, which is what bytes that are not valid UTF-8 become (400 PASSWORD_INVALID_CHARACTERS). It must also differ from the current one and the last 3 used (400 PASSWORD_RECENTLY_USED). On success the session is revoked and every access token issued before the change stops working: the client must log in again with the new password. Allowed even while the account must change its password. Limited to a few attempts per minute (429). Requires any authenticated user.',
     })
-    @ApiBadRequests({ validation: true, example: ['New password is required.'], errors: [{ code: 'PASSWORD_TOO_SHORT',     message: 'Password must be at least 8 characters.' }, { code: 'PASSWORD_TOO_WEAK', message: 'Password must include at least 1 uppercase letter, 1 number.' }, { code: 'PASSWORD_RECENTLY_USED', message: 'You cannot reuse your current password or any of your last 3 passwords.' }] })
+    @ApiBadRequests({ validation: true, example: ['New password is required.'], errors: [{ code: 'PASSWORD_TOO_SHORT',     message: 'Password must be at least 8 characters.' }, { code: 'PASSWORD_TOO_WEAK', message: 'Password must include at least 1 uppercase letter, 1 number.' }, { code: 'PASSWORD_INVALID_CHARACTERS', message: 'Password contains characters that are not allowed.' }, { code: 'PASSWORD_RECENTLY_USED', message: 'You cannot reuse your current password or any of your last 3 passwords.' }] })
     @ApiNoContentResponse({ description: 'Password changed.' })
     @ApiUnauthorized(
         { code: 'INVALID_CREDENTIALS', message: 'Invalid credentials.' },
@@ -153,7 +154,7 @@ export class AuthController {
         summary:     'Reset password with a token',
         description: 'Finishes the recovery flow started with POST /auth/forgot-password: sets a new password using the emailed `token`. The token is single-use and expires (401 INVALID_RESET_TOKEN once used or expired). The new password follows the same rules as in change-password. Also clears any account lock and closes the user\'s sessions. Public: authenticated by the token.',
     })
-    @ApiBadRequests({ validation: true, example: ['Token is required.'], errors: [{ code: 'PASSWORD_TOO_SHORT',     message: 'Password must be at least 8 characters.' }, { code: 'PASSWORD_TOO_WEAK', message: 'Password must include at least 1 uppercase letter, 1 number.' }, { code: 'PASSWORD_RECENTLY_USED', message: 'You cannot reuse your current password or any of your last 3 passwords.' }] })
+    @ApiBadRequests({ validation: true, example: ['Token is required.'], errors: [{ code: 'PASSWORD_TOO_SHORT',     message: 'Password must be at least 8 characters.' }, { code: 'PASSWORD_TOO_WEAK', message: 'Password must include at least 1 uppercase letter, 1 number.' }, { code: 'PASSWORD_INVALID_CHARACTERS', message: 'Password contains characters that are not allowed.' }, { code: 'PASSWORD_RECENTLY_USED', message: 'You cannot reuse your current password or any of your last 3 passwords.' }] })
     @ApiNoContentResponse({ description: 'Password reset.' })
     @ApiUnauthorized({ code: 'INVALID_RESET_TOKEN', message: 'Invalid or expired password reset token.' })
     async resetPassword(@Body() dto: ResetPasswordDto): Promise<void> {

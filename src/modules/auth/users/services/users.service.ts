@@ -13,7 +13,7 @@ import { UpdateUserDto } from '../dto/update-user.dto.js';
 import { FindAllUsersParamsDto, UserSortBy } from '../dto/find-all-users-params.dto.js';
 import {
     UserNotFoundException, UserAlreadyExistsException, PasswordTooShortException, PasswordTooWeakException,
-    PasswordRecentlyUsedException, ConflictingUserFiltersException, InvalidRoleException,
+    PasswordRecentlyUsedException, ConflictingUserFiltersException, InvalidRoleException, PasswordInvalidCharactersException,
 } from '../exceptions/index.js';
 import { DtoRepository, isUniqueViolation } from '../../../../shared/orm/index.js';
 import type { AuthUser } from '../../../../app/auth/strategies/jwt.strategy.js';
@@ -21,7 +21,7 @@ import { RootAccountProtectedException } from '../../../../app/auth/exceptions/r
 import { CannotModifyOwnAccountException } from '../../../../app/auth/exceptions/cannot-modify-own-account.exception.js';
 import { PaginationResponseDto } from '../../../../shared/dto/index.js';
 import { FindOptions, MutationOptions } from '../../../../shared/dto/options.dto.js';
-import { hashPassword, comparePassword } from '../../../../shared/utils/crypto.util.js';
+import { hashPassword, isHashableText, wasPasswordUsed } from '../../../../shared/utils/crypto.util.js';
 import { escapeLike } from '../../../../shared/utils/like.util.js';
 import { PASSWORD_MIN_LENGTH_FLOOR, missingPasswordRequirements, type PasswordPolicy } from '../../../../shared/validators/password.validator.js';
 import { RoleEnum, UserStatusEnum } from '../../../../shared/enums/index.js';
@@ -415,6 +415,7 @@ export class UsersService {
 
     /** Every code path that sets a password goes through here: create, admin update, change and reset. */
     private async validatePasswordPolicy(plainPassword: string): Promise<void> {
+        if (!isHashableText(plainPassword)) throw new PasswordInvalidCharactersException();
         const policy = await this.loadPasswordPolicy();
         if (plainPassword.length < policy.minLength) throw new PasswordTooShortException(policy.minLength);
         const missing = missingPasswordRequirements(plainPassword, policy);
@@ -423,7 +424,7 @@ export class UsersService {
 
     /** RF-A25, Escenario 3 — rejects the current password and the last PASSWORD_HISTORY_SIZE ones. */
     private async assertPasswordNotReused(user: User, plainPassword: string): Promise<void> {
-        if (await comparePassword(plainPassword, user.passwordHash)) throw new PasswordRecentlyUsedException();
+        if (await wasPasswordUsed(plainPassword, user.passwordHash)) throw new PasswordRecentlyUsedException();
 
         const recent = await this.historyRepo.find({
             where: { userId: user.id },
@@ -431,7 +432,7 @@ export class UsersService {
             take:  PASSWORD_HISTORY_SIZE,
         });
         for (const entry of recent) {
-            if (await comparePassword(plainPassword, entry.passwordHash)) throw new PasswordRecentlyUsedException();
+            if (await wasPasswordUsed(plainPassword, entry.passwordHash)) throw new PasswordRecentlyUsedException();
         }
     }
 
