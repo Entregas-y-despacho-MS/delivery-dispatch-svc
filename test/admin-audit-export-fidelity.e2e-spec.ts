@@ -438,4 +438,73 @@ describe('audit export is safe and faithful (ST-71.3)', () => {
             expect(pdf.headers[0]).toEqual(ROOT_COLUMNS.map(squash));
         });
     });
+
+    describe('wide PDF', () => {
+        it.each([['admin', COLUMNS], ['root', ROOT_COLUMNS]] as const)(
+            'as %s: landscape, every column on every page, nothing off the page and no value cut', async (who, columns) => {
+                const events = await searchAll(who, { ...wideWindow, order: 'asc' });
+                expect(events).toHaveLength(60);
+                const pdf = await pdfOf(who, { ...wideWindow, order: 'asc' });
+                expect(pdf.pages.length).toBeGreaterThan(1);
+                for (const page of pdf.pages) {
+                    expect(page.width).toBeGreaterThan(page.height);
+                    const outside = page.words.filter((word) => word.x0 < SIDE || word.x1 > page.width - SIDE || word.y0 < 0 || word.y1 > page.height);
+                    expect(outside).toEqual([]);
+                    // A long value wraps inside its column instead of running over the next one, and no column is lost.
+                    const { top, fits, column } = tableGeometry(page);
+                    const cells = page.words.filter((word) => word.y0 >= top - 1);
+                    expect(cells.filter((word) => !fits(word))).toEqual([]);
+                    expect(new Set(cells.map(column))).toEqual(new Set(columns.map((_, index) => index)));
+                }
+                expect(pdf.headers).toEqual(pdf.pages.map(() => columns.map(squash)));
+                expectPdfRows(pdf.rows, events, who === 'root');
+            });
+    });
+
+    describe('row maximums, on both sides', () => {
+        // 10001 events one second apart: the end of the window, which is excluded, sets how many fall inside.
+        const base = Date.parse('2019-03-09T04:00:00Z');
+        const holding = (rows: number) => ({ from: '2019-03-09T00:00:00-04:00', to: new Date(base + (rows + 1) * 1000).toISOString() });
+        const idsInOrder = async (rows: number): Promise<string[]> => (await h.db.query(
+            `SELECT admin_audit_event_id AS id FROM admin_audit_events WHERE occurred_at >= $1 AND occurred_at < $2 ORDER BY occurred_at DESC, admin_audit_event_id DESC`,
+            [holding(rows).from, holding(rows).to],
+        )).map((row: { id: string }) => row.id);
+
+        beforeAll(async () => {
+            await h.db.query(
+                `INSERT INTO admin_audit_events (admin_audit_event_id, actor_user_id, actor_role, action, entity_type, entity_id, result, status_code, correlation_id, occurred_at)
+                 SELECT gen_random_uuid(), $1, 'admin', 'user.updated', 'user', g::text, 'success', 200, $2 || '-lim' || g, $3::timestamptz + (g || ' seconds')::interval
+                 FROM generate_series(1, 10001) g`,
+                [h.users.admin.id, h.prefix, new Date(base).toISOString()],
+            );
+        }, 60_000);
+
+        it.each([['csv', 10_000], ['pdf', 2_000]] as const)('%s with exactly %i rows holds all of them', async (format, max) => {
+            const expected = await idsInOrder(max);
+            expect(expected).toHaveLength(max);
+            if (format === 'csv') {
+                expect((await csvOf('admin', holding(max))).rows.map((row) => row[1])).toEqual(expected);
+            } else {
+                expect((await pdfOf('admin', holding(max))).rows.map((row) => row[1])).toEqual(expected);
+            }
+        }, 120_000);
+
+        it.each([['csv', 10_000], ['pdf', 2_000]] as const)('%s with one row over %i sends no file and no row', async (format, max) => {
+            const over = await idsInOrder(max + 1);
+            expect(over).toHaveLength(max + 1);
+            const res = await call('/audit/admin-events/export', tokens.admin, { ...holding(max + 1), format });
+            expect(res.status).toBe(400);
+            expect(res.headers['content-type']).toMatch(/json/);
+            expect(res.headers['content-disposition']).toBeUndefined();
+            expect(res.body.error).toBe('AUDIT_EXPORT_LIMIT_EXCEEDED');
+            expect(res.body.message).toContain(`more than ${max} rows`);
+            expect(Object.keys(res.body).sort()).toEqual(['error', 'message', 'path', 'statusCode', 'timestamp']);
+            expect(over.some((id) => JSON.stringify(res.body).includes(id))).toBe(false);
+        }, 60_000);
+
+        it('counts the filtered result, not the window: a filter brings a rejected window back under the maximum', async () => {
+            const csv = await csvOf('admin', { ...holding(10_001), entityType: 'user', entityId: '42' });
+            expect(csv.rows.map((row) => row[6])).toEqual(['42']);
+        });
+    });
 });
