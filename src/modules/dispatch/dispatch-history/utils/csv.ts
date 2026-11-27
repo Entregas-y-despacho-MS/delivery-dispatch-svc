@@ -9,12 +9,16 @@ export const CSV_BOM = '﻿';
 // A cell that starts with one of these is read as a formula by Excel and Sheets (CSV injection): the
 // customer name comes from the origin system and a plate or a name can be typed by a person.
 const FORMULA_START = /^[=+\-@\t\r]/;
+// Spreadsheets with a Spanish regional setting split a `.csv` on `;`, and then what follows a `;` or a line break inside
+// a value opens a cell of its own (quotes in front of it included), so the same starts are guarded there too.
+const FORMULA_AFTER_BREAK = /([;\r\n]"*)(?=[=+\-@\t])/g;
 const NEEDS_QUOTES = /[",\r\n]/;
 
 export function csvCell(value: string | number | null | undefined): string {
     if (value === null || value === undefined) return '';
     let text = String(value);
     if (FORMULA_START.test(text)) text = `'${text}`;
+    text = text.replace(FORMULA_AFTER_BREAK, "$1'");
     return NEEDS_QUOTES.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 

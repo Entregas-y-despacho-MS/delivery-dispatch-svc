@@ -26,6 +26,25 @@ describe('csvCell', () => {
         expect(csvCell('Av. 6 de Agosto - Sur')).toBe('Av. 6 de Agosto - Sur');
         expect(csvCell('a=b')).toBe('a=b');
     });
+
+    it.each([
+        ['x;=1+1', "x;'=1+1"],
+        ['x;+1;-2;@SUM(A1)', "x;'+1;'-2;'@SUM(A1)"],
+        ['x;\t=1+1', "x;'\t=1+1"],
+        ['x;"=1+1', '"x;""\'=1+1"'],
+        ['x;""=1+1', '"x;""""\'=1+1"'],
+        ['uno\n=1+1', '"uno\n\'=1+1"'],
+        ['uno\r\n=1+1', '"uno\r\n\'=1+1"'],
+        ['x;\r=1+1', '"x;\r\'=1+1"'],
+    ])('neutralises a formula that would start a cell for a reader that splits %j elsewhere', (text, expected) => {
+        expect(csvCell(text)).toBe(expected);
+    });
+
+    it('does not touch a semicolon or a line break that is not followed by a formula', () => {
+        expect(csvCell('norte; sur')).toBe('norte; sur');
+        expect(csvCell('Calle 1;Av. 2 - Sur')).toBe('Calle 1;Av. 2 - Sur');
+        expect(csvCell('línea 1\r\nlínea 2')).toBe('"línea 1\r\nlínea 2"');
+    });
 });
 
 describe('csvLine', () => {
