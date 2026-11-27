@@ -379,4 +379,63 @@ describe('audit export is safe and faithful (ST-71.3)', () => {
             expect(pdf.text).toMatch(/Generadoel\d{4}-\d{2}-\d{2}\d{2}:\d{2}:\d{2}/);
         });
     });
+
+    describe('hostile and non-ASCII values', () => {
+        it.each(HOSTILE)('%s: the raw cell is the one resolved by hand', async (_name, stored, raw) => {
+            const index = HOSTILE.findIndex(([, value]) => value === stored);
+            const { res } = await csvOf('admin', { order: 'asc' });
+            // The cell sits between the entity type and the result.
+            const line = `,${uuid(index + 1)},${h.users.admin.id},admin,user.updated,user,${raw},Exitoso,200,`;
+            expect(res.text).toContain(line);
+        });
+
+        it('no cell of the whole file, header block included, starts like a formula', async () => {
+            for (const who of ['admin', 'root'] as const) {
+                const { all } = await csvOf(who);
+                const dangerous = all.flat().filter((cell) => FORMULA_START.test(cell));
+                expect(dangerous).toEqual([]);
+            }
+        });
+
+        it('no cell starts like a formula for a reader that splits the file on semicolons either', async () => {
+            for (const who of ['admin', 'root'] as const) {
+                const { res } = await csvOf(who);
+                expect(semicolonCells(res.text).filter((cell) => /^[=+\-@\t]/.test(cell))).toEqual([]);
+            }
+        });
+
+        it('keeps one record per event: separators and line breaks inside a value never add a row or a column', async () => {
+            const csv = await csvOf('root');
+            expect(csv.rows).toHaveLength(18);
+            expect(new Set(csv.rows.map((row) => row.length))).toEqual(new Set([ROOT_COLUMNS.length]));
+        });
+
+        it.each(HOSTILE.map(([name, value]) => [name, value]).filter(([, value]) => !/\s/.test(value!)))(
+            '%s as a filter value is neutralized in the header too', async (_name, value) => {
+                const csv = await csvOf('admin', { entityType: 'user', entityId: value! });
+                expect(csv.context).toContainEqual(['Filtro: Id de la entidad', FORMULA_START.test(value!) ? `'${value}` : value!]);
+                expect(csv.rows).toHaveLength(1);
+            });
+
+        it('is UTF-8 with a byte-order mark, and accents survive in bytes, in values, headers and root detail', async () => {
+            const res = await exportFile(tokens.root, 'csv', {}).buffer(true).parse(binary as never);
+            const bytes = res.body as Buffer;
+            expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+            const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+            expect(bytes.includes(Buffer.from('Ñandú-áéíóú-ÜÇ', 'utf8'))).toBe(true);
+            // The decoder drops the mark, which `readCsv` expects.
+            const csv = readCsv(`\uFEFF${text}`);
+            const detail = csv.rows.find((row) => row[1] === uuid(1))![11]!;
+            expect(JSON.parse(detail)).toEqual(ACCENTED_METADATA);
+        });
+
+        it('prints accents and markup in the PDF as the text they are', async () => {
+            await insert({ at: '2019-03-06T10:00:00Z', entityId: '<img/src=x>&amp;</td>', metadata: { zoneName: '<b>Peñón</b>' } });
+            const pdf = await pdfOf('root', { from: '2019-03-06T00:00:00-04:00', to: '2019-03-07T00:00:00-04:00' });
+            expect(pdf.rows).toHaveLength(1);
+            expect(pdf.rows[0]![6]).toBe('<img/src=x>&amp;</td>');
+            expect(pdf.rows[0]![11]).toBe(squash('{"zoneName":"<b>Peñón</b>"}'));
+            expect(pdf.headers[0]).toEqual(ROOT_COLUMNS.map(squash));
+        });
+    });
 });
