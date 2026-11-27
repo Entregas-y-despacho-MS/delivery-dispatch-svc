@@ -1,0 +1,382 @@
+// ST-71.3: safety and fidelity of the audit export, GET /audit/admin-events/export (RF-A38).
+//
+// How it differs from admin-audit-export.e2e-spec.ts: that suite compares the ids of the CSV with the search, covers one
+// formula, the rejected PDF over the maximum, the 403 per role and the audit of the export; of the PDF it only checks
+// that the bytes start with %PDF. This one:
+//   - parses the CSV as RFC 4180 and compares every cell with the JSON of the search, per filter, order and role;
+//   - reads the text of the real PDF back, assigns each word to its column and compares every cell, checks that nothing
+//     leaves the page and that the header repeats, also with the 12 columns of root and unbreakable long values;
+//   - resolves by hand what accents, separators, line breaks and each formula prefix must look like in the raw file;
+//   - exports events produced by real requests, including a formula planted without a token;
+//   - checks both sides of both row maximums, accounts that lose the permission after their token was issued, and that
+//     a failed or concurrent render never hands out a file, or a detail, that does not belong to the caller.
+//
+// The global rate limit (100 requests a minute per IP) is raised before the app is imported: every request here comes
+// from the same address and the limit is not what this suite checks.
+//
+// Needs `pdftotext` (poppler) on the PATH to read the PDF. It deletes rows of an append-only table, so run it against a
+// disposable database (postgres:18-alpine). Inserted events live in windows of March 2019, where nothing else writes.
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import request from 'supertest';
+import { PdfPort } from '../src/plugins/pdf/pdf.port.js';
+import { PdfGenerationException } from '../src/plugins/pdf/exceptions/index.js';
+import { hashPassword } from '../src/shared/utils/crypto.util.js';
+import { AuditE2eHarness } from './helpers/audit-e2e.harness.js';
+
+vi.hoisted(() => { process.env.THROTTLE_LIMIT = '100000'; });
+
+type Who = 'admin' | 'coordinator' | 'supervisor' | 'driver' | 'root';
+type Query = Record<string, string | number>;
+interface SearchEvent {
+    eventId: string; occurredAt: string; actorId: number | null; actorRole: string | null; action: string;
+    entityType: string | null; entityId: string | null; result: string; statusCode: number | null; correlationId: string;
+    ip?: string | null; metadata?: Record<string, unknown>;
+}
+
+const COLUMNS = [
+    'Fecha y hora', 'Id del evento', 'Id del actor', 'Rol del actor', 'Acción', 'Tipo de entidad', 'Id de la entidad',
+    'Resultado', 'Código HTTP', 'Correlación',
+];
+const ROOT_COLUMNS = [...COLUMNS, 'Dirección IP', 'Campos declarados'];
+const RESULT_ES: Record<string, string> = { success: 'Exitoso', denied: 'Denegado', failed: 'Fallido' };
+const FORMULA_START = /^[=+\-@\t\r]/;
+/** The same starts inside a value, where a reader that splits on `;` or on lines would open a cell. */
+const guardInner = (text: string) => text.replace(/([;\r\n]"*)([=+\-@\t])/g, "$1'$2");
+/** Cells a spreadsheet splitting on `;` would see in the raw file, quotes in front of them dropped. */
+const semicolonCells = (raw: string) => raw.replace(/^\uFEFF/, '').split(/[;\r\n]/).map((cell) => cell.replace(/^"+/, ''));
+
+/** Bolivia is UTC-4 all year: computed here on its own, not with the formatter under test. */
+const laPaz = (iso: string) => new Date(new Date(iso).getTime() - 4 * 3_600_000).toISOString().slice(0, 19).replace('T', ' ');
+
+/**
+ * What a file must show for an event of the search. The guard against formulas of the CSV is the only rewrite there is;
+ * a PDF runs nothing, so it prints the value as it is stored.
+ */
+const expectedRow = (event: SearchEvent, root: boolean, format: 'csv' | 'pdf' = 'csv'): string[] => {
+    const values: unknown[] = [
+        laPaz(event.occurredAt), event.eventId, event.actorId, event.actorRole, event.action, event.entityType,
+        event.entityId, RESULT_ES[event.result], event.statusCode, event.correlationId,
+    ];
+    if (root) values.push(event.ip, event.metadata ? JSON.stringify(event.metadata) : null);
+    return values.map((value) => {
+        const text = value === null || value === undefined ? '' : String(value);
+        return format === 'csv' ? guardInner(FORMULA_START.test(text) ? `'${text}` : text) : text;
+    });
+};
+
+/** Strict RFC 4180 reader: a stray quote or an unclosed field means the file does not open as intended. */
+function parseCsv(text: string): string[][] {
+    const records: string[][] = [];
+    let record: string[] = [];
+    let i = 0;
+    while (i < text.length) {
+        let cell = '';
+        if (text[i] === '"') {
+            i++;
+            for (;;) {
+                if (i >= text.length) throw new Error('Unclosed quoted field');
+                if (text[i] === '"' && text[i + 1] === '"') { cell += '"'; i += 2; continue; }
+                if (text[i] === '"') { i++; break; }
+                cell += text[i++];
+            }
+        } else {
+            while (i < text.length && text[i] !== ',' && !text.startsWith('\r\n', i)) {
+                if (/["\r\n]/.test(text[i]!)) {
+                    throw new Error(`Unquoted special character after ${JSON.stringify(cell)}`);
+                }
+                cell += text[i++];
+            }
+        }
+        record.push(cell);
+        if (text[i] === ',') { i++; continue; }
+        if (!text.startsWith('\r\n', i)) throw new Error(`Expected a separator at ${i}`);
+        i += 2;
+        records.push(record);
+        record = [];
+    }
+    return records;
+}
+
+const readCsv = (body: string) => {
+    expect(body.charCodeAt(0)).toBe(0xfeff);
+    const records = parseCsv(body.slice(1));
+    const headerAt = records.findIndex((record) => record[0] === COLUMNS[0]);
+    return { all: records, context: records.slice(0, headerAt - 1), columns: records[headerAt]!, rows: records.slice(headerAt + 1) };
+};
+
+interface Word { x0: number; y0: number; x1: number; y1: number; text: string }
+interface PdfPage { width: number; height: number; words: Word[] }
+
+const unescapeXml = (text: string) => text
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;|&#39;/g, "'").replace(/&amp;/g, '&');
+
+function pdfWords(pdf: Buffer): PdfPage[] {
+    const dir = mkdtempSync(join(tmpdir(), 'audit-pdf-'));
+    try {
+        const file = join(dir, 'export.pdf');
+        writeFileSync(file, pdf);
+        const xml = execFileSync('pdftotext', ['-bbox', '-enc', 'UTF-8', file, '-'], { maxBuffer: 256 * 1024 * 1024 }).toString('utf8');
+        return [...xml.matchAll(/<page width="([\d.]+)" height="([\d.]+)">([\s\S]*?)<\/page>/g)].map((page) => ({
+            width: Number(page[1]),
+            height: Number(page[2]),
+            words: [...page[3]!.matchAll(/<word xMin="([-\d.]+)" yMin="([-\d.]+)" xMax="([-\d.]+)" yMax="([-\d.]+)">([\s\S]*?)<\/word>/g)]
+                .map((w) => ({ x0: Number(w[1]), y0: Number(w[2]), x1: Number(w[3]), y1: Number(w[4]), text: unescapeXml(w[5]!) })),
+        }));
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+/** The 8 mm side margin of the paper, in points: no text may start before it or end after it. */
+const SIDE = (8 / 25.4) * 72;
+/** Wrapping splits a value anywhere, so cells are compared without white space. */
+const squash = (text: string) => text.normalize('NFC').replace(/\s+/g, '');
+
+/**
+ * Where the columns of a page are. The layout is fixed, with columns of equal width, so the first words of the headers
+ * of the first two columns ("Fecha", "Id") give where the text of the first column starts and how wide a column is.
+ */
+function tableGeometry(page: PdfPage) {
+    for (const first of page.words.filter((word) => word.text === 'Fecha')) {
+        const second = page.words.filter((word) => word.text === 'Id' && Math.abs(word.y0 - first.y0) < 1 && word.x0 > first.x0)
+            .sort((a, b) => a.x0 - b.x0)[0];
+        if (!second) continue;
+        const width = second.x0 - first.x0;
+        return {
+            top: first.y0,
+            width,
+            column: (word: Word) => Math.floor((word.x0 - first.x0 + 1) / width),
+            /** Whether the word ends before the text of the next column begins (cells have padding on both sides). */
+            fits: (word: Word) => word.x1 <= first.x0 + (Math.floor((word.x0 - first.x0 + 1) / width) + 1) * width - 3,
+        };
+    }
+    throw new Error('A page of the PDF has no table header');
+}
+
+/** The table of the PDF as a reader sees it: a row starts at the line of its date and ends where the next one starts. */
+function readPdf(pdf: Buffer, columns: number) {
+    const pages = pdfWords(pdf);
+    const rows: string[][] = [];
+    const headers: string[][] = [];
+    const summary: string[] = [];
+    for (const page of pages) {
+        const { top: headerTop, column } = tableGeometry(page);
+        const sorted = [...page.words].sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0);
+        const tops = sorted.filter((word) => word.y0 > headerTop + 1 && column(word) === 0 && /^\d{4}-\d{2}-\d{2}$/.test(word.text)).map((word) => word.y0);
+        const cellsBetween = (from: number, to: number) => Array.from({ length: columns }, (_, index) => squash(
+            sorted.filter((word) => word.y0 >= from - 1 && word.y0 < to - 1 && column(word) === index).map((word) => word.text).join(''),
+        ));
+        // Above the table, line by line: each label of the header block is followed by its value.
+        summary.push(squash(sorted.filter((word) => word.y0 < headerTop - 1).map((word) => word.text).join('')));
+        headers.push(cellsBetween(headerTop, tops[0] ?? page.height));
+        tops.forEach((top, index) => rows.push(cellsBetween(top, tops[index + 1] ?? page.height + 1)));
+    }
+    // A value wrapped inside a cell is whole again in `text`, so looking for something in it cannot miss it by a line break.
+    const text = [...summary, ...[...headers, ...rows].map((cells) => cells.join('|'))].join('|');
+    return { pages, rows, headers, text };
+}
+
+/** Every cell equals the search; under the action the PDF also prints its description, which is allowed after the name. */
+function expectPdfRows(actual: string[][], events: SearchEvent[], root: boolean) {
+    const expected = events.map((event) => expectedRow(event, root, 'pdf').map(squash));
+    expect(actual).toHaveLength(expected.length);
+    actual.forEach((row, index) => {
+        const want = expected[index]!;
+        expect(row[4]!.startsWith(want[4]!)).toBe(true);
+        expect(row.filter((_, i) => i !== 4)).toEqual(want.filter((_, i) => i !== 4));
+    });
+}
+
+const binary = (res: NodeJS.ReadableStream, done: (err: Error | null, body: Buffer) => void) => {
+    const chunks: Buffer[] = [];
+    res.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+    res.on('end', () => done(null, Buffer.concat(chunks)));
+};
+
+describe('audit export is safe and faithful (ST-71.3)', () => {
+    const h = new AuditE2eHarness('auditsafe');
+    const tokens = {} as Record<Who, string>;
+    let sequence = 0;
+
+    const window = { from: '2019-03-05T00:00:00-04:00', to: '2019-03-06T00:00:00-04:00' };
+    const wideWindow = { from: '2019-03-07T00:00:00-04:00', to: '2019-03-08T00:00:00-04:00' };
+    const uuid = (n: number) => `00000000-0000-4000-a713-${String(n).padStart(12, '0')}`;
+
+    // Reference table, resolved by hand: [entity id as stored, exact text of its cell in the raw CSV].
+    const HOSTILE: Array<[string, string, string]> = [
+        ['equals', '=1+1', "'=1+1"],
+        ['plus', '+59170000000', "'+59170000000"],
+        ['minus', '-2+3', "'-2+3"],
+        ['at', '@SUM(A1:A9)', "'@SUM(A1:A9)"],
+        ['tab', '\t=1+1', "'\t=1+1"],
+        ['carriage return', '\r=1+1', '"\'\r\'=1+1"'],
+        ['formula with quotes and commas', '=HYPERLINK("http://x.test","ver")', '"\'=HYPERLINK(""http://x.test"",""ver"")"'],
+        ['accents', 'Ñandú-áéíóú-ÜÇ', 'Ñandú-áéíóú-ÜÇ'],
+        ['comma', 'norte,sur', '"norte,sur"'],
+        ['quote', 'di"jo', '"di""jo"'],
+        ['line feed', 'uno\ndos', '"uno\ndos"'],
+        ['CRLF with a formula on the second line', 'uno\r\n=1+1', '"uno\r\n\'=1+1"'],
+        ['a sign in the middle is data', 'a=b', 'a=b'],
+        ['a quote already there', "'ya", "'ya"],
+    ];
+    const ACCENTED_METADATA = { zoneName: 'Peñón "Á", sur\nsegundo renglón', reason: '=cmd|calc' };
+
+    const call = (path: string, token: string | null, query: Query = {}) => h.call('get', path, token).response.query(query);
+    const exportFile = (token: string | null, format: 'csv' | 'pdf', query: Query) => {
+        const test = call('/audit/admin-events/export', token, { ...window, format, ...query });
+        // A rejection is JSON and must stay readable, so only a successful PDF is collected as bytes.
+        return format === 'pdf' ? test.buffer(true).parse(binary as never) : test;
+    };
+    const csvOf = async (who: Who, query: Query = {}) => {
+        const res = await exportFile(tokens[who], 'csv', query);
+        expect(res.status).toBe(200);
+        return { res, ...readCsv(res.text) };
+    };
+    const pdfOf = async (who: Who, query: Query = {}) => {
+        const res = await exportFile(tokens[who], 'pdf', query);
+        expect(res.status).toBe(200);
+        return { res, ...readPdf(res.body as Buffer, who === 'root' ? ROOT_COLUMNS.length : COLUMNS.length) };
+    };
+    /** The oracle: what the screen lists, page by page. */
+    const searchAll = async (who: Who, query: Query = {}): Promise<SearchEvent[]> => {
+        const out: SearchEvent[] = [];
+        for (let page = 1; ; page++) {
+            const res = await call('/audit/admin-events', tokens[who], { ...window, ...query, page, limit: 100 });
+            expect(res.status).toBe(200);
+            out.push(...res.body.data);
+            if (page >= res.body.meta.pages) {
+                // The screen is the oracle of the file, so it must not offer the administrator more than the file may hold.
+                if (who !== 'root') expect(out.filter((event) => 'ip' in event || 'metadata' in event)).toEqual([]);
+                return out;
+            }
+        }
+    };
+
+    const insert = async (event: {
+        at: string; actor?: number | null; role?: string | null; action?: string; type?: string; entityId?: string | null;
+        result?: string; status?: number; correlation?: string; ip?: string | null; metadata?: object; id?: string;
+    }) => {
+        const n = ++sequence;
+        await h.db.query(
+            `INSERT INTO admin_audit_events (admin_audit_event_id, actor_user_id, actor_role, action, entity_type, entity_id, result, status_code, correlation_id, ip_address, metadata, occurred_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+            [event.id ?? uuid(n), event.actor === undefined ? h.users.admin.id : event.actor, event.role === undefined ? 'admin' : event.role,
+                event.action ?? 'user.updated', event.type ?? 'user', event.entityId ?? null, event.result ?? 'success', event.status ?? 200,
+                event.correlation ?? `${h.prefix}-row${n}`, event.ip ?? null, JSON.stringify(event.metadata ?? {}), event.at],
+        );
+    };
+
+    const createUser = async (role: string, suffix: string) => {
+        const username = `${h.prefix}-${suffix}`;
+        const [{ user_id }] = await h.db.query(
+            `INSERT INTO users (role_id, full_name, username, password_hash, requires_pwd_change) VALUES ($1, $2, $3, $4, false) RETURNING user_id`,
+            [h.roles[role], `E2E ${suffix}`, username, await hashPassword(h.password)],
+        );
+        return { id: user_id as number, token: await h.login(username, h.password) };
+    };
+
+    beforeAll(async () => {
+        try {
+            execFileSync('pdftotext', ['-v'], { stdio: 'ignore' });
+        } catch {
+            throw new Error('This suite reads the exported PDF with `pdftotext`: install poppler (brew install poppler / apt install poppler-utils).');
+        }
+        await h.start(['admin', 'coordinator', 'supervisor', 'driver']);
+        // Listening once: concurrent requests of supertest would otherwise open and close the same server.
+        await h.app.listen(0);
+        const root = await createUser('root', 'root');
+        for (const who of ['admin', 'coordinator', 'supervisor', 'driver'] as const) tokens[who] = h.users[who].token;
+        tokens.root = root.token;
+
+        for (const [index, [, entityId]] of HOSTILE.entries()) {
+            await insert({
+                at: `2019-03-05T10:${String(index).padStart(2, '0')}:00Z`, entityId,
+                ip: '10.20.30.40', metadata: index === 0 ? ACCENTED_METADATA : { roleId: 3 },
+            });
+        }
+        // Rows that tell the filters apart; the last two share the instant, so only the id orders them.
+        await insert({ at: '2019-03-05T11:00:00Z', actor: h.users.coordinator.id, role: 'coordinator', action: 'setting.updated', type: 'setting', entityId: 'k', result: 'denied', status: 403, correlation: `${h.prefix}-wanted`, ip: '2001:db8::77' });
+        await insert({ at: '2019-03-05T12:00:00Z', actor: null, role: null, action: 'user.deleted', entityId: '77', result: 'denied', status: 401 });
+        await insert({ at: '2019-03-05T13:00:00Z', action: 'vehicle.changed', type: 'vehicle', entityId: '77', result: 'failed', status: 500 });
+        await insert({ at: '2019-03-05T13:00:00Z', action: 'user.created', entityId: '78', status: 201 });
+
+        // Wide and long: unbreakable values at the size of their columns, over enough rows for several pages.
+        for (let i = 0; i < 60; i++) {
+            await insert({
+                at: new Date(Date.parse('2019-03-07T10:00:00Z') + i * 1000).toISOString(),
+                action: 'route_batch.assignment_changed', type: 'route_batch',
+                entityId: `${'W'.repeat(60)}${String(i).padStart(4, '0')}`,
+                correlation: `${h.prefix}-${'M'.repeat(64 - h.prefix.length - 6)}${String(i).padStart(5, '0')}`,
+                ip: '2001:0db8:85a3:1234:5678:8a2e:0370:7334',
+                metadata: { driverId: 2147483647, reason: 'X'.repeat(120), last: `fin-${i}` },
+            });
+        }
+    }, 120_000);
+
+    afterAll(async () => {
+        if (h.db?.isInitialized) {
+            await h.db.query('DELETE FROM admin_audit_events WHERE correlation_id LIKE $1 OR actor_user_id IN (SELECT user_id FROM users WHERE username LIKE $1)', [`${h.prefix}-%`]);
+        }
+        await h.close();
+    });
+
+    describe('every exported cell is the one of the search', () => {
+        const filters: Array<[string, () => Query, number]> = [
+            ['no filter', () => ({}), 18],
+            ['actorId', () => ({ actorId: h.users.coordinator.id }), 1],
+            ['actorRole', () => ({ actorRole: 'coordinator' }), 1],
+            ['action', () => ({ action: 'user.updated' }), 14],
+            ['entityType', () => ({ entityType: 'user' }), 16],
+            ['entityType and entityId', () => ({ entityType: 'vehicle', entityId: '77' }), 1],
+            ['result', () => ({ result: 'denied' }), 2],
+            ['correlationId', () => ({ correlationId: `${h.prefix}-wanted` }), 1],
+            ['combined filters', () => ({ actorRole: 'admin', result: 'success', entityType: 'user' }), 15],
+        ];
+
+        describe.each(['admin', 'root'] as const)('as %s', (who) => {
+            it.each(filters)('CSV, filtered by %s, in both orders', async (_name, query, count) => {
+                for (const order of ['asc', 'desc'] as const) {
+                    const events = await searchAll(who, { ...query(), order });
+                    expect(events).toHaveLength(count);
+                    const csv = await csvOf(who, { ...query(), order });
+                    expect(csv.columns).toEqual(who === 'root' ? ROOT_COLUMNS : COLUMNS);
+                    expect(csv.rows).toEqual(events.map((event) => expectedRow(event, who === 'root')));
+                    expect(csv.context).toContainEqual(['Total de filas', String(count)]);
+                }
+            });
+
+            it.each(filters)('PDF, filtered by %s', async (_name, query, count) => {
+                const events = await searchAll(who, { ...query(), order: 'asc' });
+                const pdf = await pdfOf(who, { ...query(), order: 'asc' });
+                expectPdfRows(pdf.rows, events, who === 'root');
+                expect(pdf.text).toContain(squash(`Total de filas${count}`));
+            });
+        });
+
+        it('echoes every applied filter with its value, in the header of both files', async () => {
+            const query = {
+                actorId: h.users.coordinator.id, actorRole: 'coordinator', action: 'setting.updated', entityType: 'setting',
+                entityId: 'k', result: 'denied', correlationId: `${h.prefix}-wanted`, order: 'asc',
+            };
+            const lines: [string, string][] = [
+                ['Filtro: Id del actor', String(h.users.coordinator.id)], ['Filtro: Rol del actor', 'coordinator'],
+                ['Filtro: Acción', 'setting.updated'], ['Filtro: Tipo de entidad', 'setting'], ['Filtro: Id de la entidad', 'k'],
+                ['Filtro: Resultado', 'denied'], ['Filtro: Correlación', `${h.prefix}-wanted`], ['Filtro: Orden', 'Más antiguos primero'],
+            ];
+            const csv = await csvOf('admin', query);
+            const pdf = await pdfOf('admin', query);
+            for (const [label, value] of lines) {
+                expect(csv.context).toContainEqual([label, value]);
+                expect(pdf.text).toContain(squash(label + value));
+            }
+            for (const line of ['Período desde (incluido)2019-03-05 00:00:00', 'Período hasta (excluido)2019-03-06 00:00:00', 'Zona horariaAmerica/La_Paz']) {
+                expect(pdf.text).toContain(squash(line));
+            }
+            expect(pdf.text).toMatch(/Generadoel\d{4}-\d{2}-\d{2}\d{2}:\d{2}:\d{2}/);
+        });
+    });
+});
