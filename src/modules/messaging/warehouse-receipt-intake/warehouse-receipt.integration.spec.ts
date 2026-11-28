@@ -173,6 +173,19 @@ describe('Warehouse receipt result publication (ST-240.3)', () => {
         expect(c.events.emit.mock.calls.map(([name]) => name)).toEqual(['dispatch.status_changed']);
     });
 
+    it('ST-306.3: a receipt with differences keeps the RMA in incident and publishes the outcome', async () => {
+        const c = circuit({ type: 'warehouse_return_pickup', ref: 'RMA-CUSTODY-DIFF' });
+
+        expect(await send(c, receipt({ referenceType: 'rma', referenceId: 'RMA-CUSTODY-DIFF' }))).toBe('processed');
+
+        expect(c.store.state.dispatch.status).toBe('incident');
+        expect(c.store.state.receipts).toMatchObject({ 'RCP-2026-000310': { status: 'applied', result: 'with_differences' } });
+        expect(c.store.state.outbox).toHaveLength(1);
+        expect(c.store.state.outbox[0].data).toMatchObject({ salesOrderId: 'RMA-CUSTODY-DIFF', status: 'incident', result: 'with_differences' });
+        expect(c.store.state.incidents).toHaveLength(1);
+        expect(c.events.emit.mock.calls.map(([name]) => name)).toEqual(['dispatch.status_changed', 'dispatch.incident_reported']);
+    });
+
     it('writes the result for Compras in the outbox with the status change, and tells the board after commit', async () => {
         const c = circuit();
 
