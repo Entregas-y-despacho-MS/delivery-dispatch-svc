@@ -201,6 +201,27 @@ describe('Warehouse receipt result publication (ST-240.3)', () => {
         expect(c.events.emit).toHaveBeenCalledWith('dispatch.status_changed', expect.objectContaining({ status: 'incident' }));
     });
 
+    it.each(['complete', 'with_differences', 'rejected'] as const)(
+        'ST-306.3: a repeated %s receipt does not repeat the RMA transition', async (result) => {
+            const c = circuit({ type: 'warehouse_return_pickup', ref: `RMA-CUSTODY-${result}` });
+            const first = receipt({
+                receiptId: `RCP-CUSTODY-${result}`,
+                referenceType: 'rma', referenceId: `RMA-CUSTODY-${result}`, result,
+            });
+            await send(c, first);
+            const statusAfterFirst = c.store.state.dispatch.status;
+            const emittedAfterFirst = c.events.emit.mock.calls.length;
+            const transitionEventsAfterFirst = c.store.state.events.length;
+
+            await c.bus.publishRaw(first.type, { ...first, messageId: generateMessageId() });
+
+            expect(c.store.state.dispatch.status).toBe(statusAfterFirst);
+            expect(c.events.emit).toHaveBeenCalledTimes(emittedAfterFirst);
+            expect(c.store.state.events).toHaveLength(transitionEventsAfterFirst);
+            expect(Object.keys(c.store.state.receipts)).toEqual([`RCP-CUSTODY-${result}`]);
+        },
+    );
+
     it('writes the result for Compras in the outbox with the status change, and tells the board after commit', async () => {
         const c = circuit();
 
