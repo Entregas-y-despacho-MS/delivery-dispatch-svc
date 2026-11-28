@@ -222,6 +222,23 @@ describe('Warehouse receipt result publication (ST-240.3)', () => {
         },
     );
 
+    it('ST-306.3: an early warehouse receipt cannot skip the pickup and arrival state', async () => {
+        const c = circuit({
+            type: 'warehouse_return_pickup', ref: 'RMA-CUSTODY-EARLY', status: 'pickup_scheduled',
+        });
+
+        expect(await send(c, receipt({
+            referenceType: 'rma', referenceId: 'RMA-CUSTODY-EARLY', result: 'complete',
+        }))).toBe('processed');
+
+        expect(c.store.state.dispatch.status).toBe('pickup_scheduled');
+        expect(c.store.state.receipts).toMatchObject({ 'RCP-2026-000310': { status: 'orphan', dispatch_id: null } });
+        expect(c.store.state.outbox).toHaveLength(0);
+        expect(c.events.emit).toHaveBeenCalledWith('dispatch.change_requires_attention', expect.objectContaining({
+            dispatchId: 55, changeType: 'orphan_receipt', source: 'inventory',
+        }));
+    });
+
     it('writes the result for Compras in the outbox with the status change, and tells the board after commit', async () => {
         const c = circuit();
 
