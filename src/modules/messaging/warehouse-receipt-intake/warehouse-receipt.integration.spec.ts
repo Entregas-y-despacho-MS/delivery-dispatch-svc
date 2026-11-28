@@ -159,6 +159,86 @@ const send = async (c: ReturnType<typeof circuit>, envelope: MessageEnvelope) =>
 };
 
 describe('Warehouse receipt result publication (ST-240.3)', () => {
+    it('ST-306.3: a complete RMA receipt changes the collected dispatch to returned_to_warehouse once', async () => {
+        const c = circuit({ type: 'warehouse_return_pickup', ref: 'RMA-CUSTODY-1' });
+
+        expect(await send(c, receipt({
+            referenceType: 'rma', referenceId: 'RMA-CUSTODY-1', result: 'complete',
+            items: [{ itemId: 'SKU-1', expectedQuantity: 1, acceptedQuantity: 1 }],
+        }))).toBe('processed');
+
+        expect(c.store.state.dispatch.status).toBe('returned_to_warehouse');
+        expect(c.store.state.receipts).toMatchObject({ 'RCP-2026-000310': { status: 'applied', result: 'complete' } });
+        expect(c.store.state.outbox).toHaveLength(0);
+        expect(c.events.emit.mock.calls.map(([name]) => name)).toEqual(['dispatch.status_changed']);
+    });
+
+    it('ST-306.3: a receipt with differences keeps the RMA in incident and publishes the outcome', async () => {
+        const c = circuit({ type: 'warehouse_return_pickup', ref: 'RMA-CUSTODY-DIFF' });
+
+        expect(await send(c, receipt({ referenceType: 'rma', referenceId: 'RMA-CUSTODY-DIFF' }))).toBe('processed');
+
+        expect(c.store.state.dispatch.status).toBe('incident');
+        expect(c.store.state.receipts).toMatchObject({ 'RCP-2026-000310': { status: 'applied', result: 'with_differences' } });
+        expect(c.store.state.outbox).toHaveLength(1);
+        expect(c.store.state.outbox[0].data).toMatchObject({ salesOrderId: 'RMA-CUSTODY-DIFF', status: 'incident', result: 'with_differences' });
+        expect(c.store.state.incidents).toHaveLength(1);
+        expect(c.events.emit.mock.calls.map(([name]) => name)).toEqual(['dispatch.status_changed', 'dispatch.incident_reported']);
+    });
+
+    it('ST-306.3: a rejected receipt records an incident and never reports the RMA as received', async () => {
+        const c = circuit({ type: 'warehouse_return_pickup', ref: 'RMA-CUSTODY-REJECTED' });
+
+        expect(await send(c, receipt({
+            referenceType: 'rma', referenceId: 'RMA-CUSTODY-REJECTED', result: 'rejected',
+        }))).toBe('processed');
+
+        expect(c.store.state.dispatch.status).toBe('incident');
+        expect(c.store.state.dispatch.status).not.toBe('returned_to_warehouse');
+        expect(c.store.state.receipts).toMatchObject({ 'RCP-2026-000310': { status: 'applied', result: 'rejected' } });
+        expect(c.store.state.outbox).toHaveLength(1);
+        expect(c.store.state.outbox[0].data).toMatchObject({ salesOrderId: 'RMA-CUSTODY-REJECTED', status: 'incident', result: 'rejected' });
+        expect(c.events.emit).toHaveBeenCalledWith('dispatch.status_changed', expect.objectContaining({ status: 'incident' }));
+    });
+
+    it.each(['complete', 'with_differences', 'rejected'] as const)(
+        'ST-306.3: a repeated %s receipt does not repeat the RMA transition', async (result) => {
+            const c = circuit({ type: 'warehouse_return_pickup', ref: `RMA-CUSTODY-${result}` });
+            const first = receipt({
+                receiptId: `RCP-CUSTODY-${result}`,
+                referenceType: 'rma', referenceId: `RMA-CUSTODY-${result}`, result,
+            });
+            await send(c, first);
+            const statusAfterFirst = c.store.state.dispatch.status;
+            const emittedAfterFirst = c.events.emit.mock.calls.length;
+            const transitionEventsAfterFirst = c.store.state.events.length;
+
+            await c.bus.publishRaw(first.type, { ...first, messageId: generateMessageId() });
+
+            expect(c.store.state.dispatch.status).toBe(statusAfterFirst);
+            expect(c.events.emit).toHaveBeenCalledTimes(emittedAfterFirst);
+            expect(c.store.state.events).toHaveLength(transitionEventsAfterFirst);
+            expect(Object.keys(c.store.state.receipts)).toEqual([`RCP-CUSTODY-${result}`]);
+        },
+    );
+
+    it('ST-306.3: an early warehouse receipt cannot skip the pickup and arrival state', async () => {
+        const c = circuit({
+            type: 'warehouse_return_pickup', ref: 'RMA-CUSTODY-EARLY', status: 'pickup_scheduled',
+        });
+
+        expect(await send(c, receipt({
+            referenceType: 'rma', referenceId: 'RMA-CUSTODY-EARLY', result: 'complete',
+        }))).toBe('processed');
+
+        expect(c.store.state.dispatch.status).toBe('pickup_scheduled');
+        expect(c.store.state.receipts).toMatchObject({ 'RCP-2026-000310': { status: 'orphan', dispatch_id: null } });
+        expect(c.store.state.outbox).toHaveLength(0);
+        expect(c.events.emit).toHaveBeenCalledWith('dispatch.change_requires_attention', expect.objectContaining({
+            dispatchId: 55, changeType: 'orphan_receipt', source: 'inventory',
+        }));
+    });
+
     it('writes the result for Compras in the outbox with the status change, and tells the board after commit', async () => {
         const c = circuit();
 
