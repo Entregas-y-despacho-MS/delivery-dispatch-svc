@@ -159,6 +159,20 @@ const send = async (c: ReturnType<typeof circuit>, envelope: MessageEnvelope) =>
 };
 
 describe('Warehouse receipt result publication (ST-240.3)', () => {
+    it('ST-306.3: a complete RMA receipt changes the collected dispatch to returned_to_warehouse once', async () => {
+        const c = circuit({ type: 'warehouse_return_pickup', ref: 'RMA-CUSTODY-1' });
+
+        expect(await send(c, receipt({
+            referenceType: 'rma', referenceId: 'RMA-CUSTODY-1', result: 'complete',
+            items: [{ itemId: 'SKU-1', expectedQuantity: 1, acceptedQuantity: 1 }],
+        }))).toBe('processed');
+
+        expect(c.store.state.dispatch.status).toBe('returned_to_warehouse');
+        expect(c.store.state.receipts).toMatchObject({ 'RCP-2026-000310': { status: 'applied', result: 'complete' } });
+        expect(c.store.state.outbox).toHaveLength(0);
+        expect(c.events.emit.mock.calls.map(([name]) => name)).toEqual(['dispatch.status_changed']);
+    });
+
     it('writes the result for Compras in the outbox with the status change, and tells the board after commit', async () => {
         const c = circuit();
 
